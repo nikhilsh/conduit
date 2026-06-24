@@ -2898,10 +2898,14 @@ private struct ConduitToolBundleCard: View {
         return "\(countWord) · all exit 0"
     }
 
+    @ViewBuilder
     private var breatheBody: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            if expanded {
+        if !expanded {
+            // Collapsed: same compact footnote as flag-off state. Tap → full card.
+            compactBody
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                header
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(displayItems, id: \.id) { item in
                         ConduitBundleRow(
@@ -2918,17 +2922,16 @@ private struct ConduitToolBundleCard: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 10)
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .neonCardSurface(
+                neon,
+                fill: neon.surface,
+                cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius,
+                border: failCount > 0 ? ConduitBundleTint.fail.opacity(0.55) : nil,
+                glowTint: failCount > 0 ? ConduitBundleTint.fail : nil
+            )
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .neonCardSurface(
-            neon,
-            fill: neon.surface,
-            cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius,
-            border: failCount > 0 ? ConduitBundleTint.fail.opacity(0.55) : nil,
-            glowTint: failCount > 0 ? ConduitBundleTint.fail : nil
-        )
     }
 
     private var header: some View {

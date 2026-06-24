@@ -5016,11 +5016,33 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 // Items already present in the live set (same role|content
                 // fingerprint) are deduplicated so history never double-shows.
                 val past = _hydratedChat[sessionId] ?: emptyList()
-                val liveFp = serverFingerprints
-                val pastNotInLive = past.filter { "${it.role}|${it.content}" !in liveFp }
+                // Use the stripped key (drops [[conduit:needs-input]] and
+                // [[conduit:resolved]] lines) so resolved and unanswered versions
+                // of the same AskUserQuestion card are treated as one logical item.
+                fun fp(item: ConversationItem) =
+                    "${item.role}|${sh.nikhil.conduit.ui.PendingQuestions.strippedKey(item.content)}"
+                val liveByKey = items.associateBy { fp(it) }
+                // Keys where the past (HTTP transcript) has the resolved marker
+                // but the matching live item doesn't — transcript version must win
+                // so the card shows as a chip on fresh app restart (resolvedPendingInputIDs
+                // is ephemeral).
+                val resolvedPastKeys = past
+                    .filter { item ->
+                        val key = fp(item)
+                        item.content.contains(sh.nikhil.conduit.ui.PendingQuestions.PENDING_RESOLVED_MARKER) &&
+                            liveByKey[key]?.content?.contains(sh.nikhil.conduit.ui.PendingQuestions.PENDING_RESOLVED_MARKER) != true
+                    }
+                    .map { fp(it) }
+                    .toSet()
+                val liveFp = items.map { fp(it) }.toSet()
+                val pastNotInLive = past.filter { item ->
+                    val key = fp(item)
+                    key !in liveFp || key in resolvedPastKeys
+                }
+                val liveFiltered = items.filter { fp(it) !in resolvedPastKeys }
                 // Splice the local user echo and sticky past items into the
                 // server log in true chronological order. See [sortedByConversationTs].
-                val merged = (pastNotInLive + items + stillPending).sortedByConversationTs { it.ts }
+                val merged = (pastNotInLive + liveFiltered + stillPending).sortedByConversationTs { it.ts }
                 Telemetry.breadcrumb("perf", "refresh_conversation_merge_done",
                     mapOf("session" to sessionId, "count" to merged.size.toString()))
                 _conversationLog.value = _conversationLog.value + (sessionId to merged)
