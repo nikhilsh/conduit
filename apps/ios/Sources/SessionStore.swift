@@ -5509,6 +5509,19 @@ final class SessionStore {
             } else if harness == .disconnected {
                 harness = .linked
             }
+            // Flush any `sent`-but-unacked messages for this session. The
+            // Rust core's per-session reconnect worker fires this callback
+            // when it re-establishes the WS (distinct from the app-level
+            // `connectToHarness` which also flushes all sessions). Without
+            // this flush, messages whose WS write succeeded but whose
+            // `chat_ack` arrived after the connection dropped stay stuck in
+            // the `sent`/faded state forever -- the app-level flush only
+            // runs on a full app-level reconnect, not Rust-layer auto-reconnects.
+            // Calling flushPendingChats here is idempotent: if there is nothing
+            // to flush (normal initial connect) it is a no-op.
+            Telemetry.breadcrumb("chat", "flush on session reconnect",
+                data: ["session": sessionID])
+            flushPendingChats(sessionID: sessionID)
         case let .connecting(attempt, maxAttempts):
             connectionHealthBySession[sessionID] = health
             harness = .reconnecting(attempt: attempt, maxAttempts: maxAttempts)
