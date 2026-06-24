@@ -9,6 +9,17 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.191
+
+**Shared-agent-credential lineage — "never fork the OAuth refresher" (broker, behind `CONDUIT_SHARED_AGENT_CREDS`, default OFF).** PR #732 (design doc + broker). Broker-only; no app change → iOS/Android parity preserved by construction (WS contract unchanged). Tag cut at `2e263e98`. **Ships DORMANT — the flag is OFF in this release, so production behaviour is byte-for-byte identical to v0.0.190; nothing is fixed for the owner yet.** Full design in [PLAN-AGENT-CREDENTIAL-LINEAGE.md](PLAN-AGENT-CREDENTIAL-LINEAGE.md).
+
+- **Root cause (the logout):** PR #126 (`bbae5e7a`) gave every session a PRIVATE on-disk copy of the operator's single OAuth login (host + one per session). Anthropic/OpenAI rotate refresh tokens single-use, so the first session to refresh invalidates every other copy of the lineage — including the operator's host login → the box gets logged out. Live-confirmed this session via `~/.claude/daemon.log` ("proactive refresh failed, signalling re-auth required") + a diverged refresh token in a session's `agent-home/.claude/.credentials.json`.
+- **Fix shape (flag ON):** stop forking. Point every session at ONE canonical config dir per provider via the CLI's own relocation env var (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`). Option A = the operator's real `~/.claude`/`~/.codex` (read-through, zero copy) when a host login exists; Option B = a broker-owned dir seeded once from the app-pushed blob otherwise (login-less SSH-bootstrap path). The agent CLIs' own cross-process refresh coordination then governs every refresh — the host login is never stranded. Provider-agnostic; only the rotating-token providers (anthropic/openai) are relocated, opencode/gemini (non-rotating env keys) untouched.
+- **What's verified already:** flag-OFF path is byte-for-byte unchanged (old logic preserved verbatim as the else-branch; `commandEnv` env-injection is a no-op when the map is empty; watchdog re-mirror only skipped under the flag). CI green on all six checks. Local broker gates (gofmt/vet/`go test ./internal/session/... ./internal/credentials/... ./internal/ws/...`) pass.
+- **PENDING — supervised flag-ON live verification (do NOT flip unattended):** deploy the new broker, set `CONDUIT_SHARED_AGENT_CREDS=1`, and confirm on the box: (a) two concurrent sessions + the host login survive a token refresh with NO logout (the original bug); (b) Option A sessions read `~/.claude` directly and the broker writes NOTHING into the host dir; (c) codex parity (no cross-process lock — loser self-heals by re-reading the shared file); (d) **the re-seed-clobber concern** — a new Option-B session start re-runs `store.Materialize(blob)`; verify it does NOT overwrite an already-refreshed shared credential with a stale single-use blob. [broker — supervised on-box]
+
+---
+
 ## v0.0.186
 
 **Session-safe auto-update + keyboard scroll-dismiss + push notification overhaul.** PRs #711 (iOS+Android), #712 (iOS), #713 (broker). Broker REDEPLOYED (v0.0.186 live).
