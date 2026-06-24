@@ -3433,7 +3433,11 @@ private struct MonoRunningTicker: View {
                 "total": "\(totalCount)",
                 "completed": "\(completedCount)",
             ])
-            elapsedSeconds = 0
+            let earliest = items.compactMap { item -> Double? in
+                let ep = conduitConversationTsEpoch(item.ts)
+                return ep < .greatestFiniteMagnitude ? ep : nil
+            }.min()
+            elapsedSeconds = earliest.map { max(0, Int(Date().timeIntervalSince1970 - $0)) } ?? 0
             timerTask?.cancel()
             timerTask = Task {
                 while !Task.isCancelled {
