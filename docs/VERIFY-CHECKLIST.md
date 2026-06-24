@@ -9,6 +9,14 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.199
+
+**Broker-update banner install URL fix (iOS + Android).** PR #754.
+
+- **Broker-update banner install URL (PR #754)** — the "Copy install command" button for token-paired boxes showed `curl -fsSL https://conduit.nikhil.sh/install.sh | sh`, a URL that returns 404. Replaced with the versioned GitHub releases URL (`https://github.com/nikhilsh/conduit/releases/download/v{appVersion}/install.sh`) derived from the app's own version at runtime. Verify: on a token-paired box with a stale broker, the banner appears and the copied install command downloads and runs successfully. [iOS + Android, needs-device-verify]
+
+---
+
 ## v0.0.198
 
 **iOS release signing fix: notification service extension.** No PR (direct main commit).
