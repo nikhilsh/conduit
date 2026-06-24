@@ -3466,6 +3466,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val items = _conversationLog.value[sessionId] ?: return false
         val last = items.lastOrNull { it.role.lowercase() != "user" } ?: return false
         return last.kind.lowercase() == "pending_input"
+            && last.id !in _resolvedPendingInputIDs.value
     }
 
     fun sendChat(sessionId: String, msg: String) {
@@ -3546,40 +3547,43 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // always queued and persisted; the flush re-delivers it on connect /
         // foreground.
         val turnActive = _statusBySession.value[sessionId]?.turnActive == true
-        val item = ConversationItem(
-            id = localId,
-            role = "user",
-            kind = "message",
-            // PENDING until a successful WS write acks it (flushPendingChats
-            // flips it to "done"). The user bubble draws a clock while
-            // pending and a retry affordance if it ultimately fails.
-            status = "pending",
-            content = msg,
-            ts = ts,
-            files = emptyList(),
-            toolName = null,
-            command = null,
-            exitCode = null,
-            durationMs = null,
-            diffSummary = null,
-            pendingOptions = emptyList(),
-            sourceAgent = null,
-            targetAgent = null,
-            taskText = null,
-            resultSummary = null,
-            planSteps = emptyList(),
-        )
-        _conversationLog.value = _conversationLog.value.toMutableMap().also { m ->
-            m[sessionId] = (m[sessionId] ?: emptyList()) + item
-        }
-        _chatLog.value = _chatLog.value.toMutableMap().also { m ->
-            m[sessionId] = (m[sessionId] ?: emptyList()) +
-                ChatEvent(role = "user", content = msg, ts = ts, files = emptyList())
+        if (!pendingAsk) {
+            val item = ConversationItem(
+                id = localId,
+                role = "user",
+                kind = "message",
+                // PENDING until a successful WS write acks it (flushPendingChats
+                // flips it to "done"). The user bubble draws a clock while
+                // pending and a retry affordance if it ultimately fails.
+                status = "pending",
+                content = msg,
+                ts = ts,
+                files = emptyList(),
+                toolName = null,
+                command = null,
+                exitCode = null,
+                durationMs = null,
+                diffSummary = null,
+                pendingOptions = emptyList(),
+                sourceAgent = null,
+                targetAgent = null,
+                taskText = null,
+                resultSummary = null,
+                planSteps = emptyList(),
+            )
+            _conversationLog.value = _conversationLog.value.toMutableMap().also { m ->
+                m[sessionId] = (m[sessionId] ?: emptyList()) + item
+            }
+            _chatLog.value = _chatLog.value.toMutableMap().also { m ->
+                m[sessionId] = (m[sessionId] ?: emptyList()) +
+                    ChatEvent(role = "user", content = msg, ts = ts, files = emptyList())
+            }
         }
         // Elicitation bypass: skip the turnActive queue gate and deliver
         // directly. The broker already routes a message-during-pending-ask
         // to the control channel (takePendingAsk / encodeAskAnswer).
         if (pendingAsk) {
+            resolvePendingInput(sessionId)
             updatePendingChats { it.enqueue(sessionId, localId, msg, ts) }
             Telemetry.breadcrumb("chat", "answer_pending_ask_deliver",
                 mapOf("session" to sessionId, "chars" to msg.length.toString()))

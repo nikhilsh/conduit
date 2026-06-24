@@ -1773,6 +1773,8 @@ private fun PendingInputCard(
     if (submitted) {
         // Compact pill chip once answered — collapses the full card.
         val chipShape = RoundedCornerShape(50)
+        val rawAnswer = sentAnswer ?: "Answered"
+        val displayText = rawAnswer.split("\n").filter { it.isNotEmpty() }.joinToString(" · ")
         Row(
             modifier = Modifier
                 .background(neon.green.copy(alpha = 0.10f), chipShape)
@@ -1783,7 +1785,7 @@ private fun PendingInputCard(
         ) {
             Icon(Icons.Filled.CheckCircle, null, tint = neon.green, modifier = Modifier.size(12.dp))
             Text(
-                sentAnswer ?: "Answered",
+                displayText,
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = neon.mono,
                 fontWeight = FontWeight.Medium,
@@ -3440,7 +3442,7 @@ private fun ToolClusterCard(items: List<ConversationItem>, compact: Boolean = fa
 
     // Auto-expand failures so errors are never buried; user can collapse manually.
     // Seed the initial state once per (items, compact) pair.
-    var expanded by remember(items, compact) { mutableStateOf(anyFailed) }
+    var expanded by remember(items.firstOrNull()?.id, compact) { mutableStateOf(anyFailed) }
 
     // Compact footnote label: "running N command(s)...", failure, or muted summary.
     val allFinished = items.all {

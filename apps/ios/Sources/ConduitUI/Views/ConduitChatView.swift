@@ -4465,10 +4465,15 @@ private struct ConduitPendingInputCard: View {
 
     // Compact inline pill shown once the question is answered.
     private var answeredChip: some View {
-        HStack(spacing: 5) {
+        let rawAnswer = (sentAnswer ?? answeredText) ?? "Answered"
+        let displayText = rawAnswer
+            .components(separatedBy: "\n")
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+        return HStack(spacing: 5) {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 12, weight: .bold))
-            Text((sentAnswer ?? answeredText) ?? "Answered")
+            Text(displayText)
                 .font(neon.mono(12).weight(.medium))
                 .lineLimit(1)
                 .truncationMode(.tail)

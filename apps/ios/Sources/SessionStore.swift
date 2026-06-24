@@ -3677,6 +3677,7 @@ final class SessionStore {
         let items = conversationLog[sessionID] ?? []
         guard let last = items.last(where: { $0.role.lowercased() != "user" }) else { return false }
         return last.kind.lowercased() == "pending_input"
+            && !resolvedPendingInputIDs.contains(last.id)
     }
 
     /// Optimistically mark the last unanswered `pending_input` item for a
@@ -3726,35 +3727,8 @@ final class SessionStore {
             ?? Date().timeIntervalSince1970
         let now = conduitConversationTsString(epoch: echoEpoch)
         let localID = "local-\(UUID().uuidString)"
-        // Optimistic echo so the user sees their answer immediately.
-        let item = ConversationItem(
-            id: localID,
-            role: "user",
-            kind: "message",
-            status: "pending",
-            content: message,
-            ts: now,
-            files: [],
-            toolName: nil,
-            command: nil,
-            exitCode: nil,
-            durationMs: nil,
-            diffSummary: nil,
-            pendingOptions: [],
-            sourceAgent: nil,
-            targetAgent: nil,
-            taskText: nil,
-            resultSummary: nil,
-            planSteps: []
-        )
-        conversationLog[sessionID, default: []].append(item)
-        let localEvent = ChatEvent(role: "user", content: message, ts: now, files: [])
-        chatLog[sessionID, default: []].append(localEvent)
         quickReplies[sessionID] = nil
-        if useRustStore {
-            ensureRustSessionPresent(sessionID)
-            _ = rustStore.applyChat(sessionId: sessionID, event: localEvent)
-        }
+        resolvePendingInput(sessionID: sessionID)
         pendingChats.enqueue(sessionID: sessionID, localID: localID, message: message, ts: now)
         attemptDeliver(sessionID: sessionID, localID: localID, message: message)
     }
