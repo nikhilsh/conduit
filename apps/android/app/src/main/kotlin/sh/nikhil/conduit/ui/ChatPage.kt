@@ -69,6 +69,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -644,6 +645,15 @@ fun ChatPage(
             scrollToTrueBottom(listState)
         }
         hasSettledAfterOpen = true
+    }
+
+    // WS background throttle: resume when this chat is in composition, pause
+    // on dispose (screen navigated away). Skip read-only (no live WS to manage).
+    if (!readOnly) {
+        DisposableEffect(session.id) {
+            store.resumeSession(session.id)
+            onDispose { store.pauseSession(session.id) }
+        }
     }
 
     // Android IME handling (task #39): on sdk35 `WindowInsets.isImeVisible`

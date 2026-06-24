@@ -248,6 +248,25 @@ impl ConduitClient {
         }
     }
 
+    /// Quiesce the session's WebSocket: close the live socket and park the
+    /// worker until resume_session() or notify_network_change() is called.
+    /// Use when the session leaves the app UI foreground to eliminate idle
+    /// heartbeat timers for sessions not currently being viewed.
+    pub fn pause_session(&self, session_id: String) -> Result<(), ConduitError> {
+        let handle = self.inner.lookup_handle(&session_id)?;
+        handle.pause();
+        Ok(())
+    }
+
+    /// Re-arm a previously paused session. Nudges its worker to reconnect.
+    /// No-op if the session was not paused (nudge on an active socket forces
+    /// reconnect — callers should track pause state to avoid this).
+    pub fn resume_session(&self, session_id: String) -> Result<(), ConduitError> {
+        let handle = self.inner.lookup_handle(&session_id)?;
+        handle.nudge();
+        Ok(())
+    }
+
     /// Open a brand-new session. `reasoning_effort` / `model` are optional
     /// per-session overrides for the fork-onto-a-different-model path: when
     /// present they ride to the broker as `reasoning_effort=` / `model=`

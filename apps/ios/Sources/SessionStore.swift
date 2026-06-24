@@ -841,6 +841,9 @@ final class SessionStore {
     var harness: HarnessState = .disconnected
     var sessions: [ProjectSession] = []
     var selectedSessionID: String?
+    /// Sessions whose WS worker has been parked via pause_session(). Cleared
+    /// on foreground so nudgeNetworkChange() reconnects them automatically.
+    private var pausedSessionIDs: Set<String> = []
     var savedServers: [SavedServer] = []
     var recentDirectories: [String] = []
 
@@ -1194,6 +1197,36 @@ final class SessionStore {
         for conn in boxConnections.values { conn.client.notifyNetworkChange() }
     }
 
+    /// Park the WS worker for one session (it's left the foreground UI).
+    /// The worker closes its socket and waits for a nudge to reconnect.
+    func pauseSession(_ sessionID: String) {
+        guard !pausedSessionIDs.contains(sessionID),
+              let c = clientForSession(sessionID) else { return }
+        pausedSessionIDs.insert(sessionID)
+        try? c.pauseSession(sessionId: sessionID)
+        Telemetry.breadcrumb("ws", "session paused", data: ["session": sessionID])
+    }
+
+    /// Re-arm a paused session (it's returned to the foreground UI).
+    /// No-ops if the session was never paused to avoid dropping active connections.
+    func resumeSession(_ sessionID: String) {
+        guard pausedSessionIDs.contains(sessionID),
+              let c = clientForSession(sessionID) else { return }
+        pausedSessionIDs.remove(sessionID)
+        try? c.resumeSession(sessionId: sessionID)
+        Telemetry.breadcrumb("ws", "session resumed", data: ["session": sessionID])
+    }
+
+    /// Pause every joined session (called on app background).
+    private func pauseAllSessions() {
+        for s in sessions { pauseSession(s.id) }
+    }
+
+    /// Clear the paused-ID set after foreground nudge re-arms all workers.
+    private func clearPausedSessions() {
+        pausedSessionIDs.removeAll()
+    }
+
     private func installNetworkAndLifecycleHooks() {
         // Three notification observers all want to call the
         // MainActor-isolated [nudgeNetworkChange]. We pass `queue: .main`
@@ -1223,6 +1256,9 @@ final class SessionStore {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
+                // Clear the paused set BEFORE nudgeNetworkChange so all
+                // sessions reconnect cleanly (nudge wakes parked workers).
+                self?.clearPausedSessions()
                 self?.nudgeNetworkChange()
                 self?.refreshSessions()
                 // Foregrounding may have re-armed a socket that died while
@@ -1235,12 +1271,17 @@ final class SessionStore {
         // App is about to background — flush any dirty terminal scrollback to
         // disk NOW so a subsequent kill (or our own crash) still leaves the
         // last-known terminal on disk for an instant cold-launch restore.
+        // Also pause all WS workers: N idle heartbeat loops burn the CPU and
+        // drain the battery while the app is in the background.
         backgroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.flushTerminalPersist() }
+            MainActor.assumeIsolated {
+                self?.flushTerminalPersist()
+                self?.pauseAllSessions()
+            }
         }
 
         // Path-level reachability is owned by NetworkReachabilityObserver
