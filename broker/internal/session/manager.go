@@ -602,6 +602,15 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 				}
 				_ = mirrorHostCredentials(p, ephemeral)
 			}
+			// Redirect .claude/projects to a stable, non-GC'd per-project store so
+			// agent memory persists across sessions (Option A, docs/PLAN-AGENT-MEMORY-PERSISTENCE.md).
+			// Must run BEFORE seedClaudeConfig and stageExternalTranscript so that
+			// both the seeded .claude.json and staged transcripts land in the shared
+			// store and are discoverable by future sessions. Best-effort: a failure
+			// is logged and the session continues with today's ephemeral behaviour.
+			if err := linkPersistentAgentState(ephemeral, s.conduitRoot, provider, s.workspaceDir); err != nil {
+				fmt.Fprintf(os.Stderr, "session %s: linkPersistentAgentState: %v (falling back to ephemeral projects)\n", s.ID, err)
+			}
 			// Seed a theme + onboarding marker so Claude Code's first-run
 			// interactive theme picker doesn't block the PTY — for the agent AND
 			// for an interactive `claude` the user runs in the Terminal tab of a

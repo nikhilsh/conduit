@@ -15,6 +15,12 @@ import (
 // they haven't been touched in `maxAge`. Live sessions (anything in
 // `m.sessions`) are always preserved.
 //
+// IMPORTANT — scan root is `sessions/` only: the sibling directory
+// `<conduitRoot>/agent-state/` is a deliberately PERSISTENT store (see
+// docs/PLAN-AGENT-MEMORY-PERSISTENCE.md Option A) that must NOT be pruned.
+// If a future change broadens `root` beyond `sessions/`, verify that
+// `agent-state/` is explicitly excluded before touching anything under it.
+//
 // Eligibility is decided by the more recent of `meta.json`'s mtime and
 // the session directory's mtime — `atomicWriteFile` renames into place
 // on every Checkpoint(), so a session that's actively checkpointing
