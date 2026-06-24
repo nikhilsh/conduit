@@ -420,6 +420,12 @@ struct SessionsScreen: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .refreshable {
+            store.reconcileLiveSessions()
+            while store.isLoadingSessions {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
     }
 
     private func sectionHeader(_ section: SessionsScreenModel.Section) -> some View {
