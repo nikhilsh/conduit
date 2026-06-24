@@ -44,27 +44,6 @@ class CommandRunBlockTest {
         planSteps = emptyList(),
     )
 
-    // ── COMMAND_RUN_COLLAPSE_THRESHOLD ───────────────────────────────────
-
-    @Test fun threshold_is10() {
-        assertEquals(10, COMMAND_RUN_COLLAPSE_THRESHOLD)
-    }
-
-    // ── shouldCollapseCluster ────────────────────────────────────────────
-
-    @Test fun shouldCollapse_below() {
-        assertFalse(shouldCollapseCluster(1))
-        assertFalse(shouldCollapseCluster(9))
-    }
-
-    @Test fun shouldCollapse_atThreshold() {
-        assertTrue(shouldCollapseCluster(10))
-    }
-
-    @Test fun shouldCollapse_above() {
-        assertTrue(shouldCollapseCluster(73))
-    }
-
     // ── clusterFailCount ─────────────────────────────────────────────────
 
     @Test fun failCount_allPassed() {

@@ -236,36 +236,22 @@ final class VoiceTranscriber: ObservableObject {
             }
         }
         if let error {
-            // `.canceled` / `.noMatch` / the kAFAssistant family fire on a
-            // natural end-of-speech (a pause) as well as on real failures. For
-            // these we keep the session alive (commit + restart) rather than
-            // treating the first pause as "done" — that was the lost-speech bug.
+            // kAFAssistantErrorDomain errors (203=no-match, 209=canceled, etc.)
+            // are natural end-of-speech signals — commit and restart.
+            // Log unexpected domains/codes via Sentry but also commit+restart
+            // rather than surfacing a hard error: audio-session interruptions
+            // and unrecognized rate-limit codes are all recoverable. Permission
+            // denials are caught in requestPermissions before start(), so nothing
+            // reaching here requires stopping the session.
             let nsError = error as NSError
             let expected = nsError.domain == "kAFAssistantErrorDomain"
                 || nsError.code == 203 // no match
                 || nsError.code == 209 // canceled
-            if expected {
-                commitSegment()
-                onSegmentEnded()
-                return
+            if !expected {
+                Telemetry.capture(error: nsError, message: "voice recognition error", tags: ["surface": "ios", "phase": "voice_recognize"], extras: ["code": "\(nsError.code)", "domain": nsError.domain])
             }
-            // Genuine failure: surface it but keep whatever we accumulated so
-            // the user doesn't lose what they already said.
-            Telemetry.capture(error: nsError, message: "voice recognition error", tags: ["surface": "ios", "phase": "voice_recognize"], extras: ["code": "\(nsError.code)", "domain": nsError.domain])
-            let final = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
-            stopAudioEngine()
-            request = nil
-            task = nil
-            level = 0
-            state = .error(message: nsError.localizedDescription)
-            if !finished {
-                finished = true
-                let handler = onFinalHandler
-                onFinalHandler = nil
-                if !final.isEmpty { handler?(final) }
-            }
-            accumulated = ""
-            segmentPartial = ""
+            commitSegment()
+            onSegmentEnded()
         }
     }
 
