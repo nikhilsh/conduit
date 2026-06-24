@@ -9,6 +9,15 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.196
+
+**Apple Watch ask notification actions + subagents earlier-agents collapse.** PRs #743 (iOS + broker + relay), #748 (iOS + Android).
+
+- **Apple Watch: answer AskUserQuestion from wrist (PR #743)** — when Claude fires `AskUserQuestion`, the push notification now surfaces on Apple Watch with the option labels as tappable action buttons. Relay forwards `options[]` + `mutable-content:1`; broker sends `ask` push category with a new `POST /api/session/answer` endpoint; iOS `ConduitNotificationService` extension dynamically registers the category so Apple Watch shows the actual option text. **Requires relay deploy before broker redeploy.** Verify: trigger AskUserQuestion → notification arrives on Apple Watch with option buttons → tap one → Claude continues. [iOS + Apple Watch, on-device; broker + relay deployed]
+- **Session info (i) menu: earlier agents collapse (PR #748)** — done/failed subagents fold under a tappable "Earlier agents (N)" row with a chevron; active (working) agents always visible inline. Verify: run a multi-agent task → open (i) → finished agents collapsed by default → tap "Earlier agents" → expands → tap again → collapses. [iOS + Android, on-device]
+
+---
+
 ## v0.0.195
 
 **WS background throttle + approvals/resolved bubble fixes + agent cwd fix.** PRs #744 (iOS + Android), #746 (iOS + Android), #747 (broker).
