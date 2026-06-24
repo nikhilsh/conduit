@@ -2,7 +2,7 @@ name                = "claude"
 command             = ["claude"]
 args                = ["--dangerously-skip-permissions"]
 env_passthrough     = ["ANTHROPIC_API_KEY"]
-workdir             = "/workspace"
+workdir             = "/root"
 chat_event_port_env = "AGENT_CHAT_PORT"
 # Structured chat channel (device bug #6 / task #24): run claude headless
 # in stream-json for clean Chat events; the Terminal tab hosts a shell.
@@ -29,6 +29,6 @@ drop_args = ["--dangerously-skip-permissions"]
 add_args  = ["--permission-mode", "plan"]
 
 [hooks]
-on_start = "conduit-broker memory render --session $SESSION_UUID > /workspace/.conduit/HANDOFF.html"
+on_start = "conduit-broker memory render --session $SESSION_UUID > $CONDUIT_HANDOFF_PATH"
 on_exit  = "conduit-broker memory checkpoint --session $SESSION_UUID --reason 'exit'"
 on_swap  = "conduit-broker memory handoff --session $SESSION_UUID --from $FROM_AGENT --to $TO_AGENT"

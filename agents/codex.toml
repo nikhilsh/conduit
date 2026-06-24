@@ -2,7 +2,7 @@ name                = "codex"
 command             = ["codex"]
 args                = ["--dangerously-bypass-approvals-and-sandbox"]
 env_passthrough     = ["OPENAI_API_KEY"]
-workdir             = "/workspace"
+workdir             = "/root"
 chat_event_port_env = "AGENT_CHAT_PORT"
 # Surfaced on the iOS / Android agent pill.
 reasoning_effort    = "medium"
@@ -22,6 +22,6 @@ drop_args = ["--dangerously-bypass-approvals-and-sandbox"]
 add_args  = ["--sandbox", "read-only"]
 
 [hooks]
-on_start = "conduit memory render --session $SESSION_UUID > /workspace/.conduit/HANDOFF.html"
+on_start = "conduit memory render --session $SESSION_UUID > $CONDUIT_HANDOFF_PATH"
 on_exit  = "conduit memory checkpoint --session $SESSION_UUID --reason 'exit'"
 on_swap  = "conduit memory handoff --session $SESSION_UUID --from $FROM_AGENT --to $TO_AGENT"
