@@ -3438,9 +3438,9 @@ private fun ToolClusterCard(items: List<ConversationItem>, compact: Boolean = fa
     val n = items.size
     val noun = if (n == 1) "command" else "commands"
 
-    // In compact mode, auto-expand failures so errors are never buried.
-    // Seed the initial state once per (items, compact) pair; user can collapse manually.
-    var expanded by remember(items, compact) { mutableStateOf(compact && anyFailed) }
+    // Auto-expand failures so errors are never buried; user can collapse manually.
+    // Seed the initial state once per (items, compact) pair.
+    var expanded by remember(items, compact) { mutableStateOf(anyFailed) }
 
     // Compact footnote label: "running N command(s)...", failure, or muted summary.
     val allFinished = items.all {
@@ -3474,8 +3474,9 @@ private fun ToolClusterCard(items: List<ConversationItem>, compact: Boolean = fa
         }
     }
 
-    if (compact && !expanded) {
-        // Compact footnote: a single muted line with a chevron, no card chrome.
+    if (!expanded) {
+        // Collapsed: a single muted footnote line with a chevron, no card chrome.
+        // Same whether flag-off (compact=true) or flag-on (compact=false) — tap to expand.
         Row(
             modifier = Modifier
                 .clickable { expanded = true }
