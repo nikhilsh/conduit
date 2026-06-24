@@ -9,7 +9,14 @@ export interface PushPayload {
   // "approval" / "input" are app-level pending-input categories: forwarded to
   // APNs as aps.category (drives actionable Approve/Deny buttons on iOS) and
   // already passed through to FCM as a data key. "alert"/absent = plain alert.
-  category?: "alert" | "approval" | "input" | "liveactivity";
+  // "ask" carries AskUserQuestion options as action buttons (dynamic labels via
+  // UNNotificationServiceExtension; options[] holds the option text strings).
+  category?: "alert" | "approval" | "input" | "ask" | "liveactivity";
+  // options carries the AskUserQuestion choices for "ask" category pushes.
+  // The service extension registers a dynamic UNNotificationCategory so Watch
+  // and lock-screen show actual option text instead of generic slot labels.
+  // Forwarded as a top-level APNs userInfo key (outside aps).
+  options?: string[];
   // Live Activity fields (category="liveactivity" only).
   // event is the APNs activity event: "update", "end", or "start".
   event?: "update" | "end" | "start";

@@ -97,6 +97,10 @@ type Payload struct {
 	// Alert is the APNs alert block required by Apple for push-to-start.
 	// Contains "title" and "body" keys. Only used when Event="start".
 	Alert map[string]any
+	// Options carries the AskUserQuestion choice options (up to 4) so the
+	// notification action handler can deliver the selected answer without
+	// opening the app. Only set when Category="ask".
+	Options []string
 }
 
 // LARegistry is a thread-safe per-(identity,session) Live Activity push-token

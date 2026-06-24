@@ -73,6 +73,9 @@ type relayInner struct {
 	// Alert is the APNs alert block required for push-to-start.
 	// Only sent when Event="start".
 	Alert map[string]any `json:"alert,omitempty"`
+	// Options carries the AskUserQuestion choice options (up to 4).
+	// Only sent when Category="ask".
+	Options []string `json:"options,omitempty"`
 }
 
 // NewRelaySender builds a relaySender. relayURL is the base URL of the
@@ -115,6 +118,7 @@ func (s *relaySender) Send(ctx context.Context, token DeviceToken, payload Paylo
 			AttributesType: payload.AttributesType,
 			Attributes:     payload.Attributes,
 			Alert:          payload.Alert,
+			Options:        payload.Options,
 		},
 	}
 

@@ -7,7 +7,7 @@ Items currently being built. On merge, move each to
 
 ## Active
 
-_(nothing active)_
+- **Watch notification action flow — AskUserQuestion dynamic labels** — `feat/watch-ask-notification-actions` PR #743. Relay forwards `options[]` + `mutable-content:1`; broker sends `ask` category with numbered body; new `POST /api/session/answer`; iOS `ConduitNotificationService` extension registers dynamic category so Watch shows actual option text as buttons. Deploy: relay first, then broker. Needs on-device verify.
 
 ## Deferred (not active)
 

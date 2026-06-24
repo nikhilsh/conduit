@@ -911,6 +911,61 @@ func (s *Server) serveSessionApproval(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// answerAskRequest is the body for POST /api/session/answer.
+type answerAskRequest struct {
+	SessionID string `json:"session_id"`
+	Answer    string `json:"answer"`
+}
+
+// serveSessionAnswer handles POST /api/session/answer — answers a pending
+// AskUserQuestion from a push notification action without requiring the app
+// to open.
+//
+// Wire contract:
+//
+//	POST /api/session/answer
+//	Authorization: Bearer <token>   (or ?token=<token>)
+//	{"session_id":"<id>","answer":"<text>"}
+//
+//	200 {"ok":true}           — ask found and answered
+//	400 {"error":…}           — bad JSON body or missing answer
+//	401 {"error":…}           — missing/bad token
+//	404 {"error":"no_pending_ask","message":"…"} — session unknown or nothing pending
+func (s *Server) serveSessionAnswer(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	var req answerAskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	req.SessionID = strings.TrimSpace(req.SessionID)
+	if req.SessionID == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "session_id is required")
+		return
+	}
+	req.Answer = strings.TrimSpace(req.Answer)
+	if req.Answer == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "answer is required")
+		return
+	}
+	sess, ok := s.Sessions.Get(req.SessionID)
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, "no_pending_ask", "session not found or no pending ask")
+		return
+	}
+	if !sess.AnswerPendingAsk(req.Answer) {
+		writeAPIError(w, http.StatusNotFound, "no_pending_ask", "no pending ask for this session")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func newSessionID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])

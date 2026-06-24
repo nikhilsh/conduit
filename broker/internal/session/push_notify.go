@@ -275,12 +275,36 @@ func (s *Session) maybeNotifyPendingInput() {
 
 	name := s.displayOrAssistant()
 
-	// Distinguish approval-type pending input from generic pending input.
+	// Distinguish approval-type, ask-type, and generic pending input.
 	body := "Needs your input"
 	category := "input"
-	if summary, isApproval := s.PendingApprovalSummaryForPush(); isApproval && summary != "" {
-		category = "approval"
-		body = truncatePushBody(summary, 120)
+	var payloadOptions []string
+
+	// Check for AskUserQuestion choice (categorised as "ask").
+	s.mu.Lock()
+	ask := s.pendingAsk
+	s.mu.Unlock()
+	if ask != nil {
+		if kind, prompt, _, opts := classifyPendingAsk(ask); kind == "choice" && len(opts) > 0 {
+			category = "ask"
+			if prompt != "" {
+				body = prompt
+			}
+			// Append numbered options to the body.
+			for i, opt := range opts {
+				body += fmt.Sprintf("\n%d. %s", i+1, opt)
+			}
+			body = truncatePushBody(body, 150)
+			payloadOptions = opts
+		}
+	}
+
+	// Approval-type overrides the generic "input" category but not "ask".
+	if category == "input" {
+		if summary, isApproval := s.PendingApprovalSummaryForPush(); isApproval && summary != "" {
+			category = "approval"
+			body = truncatePushBody(summary, 120)
+		}
 	}
 
 	payload := push.Payload{
@@ -288,6 +312,7 @@ func (s *Session) maybeNotifyPendingInput() {
 		Body:      body,
 		SessionID: s.ID,
 		Category:  category,
+		Options:   payloadOptions,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -563,7 +588,7 @@ func (s *Session) notifyLAPendingInput() {
 	prompt := ""
 	optionCount := 0
 	if ask != nil {
-		kind, prompt, optionCount = classifyPendingAsk(ask)
+		kind, prompt, optionCount, _ = classifyPendingAsk(ask)
 	}
 
 	s.laState.mu.Lock()
@@ -575,11 +600,11 @@ func (s *Session) notifyLAPendingInput() {
 	s.emitLAUpdateImmediate("update")
 }
 
-// classifyPendingAsk extracts interruptKind/prompt/optionCount from a pending ask.
-func classifyPendingAsk(ask *pendingAsk) (kind, prompt string, optionCount int) {
+// classifyPendingAsk extracts interruptKind/prompt/optionCount/options from a pending ask.
+func classifyPendingAsk(ask *pendingAsk) (kind, prompt string, optionCount int, options []string) {
 	// Parse the input to classify AskUserQuestion vs. tool approval.
 	if ask == nil {
-		return "permission", "", 0
+		return "permission", "", 0, nil
 	}
 	var input struct {
 		Questions []struct {
@@ -593,11 +618,12 @@ func classifyPendingAsk(ask *pendingAsk) (kind, prompt string, optionCount int) 
 			prompt = q.Question
 			optionCount = len(q.Options)
 			if optionCount > 0 {
-				return "choice", prompt, optionCount
+				opts := q.Options[:min(4, len(q.Options))]
+				return "choice", prompt, optionCount, opts
 			}
 		}
 	}
-	return "permission", prompt, 0
+	return "permission", prompt, 0, nil
 }
 
 // maybeEmitLAUpdate emits a debounced LA "update" push (1–2s coalesce window).

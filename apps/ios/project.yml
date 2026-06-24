@@ -112,6 +112,7 @@ targets:
       # to Manual signing. Sim/CI builds stay unsigned (the target's
       # CODE_SIGNING_ALLOWED: NO below), so no signing assets are needed.
       - target: ConduitWidgets
+      - target: ConduitNotificationService
     info:
       path: Sources/Info.plist
       properties:
@@ -254,6 +255,30 @@ targets:
         SKIP_INSTALL: NO
         # Extension ships with the host .app and must not require its
         # own signing identity for sim/CI builds.
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+
+  ConduitNotificationService:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: NotificationService
+    info:
+      path: NotificationService/Info.plist
+      properties:
+        CFBundleDisplayName: ConduitNotificationService
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: sh.nikhil.conduit.notificationservice
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_STYLE: Automatic
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGNING_ALLOWED: NO
