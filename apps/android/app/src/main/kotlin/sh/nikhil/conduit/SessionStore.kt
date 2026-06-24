@@ -3527,8 +3527,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
     fun hasPendingAsk(sessionId: String): Boolean {
         val items = _conversationLog.value[sessionId] ?: return false
         val last = items.lastOrNull { it.role.lowercase() != "user" } ?: return false
-        return last.kind.lowercase() == "pending_input"
-            && last.id !in _resolvedPendingInputIDs.value
+        if (last.kind.lowercase() != "pending_input") return false
+        if (last.id in _resolvedPendingInputIDs.value) return false
+        // Belt-and-suspenders: a resolved pending_input from the transcript carries
+        // the [[conduit:resolved]] marker in content even after close+reopen.
+        if (sh.nikhil.conduit.ui.PendingQuestions.parsePendingResolution(last.content)?.answered == true) return false
+        return true
     }
 
     fun sendChat(sessionId: String, msg: String) {

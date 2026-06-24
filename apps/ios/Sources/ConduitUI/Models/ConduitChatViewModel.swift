@@ -295,10 +295,21 @@ extension ConduitUI {
                 .filter { $0.kind == "pending_input" }
                 .map { pendingInputStrippedKey($0.content) }
                 .filter { $0.count >= 8 }
-            guard !pending.isEmpty else { return deduped }
+            // Build the set of all individual options from pending_input cards so
+            // short answers like "Yes" / "1" are also suppressed (the 8-char floor
+            // below would let them through as bare echoes of the broker's appendUser).
+            let pendingOptionSet = Set(deduped
+                .filter { $0.kind == "pending_input" }
+                .flatMap { $0.pendingOptions }
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty })
+            guard !pending.isEmpty || !pendingOptionSet.isEmpty else { return deduped }
             return deduped.filter { item in
                 if item.kind == "pending_input" { return true }
                 let c = item.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Exact option match: drop regardless of length floor (covers short
+                // answers like "Yes", "No", "1" that appendUser writes to conversation.jsonl).
+                if item.role.lowercased() == "user" && pendingOptionSet.contains(c) { return false }
                 guard c.count >= 8 else { return true }
                 return !pending.contains { $0 == c || $0.contains(c) }
             }
