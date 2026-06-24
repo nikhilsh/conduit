@@ -82,12 +82,20 @@ function buildBody(payload: PushPayload): string {
     // into aps."content-state" so the iOS TurnActivityContentState Codable
     // receives exactly the keys the broker computed. Use the broker's event
     // field ("update"|"end"); fall back to "update" if absent (forward compat).
+    //
+    // For "end": set dismissal-date to now + 5 min. Without it iOS keeps the
+    // final state on the lock screen for up to 4 hours (Apple default).
+    const nowSec = Math.floor(Date.now() / 1000);
+    const aps: Record<string, unknown> = {
+      timestamp: nowSec,
+      event,
+      "content-state": contentState,
+    };
+    if (event === "end") {
+      aps["dismissal-date"] = nowSec + 5 * 60;
+    }
     return JSON.stringify({
-      aps: {
-        timestamp: Math.floor(Date.now() / 1000),
-        event,
-        "content-state": contentState,
-      },
+      aps,
       session_id: payload.session_id,
       box: payload.box,
     });
