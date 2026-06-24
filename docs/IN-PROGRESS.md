@@ -7,10 +7,7 @@ Items currently being built. On merge, move each to
 
 ## Active
 
-- **Collapse answered pending-input card to chip** — answered AskUserQuestion
-  cards shrink to a compact green pill chip (e.g. `✓ Fix both`) instead of
-  remaining as a full dimmed card. iOS + Android parity. Branch `pending-chip`,
-  PR #735. Needs on-device verification (iOS + Android).
+_(nothing active)_
 
 ## Deferred (not active)
 
