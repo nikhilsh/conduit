@@ -1510,6 +1510,34 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _resolvedPendingInputIDs = MutableStateFlow<Set<String>>(emptySet())
     val resolvedPendingInputIDs: StateFlow<Set<String>> = _resolvedPendingInputIDs.asStateFlow()
 
+    /**
+     * Fingerprints of pending-input cards the user has answered in this app launch,
+     * keyed by sessionId -> set of fingerprints. Persists across chat view dismissals
+     * (unlike the remember{} state in ChatPage). Reset on app restart — the HTTP
+     * transcript covers the restart path via the persisted resolution marker.
+     * Mirror of iOS SessionStore.answeredPendingBySession.
+     */
+    private val _answeredPendingBySession = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
+    val answeredPendingBySession: StateFlow<Map<String, Set<String>>> = _answeredPendingBySession.asStateFlow()
+
+    /**
+     * Answer text per pending-input fingerprint, keyed sessionId -> fingerprint -> answer.
+     * Used to show "Sent . <answer>" on the chip after close+reopen.
+     */
+    private val _answeredPendingTextBySession = MutableStateFlow<Map<String, Map<String, String>>>(emptyMap())
+    val answeredPendingTextBySession: StateFlow<Map<String, Map<String, String>>> = _answeredPendingTextBySession.asStateFlow()
+
+    fun markPendingInputAnswered(sessionId: String, fingerprint: String, answer: String) {
+        val currentSets = _answeredPendingBySession.value
+        val set = (currentSets[sessionId] ?: emptySet()) + fingerprint
+        _answeredPendingBySession.value = currentSets + (sessionId to set)
+        if (answer.isNotEmpty()) {
+            val currentTexts = _answeredPendingTextBySession.value
+            val inner = (currentTexts[sessionId] ?: emptyMap()) + (fingerprint to answer)
+            _answeredPendingTextBySession.value = currentTexts + (sessionId to inner)
+        }
+    }
+
     private var prefs: android.content.SharedPreferences? = null
     /** Application context cached at hydrate() for OAuthStore credential reads. */
     private var appContext: Context? = null

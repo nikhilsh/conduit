@@ -989,6 +989,28 @@ final class SessionStore {
     /// Cleared lazily when a WS echo replaces the item with status "done".
     var resolvedPendingInputIDs: Set<String> = []
 
+    /// Fingerprints of pending-input cards the user has answered in this app
+    /// launch, keyed by sessionID then fingerprint -> answer text. Persists
+    /// across view dismissals (unlike ConduitChatView's @State). Reset on
+    /// app restart — the HTTP transcript covers the restart path via the
+    /// persisted resolution marker the broker writes into the transcript.
+    private var answeredPendingBySession: [String: [String: String]] = [:]
+
+    func markPendingInputAnswered(sessionID: String, fingerprint: String, answer: String) {
+        answeredPendingBySession[sessionID, default: [:]][fingerprint] = answer
+        Telemetry.breadcrumb("chat", "pending_input_answered_stored",
+            data: ["sessionID": sessionID, "hasAnswer": answer.isEmpty ? "false" : "true"])
+    }
+
+    func isPendingInputAnswered(sessionID: String, fingerprint: String) -> Bool {
+        answeredPendingBySession[sessionID]?[fingerprint] != nil
+    }
+
+    func answeredTextForPendingInput(sessionID: String, fingerprint: String) -> String? {
+        let t = answeredPendingBySession[sessionID]?[fingerprint]
+        return (t?.isEmpty == false) ? t : nil
+    }
+
     /// Live subagent roster per session. Populated by `view:"agents"` view_events
     /// emitted by the broker on every task_started/task_progress/task_notification
     /// frame. Full snapshot — newest arrived last. Displayed in the Information

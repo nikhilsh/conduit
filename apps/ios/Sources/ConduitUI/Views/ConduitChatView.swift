@@ -153,17 +153,6 @@ extension ConduitUI {
         /// feedback, round 4: "I tap a reply, it doesn't seem to send, I
         /// tap another and it sends again").
         @State private var answeredPendingIDs: Set<String> = []
-        /// Content fingerprints of answered pending-input cards: prompt +
-        /// sorted options joined with "|". Supplements `answeredPendingIDs`
-        /// so a broker re-emitting the SAME pending card with a fresh `id`
-        /// (after an app reconnect) still renders locked / "Sent" rather
-        /// than presenting a duplicate interactive card.
-        @State private var answeredPendingFingerprints: Set<String> = []
-        /// The chosen answer text per answered pending-input fingerprint, so a
-        /// card recreated after reopen still shows the selection (green check +
-        /// "Sent · <answer>") rather than a bare locked card. Keyed by the same
-        /// fingerprint as `answeredPendingFingerprints`.
-        @State private var answeredPendingText: [String: String] = [:]
 
         private var isReadOnly: Bool { readOnlyItems != nil || forceReadOnly }
 
@@ -641,9 +630,9 @@ extension ConduitUI {
                                         // the persisted state on reload.
                                         pendingAnswered: persistedResolution(event)?.answered == true
                                             || answeredPendingIDs.contains(event.id)
-                                            || answeredPendingFingerprints.contains(pendingFingerprint(event))
+                                            || store.isPendingInputAnswered(sessionID: session.id, fingerprint: pendingFingerprint(event))
                                             || store.resolvedPendingInputIDs.contains(event.id),
-                                        answeredText: answeredPendingText[pendingFingerprint(event)]
+                                        answeredText: store.answeredTextForPendingInput(sessionID: session.id, fingerprint: pendingFingerprint(event))
                                             ?? persistedResolution(event)?.answer,
                                         streamRevision: streamRevision(for: event.id),
                                         appearanceRevision: appearanceRevision,
@@ -653,10 +642,11 @@ extension ConduitUI {
                                         onPendingAnswered: { answer in
                                             answeredPendingIDs.insert(event.id)
                                             let fp = pendingFingerprint(event)
-                                            answeredPendingFingerprints.insert(fp)
-                                            if let answer, !answer.isEmpty {
-                                                answeredPendingText[fp] = answer
-                                            }
+                                            store.markPendingInputAnswered(
+                                                sessionID: session.id,
+                                                fingerprint: fp,
+                                                answer: answer ?? ""
+                                            )
                                         }
                                     )
                                     // Perf (litter-parity): skip re-rendering a
@@ -1072,8 +1062,9 @@ extension ConduitUI {
 
         /// Content fingerprint for a pending-input event: prompt + sorted
         /// options, joined with "|". Used as a dedupe key that survives broker
-        /// re-emission of the same pending card under a fresh `id`. Pure so the
-        /// two `answeredPendingFingerprints` call sites can both use it.
+        /// re-emission of the same pending card under a fresh `id`. Passed to
+        /// the SessionStore answered-fingerprint helpers (persists across view
+        /// dismissals within the same app launch).
         private func pendingFingerprint(_ event: ConversationItem) -> String {
             let opts = event.pendingOptions.sorted().joined(separator: ",")
             let prompt = event.content.trimmingCharacters(in: .whitespacesAndNewlines)
