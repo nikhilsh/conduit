@@ -80,6 +80,7 @@ pub struct SessionHandle {
     tx: mpsc::Sender<Message>,
     shutdown: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     nudge: Arc<Notify>,
+    pause: Arc<Notify>,
 }
 
 impl SessionHandle {
@@ -98,6 +99,14 @@ impl SessionHandle {
     /// the failure.
     pub fn nudge(&self) {
         self.nudge.notify_one();
+    }
+
+    /// Close the live socket and park the worker until nudge() is called.
+    /// Call when the session leaves the foreground UI to eliminate idle
+    /// heartbeat timers and select! loops for invisible sessions. The
+    /// worker reconnects on the next nudge() (or notify_network_change).
+    pub fn pause(&self) {
+        self.pause.notify_one();
     }
 
     pub async fn send_input(&self, data: Vec<u8>) -> Result<(), ConduitError> {
@@ -230,6 +239,7 @@ pub async fn connect(
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let shutdown = Arc::new(Mutex::new(Some(shutdown_tx)));
     let nudge = Arc::new(Notify::new());
+    let pause = Arc::new(Notify::new());
 
     delegate.on_connection_health(session_id.clone(), ConnectionHealth::Connected);
 
@@ -243,6 +253,7 @@ pub async fn connect(
         rx,
         shutdown_rx,
         nudge: Arc::clone(&nudge),
+        pause: Arc::clone(&pause),
         delegate,
     }));
 
@@ -250,6 +261,7 @@ pub async fn connect(
         tx,
         shutdown,
         nudge,
+        pause,
     })
 }
 
@@ -263,6 +275,7 @@ struct WorkerArgs {
     rx: mpsc::Receiver<Message>,
     shutdown_rx: oneshot::Receiver<()>,
     nudge: Arc<Notify>,
+    pause: Arc<Notify>,
     delegate: Arc<dyn ConduitDelegate>,
 }
 
@@ -335,6 +348,7 @@ async fn session_worker(mut args: WorkerArgs) {
             &mut args.rx,
             &mut shutdown_rx,
             &args.nudge,
+            &args.pause,
             &args.delegate,
             &args.session_id,
         )
@@ -343,6 +357,13 @@ async fn session_worker(mut args: WorkerArgs) {
         match outcome {
             DriveOutcome::ClientClose => {
                 return;
+            }
+            DriveOutcome::Paused => {
+                // App explicitly idled this session. Park without auto-retry
+                // until nudge() (or notify_network_change) wakes us.
+                if !park_indefinite(&mut shutdown_rx, &args.nudge).await {
+                    return;
+                }
             }
             DriveOutcome::Disconnected(_reason) => {
                 // A socket drop is a ROUTINE rotation, not a user-facing
@@ -430,9 +451,21 @@ async fn park_until_revive(shutdown_rx: &mut oneshot::Receiver<()>, nudge: &Arc<
     }
 }
 
+/// Like park_until_revive but with no auto-retry timer: waits until a nudge()
+/// or shutdown. Used when the session was intentionally paused by the app UI,
+/// not from a reconnect-burst exhaustion — auto-retry would silently undo the
+/// power saving.
+async fn park_indefinite(shutdown_rx: &mut oneshot::Receiver<()>, nudge: &Arc<Notify>) -> bool {
+    tokio::select! {
+        _ = &mut *shutdown_rx => false,
+        _ = nudge.notified() => true,
+    }
+}
+
 enum DriveOutcome {
     ClientClose,
     Disconnected(String),
+    Paused,
 }
 
 async fn drive_socket(
@@ -440,6 +473,7 @@ async fn drive_socket(
     rx: &mut mpsc::Receiver<Message>,
     shutdown_rx: &mut oneshot::Receiver<()>,
     nudge: &Arc<Notify>,
+    pause: &Arc<Notify>,
     delegate: &Arc<dyn ConduitDelegate>,
     session_id: &str,
 ) -> DriveOutcome {
@@ -463,6 +497,13 @@ async fn drive_socket(
                 // reconnect immediately.
                 let _ = writer.close().await;
                 return DriveOutcome::Disconnected("network change".to_string());
+            }
+            _ = pause.notified() => {
+                // App quiesced this session (not visible in UI). Close
+                // the socket gracefully; session_worker will park until
+                // nudge() / notify_network_change re-arms us.
+                let _ = writer.close().await;
+                return DriveOutcome::Paused;
             }
             outbound = rx.recv() => {
                 let Some(msg) = outbound else {

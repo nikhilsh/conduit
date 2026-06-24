@@ -350,6 +350,12 @@ interface ConduitClient {
 
     void notify_network_change();
 
+    [Throws=ConduitError]
+    void pause_session(string session_id);
+
+    [Throws=ConduitError]
+    void resume_session(string session_id);
+
     [Async, Throws=ConduitError]
     string create_session(string assistant, string? branch, string? reasoning_effort, string? model, string? cwd, string? permission_mode, boolean? fast_mode, string? device_id);
 

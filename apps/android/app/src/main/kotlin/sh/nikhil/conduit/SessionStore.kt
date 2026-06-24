@@ -548,6 +548,10 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _sessions = MutableStateFlow<List<ProjectSession>>(emptyList())
     val sessions: StateFlow<List<ProjectSession>> = _sessions.asStateFlow()
 
+    // Sessions whose WS worker has been parked. Cleared on foreground so
+    // notifyNetworkChange reconnects them automatically.
+    private val pausedSessionIds = mutableSetOf<String>()
+
     private val _selectedId = MutableStateFlow<String?>(null)
     val selectedId: StateFlow<String?> = _selectedId.asStateFlow()
     private val _savedServers = MutableStateFlow<List<SavedServer>>(emptyList())
@@ -1554,6 +1558,32 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val terminalPersistScheduled =
         java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /** Park the WS worker for one session (it's left the foreground UI). */
+    fun pauseSession(sessionId: String) {
+        if (pausedSessionIds.contains(sessionId)) return
+        val c = client ?: return
+        pausedSessionIds.add(sessionId)
+        runCatching { c.pauseSession(sessionId) }
+        Telemetry.breadcrumb("ws", "session paused", mapOf("session" to sessionId))
+    }
+
+    /** Re-arm a paused session (it's returned to the foreground UI). */
+    fun resumeSession(sessionId: String) {
+        if (!pausedSessionIds.contains(sessionId)) return
+        val c = client ?: return
+        pausedSessionIds.remove(sessionId)
+        runCatching { c.resumeSession(sessionId) }
+        Telemetry.breadcrumb("ws", "session resumed", mapOf("session" to sessionId))
+    }
+
+    private fun pauseAllSessions() {
+        _sessions.value.forEach { pauseSession(it.id) }
+    }
+
+    private fun clearPausedSessions() {
+        pausedSessionIds.clear()
+    }
+
     private val lifecycleObserver = object : DefaultLifecycleObserver {
         override fun onResume(owner: LifecycleOwner) {
             // App came back from background — local sockets may be
@@ -1563,6 +1593,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
             // conversation.jsonl (live events aren't replayed on
             // re-attach), so without this the transcript stays stale and
             // the typing indicator spins forever. Mirror of iOS.
+            // Clear paused set BEFORE nudge so all workers reconnect cleanly.
+            clearPausedSessions()
             client?.notifyNetworkChange()
             refreshSessions()
             // Foregrounding may have re-armed a socket that died while
@@ -1574,8 +1606,10 @@ class SessionStore : ViewModel(), ConduitDelegate {
         override fun onStop(owner: LifecycleOwner) {
             // App is backgrounding — flush dirty terminal scrollback NOW so a
             // subsequent process death still leaves the last-known terminal on
-            // disk for an instant cold-launch restore.
+            // disk for an instant cold-launch restore. Also pause all WS workers
+            // so N idle heartbeat loops don't drain the battery.
             flushTerminalPersist()
+            pauseAllSessions()
         }
     }
 

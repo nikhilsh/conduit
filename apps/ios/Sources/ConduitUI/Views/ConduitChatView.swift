@@ -179,6 +179,9 @@ extension ConduitUI {
         // session.id)` so a stale busy state doesn't fire on session switch.
         @State private var replyHapticsModel = ReplyHapticsModel()
         @State private var replyHapticsPlayer = ReplyHapticsPlayer()
+        /// Delayed-pause task: set on disappear, cancelled on reappear so a quick
+        /// navigation-back doesn't needlessly pause+reconnect the WS.
+        @State private var wsPauseTask: Task<Void, Never>?
 
         var body: some View {
             // The composer + suggestion cluster is hosted via
@@ -218,6 +221,33 @@ extension ConduitUI {
                 .environment(\.commandDetailEnabled, flags.showCommandDetail)
                 .environment(\.commandRunBlockEnabled, flags.commandRunBlock)
                 .task { flags.logChatExposureIfNeeded() }
+                // WS background throttle: resume when this chat comes into view,
+                // park after a 30s grace on disappear so a quick back-then-forward
+                // navigation doesn't bounce the connection. Skip read-only sessions
+                // (no live WS to manage).
+                .onAppear {
+                    guard !isReadOnly else { return }
+                    wsPauseTask?.cancel()
+                    wsPauseTask = nil
+                    store.resumeSession(session.id)
+                }
+                .onDisappear {
+                    guard !isReadOnly else { return }
+                    let sid = session.id
+                    wsPauseTask = Task {
+                        try? await Task.sleep(for: .seconds(30))
+                        guard !Task.isCancelled else { return }
+                        store.pauseSession(sid)
+                    }
+                }
+                // Session switch reuses the view — re-arm the WS for the new session.
+                .onChange(of: session.id) { old, new in
+                    guard !isReadOnly else { return }
+                    wsPauseTask?.cancel()
+                    wsPauseTask = nil
+                    store.resumeSession(new)
+                    store.pauseSession(old)
+                }
         }
 
         // MARK: Messages
