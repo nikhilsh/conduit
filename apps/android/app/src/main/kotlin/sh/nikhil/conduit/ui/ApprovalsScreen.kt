@@ -312,7 +312,7 @@ private fun ApprovalCard(
         // "wants to <ask>" + the exact command / prompt in a code tile.
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                "wants to ${if (item.pendingOptions.isEmpty) intentPhrase(item.risk) else "ask you something"}",
+                "wants to ${if (item.pendingOptions.isEmpty()) intentPhrase(item.risk) else "ask you something"}",
                 fontFamily = neon.sans,
                 fontSize = 12.5.sp,
                 color = neon.textDim,
@@ -338,7 +338,7 @@ private fun ApprovalCard(
 
         // Actions: for AskUserQuestion items show tappable option buttons;
         // for command-approval items show the standard Approve / Deny row.
-        if (item.pendingOptions.isEmpty) {
+        if (item.pendingOptions.isEmpty()) {
             // Command-approval: Approve / Deny resolve over HTTP.
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
                 ApprovalActionButton("Approve", Icons.Default.Check, neon.green, filled = true, neon = neon, enabled = !resolving, modifier = Modifier.weight(1f)) {
