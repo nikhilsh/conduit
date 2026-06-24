@@ -9,6 +9,17 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.195
+
+**WS background throttle + approvals/resolved bubble fixes + agent cwd fix.** PRs #744 (iOS + Android), #746 (iOS + Android), #747 (broker).
+
+- **Approvals pending-ask detection fixed (PR #744)** — Rust core was stripping `[[conduit:needs-input]]` before the app's content check ran, so the Approvals sheet never showed answer-option buttons. Fixed by checking `pending_options` (broker-side list, not content) instead of content substring match. Verify: trigger an AskUserQuestion → open Approvals → option buttons appear and tapping one resolves the card. [iOS + Android, on-device]
+- **Resolved-marker raw bubble on reconnect fixed (PR #744)** — dedup fingerprint logic only stripped `[[conduit:needs-input]]` but not `[[conduit:resolved:…]]`, so the raw marker appeared as a message bubble on WS reconnect. Now stripped from the fingerprint. Verify: answer a card, close and reopen the app → no raw `[[conduit:resolved:…]]` bubble in chat. [iOS + Android, on-device]
+- **WS background throttle — reduce device heat (PR #746)** — Rust `session_worker` is paused (WS closed, no heartbeat) when a session is not visible in the UI. Resumes immediately on foreground/navigate-back. All sessions paused when app backgrounds, resumed on foreground. Verify: open multiple sessions → put app in background for 30 s → check device temperature is lower vs. before; foreground → sessions reconnect and chat works. [iOS + Android, on-device]
+- **Agent workdir now defaults to `$HOME` (PR #747)** — embedded agent TOMLs had `workdir = "/workspace"` which doesn't exist on bare-VPS setups, causing agents to spawn inside their own session directory (`/root/.conduit/sessions/<id>/work`) instead of the user's home. Now expands `$HOME` at spawn time; falls back to `os.UserHomeDir()` if workdir is unresolvable. Broker-only fix; live via redeploy. [broker — live]
+
+---
+
 ## v0.0.194
 
 **Chat ticker + ask-queue fixes + chip persistence + approvals UX.** PRs #738 (iOS + Android), #739 (iOS + Android), #740 (iOS + Android), #741 (iOS + Android), #742 (core Rust).
