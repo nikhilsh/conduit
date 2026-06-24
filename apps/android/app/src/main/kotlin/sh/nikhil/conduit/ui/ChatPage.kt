@@ -1726,8 +1726,6 @@ private fun PendingInputCard(
     // Settled once submitted locally OR recorded answered upstream OR the
     // transcript carries a persisted resolution (rehydration path).
     val submitted = localSubmitted || alreadyAnswered || persistedResolution?.answered == true
-    // Collapsed by default; tap the chip to expand, tap the header to collapse.
-    var isExpanded by remember(ev.id) { mutableStateOf(false) }
     // Pre-populate the selected option highlight from the persisted answer so
     // the answered option renders filled/checked after close+reopen. Only runs
     // once per card (keyed on ev.id); safe to no-op when already seeded.
@@ -1772,9 +1770,9 @@ private fun PendingInputCard(
         onAnswer(joined)
     }
 
-    val chipShape = RoundedCornerShape(50)
     if (submitted) {
         // Compact pill chip once answered — collapses the full card.
+        val chipShape = RoundedCornerShape(50)
         Row(
             modifier = Modifier
                 .background(neon.green.copy(alpha = 0.10f), chipShape)
@@ -1797,35 +1795,6 @@ private fun PendingInputCard(
         return
     }
 
-    if (!isExpanded) {
-        // Compact pill chip before the user expands the card.
-        val prompt = questions.firstOrNull()?.prompt?.takeIf { it.isNotBlank() }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(neon.claude.copy(alpha = 0.10f), chipShape)
-                .border(1.dp, neon.claude.copy(alpha = 0.30f), chipShape)
-                .clickable { isExpanded = true }
-                .padding(horizontal = 11.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Icon(Icons.Outlined.Info, null, tint = neon.claude, modifier = Modifier.size(12.dp))
-            Text(
-                prompt ?: "Needs Your Input",
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = neon.mono,
-                fontWeight = FontWeight.Medium,
-                color = neon.claude,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Icon(Icons.Filled.KeyboardArrowDown, null, tint = neon.claude, modifier = Modifier.size(14.dp))
-        }
-        return
-    }
-
     val shape = RoundedCornerShape(neon.radiusDp.dp)
     Column(
         modifier = Modifier
@@ -1842,17 +1811,12 @@ private fun PendingInputCard(
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().clickable { isExpanded = false },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.Info, null, tint = neon.claude, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(8.dp))
             NeonLabel("NEEDS YOUR INPUT", neon.claude, neon)
             Spacer(Modifier.width(6.dp))
             NeonStatusChip(ev.status, neon)
-            Spacer(Modifier.weight(1f))
-            Icon(Icons.Filled.KeyboardArrowUp, null, tint = neon.claude, modifier = Modifier.size(16.dp))
         }
         questions.forEachIndexed { qIdx, question ->
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
