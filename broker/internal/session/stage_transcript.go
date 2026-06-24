@@ -45,10 +45,50 @@ func stageExternalTranscript(agentHome, realHome, agent, externalID string) {
 	}
 }
 
+// stageExternalTranscriptInto is the CONDUIT_SHARED_AGENT_CREDS variant of
+// stageExternalTranscript: under the flag the agent reads its transcripts
+// (projects/ for claude, sessions/ for codex) from the SHARED canonical
+// config dir the relocation env var points at, not from the per-session
+// agent-home. `dirs` is the provider->canonical-dir map from sharedCredEnv
+// (keys "anthropic" / "openai"). When a provider's canonical dir is absent
+// it falls back to the per-session agent-home layout (defensive; should not
+// happen under the flag). Under Option A the canonical dir IS the host
+// config dir, so staging is an idempotent no-op (the transcript is already
+// there). See doc §3.6.
+func stageExternalTranscriptInto(dirs map[string]string, agentHome, realHome, agent, externalID string) {
+	if realHome == "" || externalID == "" {
+		return
+	}
+	switch agent {
+	case "claude":
+		dst := filepath.Join(agentHome, ".claude")
+		if d := dirs["anthropic"]; d != "" {
+			dst = d
+		}
+		stageClaudeTranscriptInto(dst, realHome, externalID)
+	case "codex":
+		dst := filepath.Join(agentHome, ".codex")
+		if d := dirs["openai"]; d != "" {
+			dst = d
+		}
+		stageCodexTranscriptInto(dst, realHome, externalID)
+	default:
+		log.Printf("found-sessions: stageExternalTranscriptInto: unknown agent %q (skipping)", agent)
+	}
+}
+
 // stageClaudeTranscript copies <realHome>/.claude/projects/<slug>/<id>.jsonl
 // into <agentHome>/.claude/projects/<slug>/<id>.jsonl, preserving the slug
 // directory name so the claude CLI's project-local resolution still matches.
 func stageClaudeTranscript(agentHome, realHome, sessionID string) {
+	stageClaudeTranscriptInto(filepath.Join(agentHome, ".claude"), realHome, sessionID)
+}
+
+// stageClaudeTranscriptInto copies the claude transcript into
+// <destConfigDir>/projects/<slug>/<id>.jsonl. destConfigDir is the claude
+// config dir (per-session `<agentHome>/.claude` on the flag-off path, or the
+// shared CLAUDE_CONFIG_DIR canonical dir on the flag-on path).
+func stageClaudeTranscriptInto(destConfigDir, realHome, sessionID string) {
 	srcBase := filepath.Join(realHome, ".claude", "projects")
 	slugDirs, err := os.ReadDir(srcBase)
 	if err != nil {
@@ -63,8 +103,8 @@ func stageClaudeTranscript(agentHome, realHome, sessionID string) {
 		if _, err := os.Stat(src); err != nil {
 			continue
 		}
-		// Found the transcript. Mirror to agent-home under the same slug.
-		dst := filepath.Join(agentHome, ".claude", "projects", slugEntry.Name(), sessionID+".jsonl")
+		// Found the transcript. Mirror to the dest config dir under the same slug.
+		dst := filepath.Join(destConfigDir, "projects", slugEntry.Name(), sessionID+".jsonl")
 		if _, err := os.Stat(dst); err == nil {
 			// Already staged (idempotent).
 			log.Printf("found-sessions: claude transcript already staged at %s (skipping)", dst)
@@ -89,6 +129,14 @@ func stageClaudeTranscript(agentHome, realHome, sessionID string) {
 // (the file whose name contains externalID) into the corresponding path under
 // <agentHome>/.codex/sessions/…, preserving the date-path hierarchy.
 func stageCodexTranscript(agentHome, realHome, sessionID string) {
+	stageCodexTranscriptInto(filepath.Join(agentHome, ".codex"), realHome, sessionID)
+}
+
+// stageCodexTranscriptInto copies the codex rollout into
+// <destConfigDir>/sessions/<rel>. destConfigDir is the codex CODEX_HOME dir
+// (per-session `<agentHome>/.codex` on the flag-off path, or the shared
+// CODEX_HOME canonical dir on the flag-on path).
+func stageCodexTranscriptInto(destConfigDir, realHome, sessionID string) {
 	srcBase := filepath.Join(realHome, ".codex", "sessions")
 	found := false
 	// Walk YYYY/MM/DD structure.
@@ -108,7 +156,7 @@ func stageCodexTranscript(agentHome, realHome, sessionID string) {
 		if err != nil {
 			return nil
 		}
-		dst := filepath.Join(agentHome, ".codex", "sessions", rel)
+		dst := filepath.Join(destConfigDir, "sessions", rel)
 		if _, serr := os.Stat(dst); serr == nil {
 			log.Printf("found-sessions: codex transcript already staged at %s (skipping)", dst)
 			found = true

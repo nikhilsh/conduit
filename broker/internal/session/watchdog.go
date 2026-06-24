@@ -64,8 +64,13 @@ func (s *Session) runWatchdogChecks() {
 
 	// Heal an expired private credential copy from the host login so the
 	// per-call OAuth fetchers (account usage, quick replies, titles) and
-	// the next agent spawn don't 401 (credfresh.go).
-	s.refreshStaleAgentCredentials()
+	// the next agent spawn don't 401 (credfresh.go). Under
+	// CONDUIT_SHARED_AGENT_CREDS there is NO per-session copy to heal — the
+	// session points at one shared canonical lineage the CLI itself
+	// refreshes — so the watchdog re-mirror is skipped entirely (doc §7).
+	if !sharedAgentCredsEnabled() {
+		s.refreshStaleAgentCredentials()
+	}
 }
 
 func (s *Session) processAlive() bool {
