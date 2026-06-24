@@ -9,6 +9,17 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.194
+
+**Chat ticker + ask-queue fixes.** PRs #739 (iOS + Android), #740 (iOS + Android), #742 (core Rust).
+
+- **Tool cluster expand resets on stream (PR #739)** — iOS: removed count from `toolgroup-{id}-{count}` row ID so SwiftUI preserves `@State` across streaming. Android: keyed `remember` on `items.firstOrNull()?.id` not full items. [iOS + Android, on-device]
+- **AskUserQuestion answer echo + queue (PR #739)** — removed duplicate YOU bubble when answering a pending-input card; `hasPendingAsk` now checks `resolvedPendingInputIDs` so the queue is drained; multi-option chip joins answers with `·`. [iOS + Android, on-device]
+- **Running ticker resets to 0 on chat open (PR #740)** — `MonoRunningTicker` (iOS) and `CommandRunTicker` (Android) now seed elapsed time from the first item's `ts` instead of starting at 0; reopening a chat shows the correct elapsed time. [iOS + Android, on-device]
+- **Tool cluster count never updates (PR #742, core)** — `classify_status` was applying content-text heuristics ("running", "pending", "failed") to tool call content, misclassifying bash commands that contained those words as substrings. Tool items now always classify as `done`/`failed` based on exit code only. Requires broker redeploy? No — app-side Rust core fix only. [iOS + Android, on-device]
+
+---
+
 ## v0.0.193
 
 **Pending-input dedup + tool cluster collapse.** PRs #736 (broker), #737 (iOS + Android + broker).
