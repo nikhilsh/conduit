@@ -589,9 +589,10 @@ fun approvalQueue(candidates: List<ApprovalCandidate>): List<ApprovalItem> =
         if (!isAwaitingInput(c.conversation)) return@mapNotNull null
         val last = c.conversation?.lastOrNull()
         val content = last?.content ?: ""
-        // Detect AskUserQuestion items via the broker sentinel.
-        // These must answer via sendChat, not the approval endpoint.
-        val isPendingAsk = content.contains(PendingQuestions.PENDING_INPUT_SENTINEL)
+        // Detect AskUserQuestion items by lastItemKind (the Rust core
+        // strips the sentinel from content before it reaches us, so
+        // checking content.contains(sentinel) is always false here).
+        val isPendingAsk = last?.kind == "pending_input"
         val pendingOptions = if (isPendingAsk) {
             PendingQuestions.parse(content).flatMap { it.options }
         } else {

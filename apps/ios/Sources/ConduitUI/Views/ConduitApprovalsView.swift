@@ -101,9 +101,10 @@ extension ConduitUI {
                     lastItemKind: c.lastItemKind
                 ) else { return nil }
                 let prompt = promptText(command: c.command, content: c.content)
-                // Detect AskUserQuestion items via the broker sentinel.
-                // These must answer via sendChat, not the approval endpoint.
-                let isPendingAsk = c.content.contains(ChatViewModel.pendingInputSentinel)
+                // Detect AskUserQuestion items by lastItemKind (the Rust core
+                // strips the sentinel from content before it reaches us, so
+                // checking content.contains(sentinel) is always false here).
+                let isPendingAsk = c.lastItemKind == "pending_input"
                 let pendingOptions: [String]
                 if isPendingAsk {
                     let questions = ChatViewModel.parsePendingQuestions(c.content)

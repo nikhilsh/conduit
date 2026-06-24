@@ -1278,20 +1278,31 @@ internal fun mergedConversation(
     val typedFingerprints = conversation
         .map { "${it.role.lowercase()}|${it.content}" }
         .toSet()
+    // Track keys seen within chatLog to deduplicate repeated replays of the
+    // same resolved entry (each WS reconnect replays the transcript).
+    val seenChatLogKeys = HashSet<String>()
     val synthetic = chatLog.mapIndexedNotNull { idx, ev ->
-        // Strip the pending-input sentinel before fingerprinting so this
-        // raw chatLog item dedupes against the already-stripped typed card
-        // (same role+content key), and before setting content so the
-        // sentinel never leaks as a bare raw bubble.
+        // Strip only the needs-input sentinel from content (for display), but
+        // use PendingQuestions.strippedKey (strips BOTH sentinel AND resolved
+        // marker) for the dedup fingerprint. This makes a resolved chatLog
+        // entry ("[[conduit:needs-input]]\n[[conduit:resolved]]{...}\ntext")
+        // match the typed conversationLog item ("text") that core has already
+        // double-stripped, preventing a raw resolved-marker bubble from
+        // appearing on each WS reconnect.
         val strippedContent = stripPendingSentinel(ev.content)
-        val key = "${ev.role.lowercase()}|$strippedContent"
+        val key = "${ev.role.lowercase()}|${PendingQuestions.strippedKey(ev.content)}"
         if (key in typedFingerprints) {
             null
+        } else if (!seenChatLogKeys.add(key)) {
+            null // deduplicate within chatLog (repeated replay)
         } else {
+            val isPendingInput = ev.content.contains(PendingQuestions.PENDING_INPUT_SENTINEL)
             ConversationItem(
                 id = "chatlog-${ev.ts}-$idx",
                 role = ev.role,
-                kind = if (ev.role.lowercase() == "tool") "tool" else "message",
+                kind = if (ev.role.lowercase() == "tool") "tool"
+                       else if (isPendingInput) "pending_input"
+                       else "message",
                 status = "done",
                 content = strippedContent,
                 ts = ev.ts,
@@ -1301,7 +1312,7 @@ internal fun mergedConversation(
                 exitCode = null,
                 durationMs = null,
                 diffSummary = null,
-                pendingOptions = emptyList(),
+                pendingOptions = if (isPendingInput) ConversationRenderer.extractPendingOptions(strippedContent) else emptyList(),
                 sourceAgent = null,
                 targetAgent = null,
                 taskText = null,
