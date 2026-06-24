@@ -9,6 +9,14 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.198
+
+**iOS release signing fix: notification service extension.** No PR (direct main commit).
+
+- **Notification service extension signing (direct commit)** — `ConduitNotificationService.appex` was not included in the provisioning profile setup for ad-hoc and App Store release builds, causing `ValidateEmbeddedBinary` failures since v0.0.196. Created `sh.nikhil.conduit.notificationservice` provisioning profiles (ad-hoc + App Store), added CI secrets, updated `release-ios.yml` and `release-testflight.yml` to install the profile, and updated `inject-release-signing.py` to patch the extension to manual signing. [CI-only fix — no on-device verification needed]
+
+---
+
 ## v0.0.197
 
 **Apple App Store reviewer demo mode (iOS + Android).** PR #753.
