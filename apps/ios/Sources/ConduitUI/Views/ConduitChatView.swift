@@ -4453,20 +4453,43 @@ private struct ConduitPendingInputCard: View {
     }
 
     var body: some View {
+        if submitted {
+            answeredChip
+        } else {
+            unansweredCard
+        }
+    }
+
+    // Compact inline pill shown once the question is answered.
+    private var answeredChip: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 12, weight: .bold))
+            Text((sentAnswer ?? answeredText) ?? "Answered")
+                .font(neon.mono(12).weight(.medium))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .foregroundStyle(neon.green)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 6)
+        .background(Capsule(style: .continuous).fill(neon.green.opacity(0.10)))
+        .overlay(Capsule(style: .continuous).stroke(neon.green.opacity(0.30), lineWidth: 1))
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var unansweredCard: some View {
         let questions = self.questions
         // The explicit Send appears for multiple questions OR any
         // multi-select question — only a lone single-select question
         // keeps tap-to-send.
         let needsSend = questions.count > 1 || questions.contains { $0.multiSelect }
         return VStack(alignment: .leading, spacing: 12) {
-            // Drop the urgent "NEEDS YOUR INPUT" treatment once answered: a
-            // settled card reads as "ANSWERED" in a calm tint with no glow, so
-            // it no longer looks like it still wants attention (#R4-5).
-            Text(submitted ? "ANSWERED" : "NEEDS YOUR INPUT")
+            Text("NEEDS YOUR INPUT")
                 .font(neon.mono(11).weight(.bold))
                 .tracking(0.8)
-                .foregroundStyle(submitted ? neon.green : neon.claude)
-                .neonTextGlow(submitted ? nil : neon.textGlow?.tinted(neon.claude))
+                .foregroundStyle(neon.claude)
+                .neonTextGlow(neon.textGlow?.tinted(neon.claude))
             ForEach(Array(questions.enumerated()), id: \.offset) { qIdx, question in
                 VStack(alignment: .leading, spacing: 8) {
                     if !question.prompt.isEmpty {
@@ -4485,36 +4508,21 @@ private struct ConduitPendingInputCard: View {
                     }
                 }
             }
-            if needsSend && !submitted {
+            if needsSend {
                 sendButton(questions: questions)
-            }
-            if submitted {
-                // Round-4 device feedback: a tap had no visible "delivered"
-                // affordance, so a sent answer read as nothing happening
-                // and the user tapped again. Echo the chosen answer next to
-                // a "Sent" check so the tap is unmistakably registered.
-                HStack(spacing: 5) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 12, weight: .bold))
-                    Text((sentAnswer ?? answeredText).map { "Sent · \($0)" } ?? "Sent")
-                        .font(neon.mono(11).weight(.semibold))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                .foregroundStyle(neon.green)
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill((submitted ? neon.border : neon.claude).opacity(submitted ? 0.18 : 0.10))
+                .fill(neon.claude.opacity(0.10))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(submitted ? neon.border : neon.claude, lineWidth: 1.5)
+                .stroke(neon.claude, lineWidth: 1.5)
         )
-        .neonGlowBox(neon.glow && !submitted ? neon.glowBox?.tinted(neon.claude) : nil)
+        .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.claude) : nil)
     }
 
     @ViewBuilder

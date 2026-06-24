@@ -1770,6 +1770,31 @@ private fun PendingInputCard(
         onAnswer(joined)
     }
 
+    if (submitted) {
+        // Compact pill chip once answered — collapses the full card.
+        val chipShape = RoundedCornerShape(50)
+        Row(
+            modifier = Modifier
+                .background(neon.green.copy(alpha = 0.10f), chipShape)
+                .border(1.dp, neon.green.copy(alpha = 0.30f), chipShape)
+                .padding(horizontal = 11.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Icon(Icons.Filled.CheckCircle, null, tint = neon.green, modifier = Modifier.size(12.dp))
+            Text(
+                sentAnswer ?: "Answered",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Medium,
+                color = neon.green,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        return
+    }
+
     val shape = RoundedCornerShape(neon.radiusDp.dp)
     Column(
         modifier = Modifier
@@ -1816,19 +1841,16 @@ private fun PendingInputCard(
                         text = option,
                         index = oIdx,
                         selected = selected,
-                        dimmed = submitted && !selected,
-                        enabled = !submitted,
+                        dimmed = false,
+                        enabled = true,
                         neon = neon,
                         onClick = {
                             if (question.multiSelect) {
-                                // Checkbox semantics: toggle membership; Send delivers.
                                 val cur = multiSelections[qIdx] ?: emptySet()
                                 multiSelections[qIdx] =
                                     if (option in cur) cur - option else cur + option
                             } else {
                                 selections[qIdx] = option
-                                // A lone single-select question sends on tap
-                                // (tap == answer); anything needing Send waits.
                                 if (!needsSend) submit(listOf(option))
                             }
                         },
@@ -1836,8 +1858,7 @@ private fun PendingInputCard(
                 }
             }
         }
-        if (needsSend && !submitted) {
-            // Only questions that actually offer options need an answer.
+        if (needsSend) {
             val answerable = questions.withIndex().filter { it.value.options.isNotEmpty() }
             val answers = answerable.mapNotNull { answerFor(it.index, it.value) }
             val allAnswered = answers.size == answerable.size
@@ -1846,26 +1867,6 @@ private fun PendingInputCard(
                 neon = neon,
                 onClick = { if (allAnswered) submit(answers) },
             )
-        }
-        if (submitted) {
-            // A tap had no visible "delivered" affordance, so a sent answer
-            // read as nothing happening and the user tapped again. Echo the
-            // chosen answer next to a "Sent" check. Mirror of iOS.
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-            ) {
-                Icon(Icons.Filled.CheckCircle, null, tint = neon.green, modifier = Modifier.size(14.dp))
-                Text(
-                    sentAnswer?.let { "Sent · $it" } ?: "Sent",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontFamily = neon.mono,
-                    fontWeight = FontWeight.SemiBold,
-                    color = neon.green,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
         }
     }
 }
