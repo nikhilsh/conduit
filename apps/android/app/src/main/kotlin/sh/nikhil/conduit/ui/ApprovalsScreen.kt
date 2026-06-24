@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.ApprovalResolvePhase
 import sh.nikhil.conduit.SessionNaming
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.firstUserMessageOf
 import sh.nikhil.conduit.isAwaitingInput
 import uniffi.conduit_core.ConversationItem
@@ -196,6 +197,12 @@ fun ApprovalsScreen(
                             onDeny = { store.resolveApprovalInApp(item.id, "deny") },
                             onToggleAuto = { enabled -> store.setAutoApprove(item.id, enabled) },
                             onOpenSession = onOpenSession,
+                            onAnswerPendingAsk = { answer ->
+                                Telemetry.breadcrumb("approvals", "pending-ask option tapped",
+                                    mapOf("session" to item.id, "option" to answer))
+                                store.sendChat(item.id, answer)
+                                store.resolvePendingInput(item.id)
+                            },
                         )
                     }
                 }
@@ -243,6 +250,7 @@ private fun ApprovalCard(
     onDeny: () -> Unit,
     onToggleAuto: (Boolean) -> Unit,
     onOpenSession: (String) -> Unit,
+    onAnswerPendingAsk: (String) -> Unit = {},
 ) {
     val tint = neonAgentColor(item.agent, neon)
     val resolving = phase == ApprovalResolvePhase.Resolving
@@ -304,7 +312,7 @@ private fun ApprovalCard(
         // "wants to <ask>" + the exact command / prompt in a code tile.
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                "wants to ${intentPhrase(item.risk)}",
+                "wants to ${if (item.pendingOptions.isEmpty) intentPhrase(item.risk) else "ask you something"}",
                 fontFamily = neon.sans,
                 fontSize = 12.5.sp,
                 color = neon.textDim,
@@ -328,23 +336,69 @@ private fun ApprovalCard(
         }
 
 
-        // Actions — Approve / Deny resolve over HTTP (POST /api/session/approval);
-        // the trailing bubble opens chat. Disabled while a resolve is in flight.
-        Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
-            ApprovalActionButton("Approve", Icons.Default.Check, neon.green, filled = true, neon = neon, enabled = !resolving, modifier = Modifier.weight(1f)) {
-                onApprove()
+        // Actions: for AskUserQuestion items show tappable option buttons;
+        // for command-approval items show the standard Approve / Deny row.
+        if (item.pendingOptions.isEmpty) {
+            // Command-approval: Approve / Deny resolve over HTTP.
+            Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
+                ApprovalActionButton("Approve", Icons.Default.Check, neon.green, filled = true, neon = neon, enabled = !resolving, modifier = Modifier.weight(1f)) {
+                    onApprove()
+                }
+                ApprovalActionButton("Deny", Icons.Default.Close, neon.textDim, filled = false, neon = neon, enabled = !resolving, modifier = Modifier.weight(1f)) {
+                    onDeny()
+                }
+                Box(
+                    modifier = Modifier
+                        .size(width = 44.dp, height = 38.dp)
+                        .neonCardSurface(neon = neon, shape = RoundedCornerShape(11.dp), fill = neon.surface, borderColor = neon.border)
+                        .clickable { onOpenSession(item.id) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Chat, "Open chat", tint = neon.accent, modifier = Modifier.size(16.dp))
+                }
             }
-            ApprovalActionButton("Deny", Icons.Default.Close, neon.textDim, filled = false, neon = neon, enabled = !resolving, modifier = Modifier.weight(1f)) {
-                onDeny()
-            }
-            Box(
-                modifier = Modifier
-                    .size(width = 44.dp, height = 38.dp)
-                    .neonCardSurface(neon = neon, shape = RoundedCornerShape(11.dp), fill = neon.surface, borderColor = neon.border)
-                    .clickable { onOpenSession(item.id) },
-                contentAlignment = Alignment.Center,
+        } else {
+            // AskUserQuestion: tappable option buttons + chat bubble.
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
             ) {
-                Icon(Icons.AutoMirrored.Filled.Chat, "Open chat", tint = neon.accent, modifier = Modifier.size(16.dp))
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    item.pendingOptions.forEach { option ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .background(neon.accent, RoundedCornerShape(11.dp))
+                                .clickable(enabled = !resolving) { onAnswerPendingAsk(option) },
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            Text(
+                                option,
+                                fontFamily = neon.sans,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                color = neon.accentText,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 14.dp),
+                            )
+                        }
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .size(width = 44.dp, height = 38.dp)
+                        .neonCardSurface(neon = neon, shape = RoundedCornerShape(11.dp), fill = neon.surface, borderColor = neon.border)
+                        .clickable { onOpenSession(item.id) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Chat, "Open chat", tint = neon.accent, modifier = Modifier.size(16.dp))
+                }
             }
         }
 
@@ -506,6 +560,12 @@ data class ApprovalItem(
     val branch: String?,
     val prompt: String,
     val risk: ApprovalRisk,
+    /**
+     * Non-empty for AskUserQuestion items (content contains the
+     * [[conduit:needs-input]] sentinel). Each entry is a tappable answer
+     * option. Empty for command-approval items.
+     */
+    val pendingOptions: List<String> = emptyList(),
 )
 
 /** A per-session candidate fed into [approvalQueue] (carries the raw log). */
@@ -528,13 +588,23 @@ fun approvalQueue(candidates: List<ApprovalCandidate>): List<ApprovalItem> =
     candidates.mapNotNull { c ->
         if (!isAwaitingInput(c.conversation)) return@mapNotNull null
         val last = c.conversation?.lastOrNull()
+        val content = last?.content ?: ""
+        // Detect AskUserQuestion items via the broker sentinel.
+        // These must answer via sendChat, not the approval endpoint.
+        val isPendingAsk = content.contains(PendingQuestions.PENDING_INPUT_SENTINEL)
+        val pendingOptions = if (isPendingAsk) {
+            PendingQuestions.parse(content).flatMap { it.options }
+        } else {
+            emptyList()
+        }
         ApprovalItem(
             id = c.id,
             title = c.title,
             agent = c.agent,
             branch = c.branch,
-            prompt = approvalPrompt(last?.command, last?.content ?: ""),
-            risk = classifyApprovalRisk(last?.command, last?.content ?: ""),
+            prompt = approvalPrompt(last?.command, content),
+            risk = classifyApprovalRisk(last?.command, content),
+            pendingOptions = pendingOptions,
         )
     }
 

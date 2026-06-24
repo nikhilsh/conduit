@@ -67,6 +67,10 @@ extension ConduitUI {
         /// item's `command` when present, else its `content`).
         var prompt: String
         var risk: ApprovalRisk
+        /// Non-empty for AskUserQuestion items (content contains the
+        /// [[conduit:needs-input]] sentinel). Each entry is a tappable
+        /// answer option. Empty for command-approval items.
+        var pendingOptions: [String]
     }
 
     /// Pure helpers for the Approvals queue + risk classification. Lives off
@@ -97,13 +101,24 @@ extension ConduitUI {
                     lastItemKind: c.lastItemKind
                 ) else { return nil }
                 let prompt = promptText(command: c.command, content: c.content)
+                // Detect AskUserQuestion items via the broker sentinel.
+                // These must answer via sendChat, not the approval endpoint.
+                let isPendingAsk = c.content.contains(ChatViewModel.pendingInputSentinel)
+                let pendingOptions: [String]
+                if isPendingAsk {
+                    let questions = ChatViewModel.parsePendingQuestions(c.content)
+                    pendingOptions = questions.flatMap { $0.options }
+                } else {
+                    pendingOptions = []
+                }
                 return ApprovalItem(
                     id: c.id,
                     title: c.title,
                     agent: c.agent,
                     branch: c.branch,
                     prompt: prompt,
-                    risk: classifyRisk(command: c.command, content: c.content)
+                    risk: classifyRisk(command: c.command, content: c.content),
+                    pendingOptions: pendingOptions
                 )
             }
         }
@@ -381,7 +396,7 @@ extension ConduitUI {
 
                 // "wants to <ask>" + the exact command/prompt in a code tile.
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("wants to \(intentPhrase(item.risk))")
+                    Text("wants to \(item.pendingOptions.isEmpty ? intentPhrase(item.risk) : "ask you something")")
                         .font(neon.sans(12.5))
                         .foregroundStyle(neon.textDim)
                     Text(item.prompt)
@@ -452,45 +467,106 @@ extension ConduitUI {
             .neonCardSurface(neon, fill: neon.surface, cornerRadius: neon.radius - 4)
         }
 
+        @ViewBuilder
         private func actionRow(item: ConduitUI.ApprovalItem, tint: Color) -> some View {
-            HStack(spacing: 9) {
-                actionButton(
-                    label: "Approve",
-                    systemImage: "checkmark",
-                    tint: neon.green,
-                    filled: true
-                ) {
-                    Telemetry.breadcrumb("approvals", "in-app approve tapped",
-                        data: ["session": item.id, "risk": item.risk.label])
-                    resolve(sessionID: item.id, decision: "approve", autoApproved: false)
+            if item.pendingOptions.isEmpty {
+                // Command-approval: standard Approve / Deny row.
+                HStack(spacing: 9) {
+                    actionButton(
+                        label: "Approve",
+                        systemImage: "checkmark",
+                        tint: neon.green,
+                        filled: true
+                    ) {
+                        Telemetry.breadcrumb("approvals", "in-app approve tapped",
+                            data: ["session": item.id, "risk": item.risk.label])
+                        resolve(sessionID: item.id, decision: "approve", autoApproved: false)
+                    }
+                    actionButton(
+                        label: "Deny",
+                        systemImage: "xmark",
+                        tint: neon.textDim,
+                        filled: false
+                    ) {
+                        Telemetry.breadcrumb("approvals", "in-app deny tapped",
+                            data: ["session": item.id, "risk": item.risk.label])
+                        resolve(sessionID: item.id, decision: "deny", autoApproved: false)
+                    }
+                    Button {
+                        onOpenSession(item.id)
+                    } label: {
+                        Image(systemName: "bubble.left")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(neon.accent)
+                            .frame(width: 44, height: 38)
+                            .neonCardSurface(
+                                neon,
+                                fill: neon.surface,
+                                cornerRadius: 11,
+                                border: neon.border
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open chat")
                 }
-                actionButton(
-                    label: "Deny",
-                    systemImage: "xmark",
-                    tint: neon.textDim,
-                    filled: false
-                ) {
-                    Telemetry.breadcrumb("approvals", "in-app deny tapped",
-                        data: ["session": item.id, "risk": item.risk.label])
-                    resolve(sessionID: item.id, decision: "deny", autoApproved: false)
+            } else {
+                // AskUserQuestion: tappable option buttons + chat bubble.
+                HStack(alignment: .top, spacing: 9) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(item.pendingOptions, id: \.self) { option in
+                            Button {
+                                Telemetry.breadcrumb("approvals", "pending-ask option tapped",
+                                    data: ["session": item.id, "option": option])
+                                answerPendingAsk(sessionID: item.id, answer: option)
+                            } label: {
+                                Text(option)
+                                    .font(neon.sans(13).weight(.semibold))
+                                    .foregroundStyle(neon.accentText)
+                                    .lineLimit(2)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 11)
+                                    .padding(.horizontal, 14)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                            .fill(neon.accent)
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                                    .strokeBorder(neon.accent.opacity(0), lineWidth: 1)
+                                            )
+                                    )
+                                    .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.accent) : nil)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    Button {
+                        onOpenSession(item.id)
+                    } label: {
+                        Image(systemName: "bubble.left")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(neon.accent)
+                            .frame(width: 44, height: 38)
+                            .neonCardSurface(
+                                neon,
+                                fill: neon.surface,
+                                cornerRadius: 11,
+                                border: neon.border
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open chat")
                 }
-                Button {
-                    onOpenSession(item.id)
-                } label: {
-                    Image(systemName: "bubble.left")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(neon.accent)
-                        .frame(width: 44, height: 38)
-                        .neonCardSurface(
-                            neon,
-                            fill: neon.surface,
-                            cornerRadius: 11,
-                            border: neon.border
-                        )
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open chat")
             }
+        }
+
+        /// Answer an AskUserQuestion by sending the chosen option as a chat
+        /// message. The broker routes any chat message to the pending ask, so
+        /// no approval endpoint is needed.
+        private func answerPendingAsk(sessionID: String, answer: String) {
+            cardState[sessionID] = .resolving
+            store.sendChat(sessionID: sessionID, message: answer)
+            store.resolvePendingInput(sessionID: sessionID)
+            cardState[sessionID] = .resolved("Sent: \(answer)")
         }
 
         // MARK: - HTTP resolve
