@@ -28,6 +28,7 @@ enum ConduitPushCategory {
     static let approval = "approval"
     static let approveAction = "CONDUIT_APPROVAL_APPROVE"
     static let denyAction = "CONDUIT_APPROVAL_DENY"
+    static let askAnswerPrefix = "ask_opt_"
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -156,6 +157,22 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             resolveApproval(sessionID: sessionID, decision: "deny",
                 userInfo: userInfo, completionHandler: completionHandler)
 
+        case let id where id.hasPrefix(ConduitPushCategory.askAnswerPrefix):
+            let indexStr = id.dropFirst(ConduitPushCategory.askAnswerPrefix.count)
+            if let idx = Int(indexStr),
+               let optionsAny = userInfo["options"] as? [Any],
+               idx < optionsAny.count,
+               let answer = optionsAny[idx] as? String {
+                Telemetry.breadcrumb("push", "ask answer action",
+                    data: ["session": sessionID, "idx": "\(idx)"])
+                resolveAskAnswer(sessionID: sessionID, answer: answer,
+                    userInfo: userInfo, completionHandler: completionHandler)
+            } else {
+                Telemetry.breadcrumb("push", "ask answer: could not resolve option",
+                    data: ["session": sessionID, "action": id])
+                completionHandler()
+            }
+
         default:
             // Plain tap -- route to the session chat. Do NOT open the app
             // from approve/deny actions; only plain taps navigate.
@@ -273,6 +290,120 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     message: "push approval resolve network error",
                     tags: ["surface": "ios", "phase": "push_approval"],
                     extras: ["session": sessionID, "decision": decision,
+                             "detail": error.localizedDescription]
+                )
+            }
+
+            completionHandler()
+        }
+    }
+
+    // MARK: - HTTP ask-answer resolve
+
+    /// POST the selected answer to the broker's HTTP endpoint so the agent
+    /// unblocks even when the app is not WS-connected in the background.
+    ///
+    /// Endpoint: `POST <brokerBaseURL>/api/session/answer`
+    /// Body: `{"session_id":"<id>","answer":"<text>"}`
+    /// Auth: `Bearer <token>` -- same derivation PushNotificationManager uses.
+    ///
+    /// Box selection: if the push userInfo carries a `box` key that matches a
+    /// saved server's endpoint host, use that server's endpoint+token;
+    /// otherwise fall back to the active endpoint. completionHandler is called
+    /// after the task finishes (or fails) so the process stays alive.
+    private func resolveAskAnswer(
+        sessionID: String,
+        answer: String,
+        userInfo: [AnyHashable: Any],
+        completionHandler: @escaping () -> Void
+    ) {
+        Task {
+            // Capture store state on MainActor before going off-actor.
+            let (endpoint, savedServers): (StoredEndpoint, [SavedServer]) = await MainActor.run {
+                let store = self.sessionStore
+                return (store?.endpoint ?? .empty, store?.savedServers ?? [])
+            }
+
+            // If the push carries a `box` key, try to match it to a saved
+            // server so the right broker receives the answer.
+            let resolvedEndpoint: StoredEndpoint = {
+                if let boxHint = userInfo["box"] as? String, !boxHint.isEmpty {
+                    if let match = savedServers.first(where: {
+                        $0.endpoint.displayHost == boxHint
+                    }) {
+                        return match.endpoint
+                    }
+                }
+                return endpoint
+            }()
+
+            guard resolvedEndpoint.isComplete,
+                  let base = resolvedEndpoint.httpBaseURL else {
+                Telemetry.breadcrumb("push", "ask answer resolve: no valid endpoint",
+                    data: ["session": sessionID, "answer": answer])
+                completionHandler()
+                return
+            }
+
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/session/answer"
+            guard let url = components?.url else {
+                Telemetry.breadcrumb("push", "ask answer resolve: bad URL",
+                    data: ["session": sessionID])
+                completionHandler()
+                return
+            }
+
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 20
+            req.setValue("Bearer \(resolvedEndpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            struct AnswerBody: Encodable {
+                let session_id: String
+                let answer: String
+            }
+            guard let body = try? JSONEncoder().encode(
+                AnswerBody(session_id: sessionID, answer: answer)
+            ) else {
+                completionHandler()
+                return
+            }
+            req.httpBody = body
+
+            Telemetry.breadcrumb("push", "ask answer POST start",
+                data: ["session": sessionID, "answer": answer,
+                       "host": resolvedEndpoint.displayHost])
+
+            do {
+                let (_, resp) = try await URLSession.shared.data(for: req)
+                if let http = resp as? HTTPURLResponse {
+                    switch http.statusCode {
+                    case 200..<300:
+                        Telemetry.breadcrumb("push", "ask answer: resolved",
+                            data: ["session": sessionID, "answer": answer,
+                                   "status": "\(http.statusCode)"])
+                    case 404:
+                        // Nothing pending -- agent may have already moved on.
+                        Telemetry.breadcrumb("push", "ask answer: 404 nothing pending",
+                            data: ["session": sessionID])
+                    default:
+                        Telemetry.capture(
+                            error: NSError(domain: "ios.push_ask_answer", code: 1,
+                                userInfo: [NSLocalizedDescriptionKey: "push ask answer resolve failed"]),
+                            message: "push ask answer resolve failed",
+                            tags: ["surface": "ios", "phase": "push_ask_answer"],
+                            extras: ["session": sessionID, "answer": answer,
+                                     "status": "\(http.statusCode)"]
+                        )
+                    }
+                }
+            } catch {
+                Telemetry.capture(
+                    error: error,
+                    message: "push ask answer resolve network error",
+                    tags: ["surface": "ios", "phase": "push_ask_answer"],
+                    extras: ["session": sessionID, "answer": answer,
                              "detail": error.localizedDescription]
                 )
             }
