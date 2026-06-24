@@ -368,18 +368,27 @@ extension ConduitUI {
             let typedFingerprints = Set(
                 conversation.map { "\($0.role.lowercased())|\($0.content)" }
             )
+            // Track keys seen within the chatLog itself to deduplicate
+            // repeated replays of the same resolved entry (each WS reconnect
+            // replays the transcript, appending another copy).
+            var seenChatLogKeys = Set<String>()
             let synthetic: [ConversationItem] = chatLog.enumerated().compactMap { idx, ev in
-                // Strip the pending-input sentinel before fingerprinting so
-                // this raw chatLog item dedupes against the already-stripped
-                // typed card (same role+content key), and before setting the
-                // content so the sentinel never leaks as a bare raw bubble.
+                // Strip only the needs-input sentinel from content (for display),
+                // but use pendingInputStrippedKey (strips BOTH sentinel AND
+                // resolved marker) for the dedup fingerprint. This makes a
+                // resolved chatLog entry ("[[conduit:needs-input]]\n[[conduit:resolved]]{...}\ntext")
+                // match the typed conversationLog item ("text") that core has
+                // already double-stripped, preventing a raw resolved-marker
+                // bubble from appearing on each WS reconnect.
                 let strippedContent = SessionStore.stripPendingSentinel(ev.content)
-                let key = "\(ev.role.lowercased())|\(strippedContent)"
+                let key = "\(ev.role.lowercased())|\(ChatViewModel.pendingInputStrippedKey(ev.content))"
                 if typedFingerprints.contains(key) { return nil }
+                guard seenChatLogKeys.insert(key).inserted else { return nil }
+                let isPendingInput = ev.content.contains(ChatViewModel.pendingInputSentinel)
                 return ConversationItem(
                     id: "chatlog-\(ev.ts)-\(idx)",
                     role: ev.role,
-                    kind: ev.role.lowercased() == "tool" ? "tool" : "message",
+                    kind: ev.role.lowercased() == "tool" ? "tool" : (isPendingInput ? "pending_input" : "message"),
                     status: "done",
                     content: strippedContent,
                     ts: ev.ts,
@@ -389,7 +398,7 @@ extension ConduitUI {
                     exitCode: nil,
                     durationMs: nil,
                     diffSummary: nil,
-                    pendingOptions: [],
+                    pendingOptions: isPendingInput ? ConversationRenderer.extractPendingOptions(from: strippedContent) : [],
                     sourceAgent: nil,
                     targetAgent: nil,
                     taskText: nil,
