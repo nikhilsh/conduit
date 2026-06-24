@@ -31,7 +31,9 @@ extension ConduitUI {
         @State private var copyConfirmed = false
         @State private var showConfirmAlert = false
 
-        private let installOneliner = "curl -fsSL https://conduit.nikhil.sh/install.sh | sh"
+        private var installOneliner: String {
+            "curl -fsSL https://github.com/nikhilsh/conduit/releases/download/v\(BuildInfo.marketingVersion)/install.sh | sh"
+        }
 
         var body: some View {
             HStack(alignment: .top, spacing: 12) {

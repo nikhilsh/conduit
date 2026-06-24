@@ -18,6 +18,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import sh.nikhil.conduit.BuildConfig
 import sh.nikhil.conduit.ReadinessCheckItem
 import sh.nikhil.conduit.ReadinessStatus
 import androidx.compose.material.icons.Icons
@@ -31,7 +32,8 @@ import androidx.compose.material.icons.outlined.Warning
 // WS-H.3: Post-pair readiness checklist
 // ---------------------------------------------------------------------------
 
-private const val INSTALL_ONELINER = "curl -fsSL https://conduit.nikhil.sh/install.sh | sh"
+private fun installOneliner() =
+    "curl -fsSL https://github.com/nikhilsh/conduit/releases/download/${BuildConfig.RELEASE_TAG}/install.sh | sh"
 
 /**
  * Non-blocking banner shown on the home / box list when the broker is
@@ -148,7 +150,7 @@ fun BrokerUpdateBanner(
                             shape = RoundedCornerShape(99.dp),
                             color = neon.accent,
                             modifier = Modifier.clickable {
-                                clipboard.setText(AnnotatedString(INSTALL_ONELINER))
+                                clipboard.setText(AnnotatedString(installOneliner()))
                                 copyConfirmed = true
                                 scope.launch {
                                     kotlinx.coroutines.delay(2_000)
@@ -167,7 +169,7 @@ fun BrokerUpdateBanner(
                         }
                     }
                     Text(
-                        INSTALL_ONELINER,
+                        installOneliner(),
                         fontFamily = neon.mono,
                         fontSize = 10.5.sp,
                         color = neon.textFaint,
