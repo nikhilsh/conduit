@@ -28,7 +28,18 @@ pub fn item_from_chat_event(event: &ChatEvent, idx: usize) -> ConversationItem {
         diff_summary.is_some(),
         tool_name.as_deref(),
     );
-    let status = classify_status(&event.content, exit_code);
+    // Tool items: status comes from exit_code only; the content-text heuristic
+    // misclassifies bash commands that happen to contain "running", "pending",
+    // "failed", etc. as substrings (e.g. `grep "case running"` → "running").
+    let status = if role == "tool" {
+        match exit_code {
+            Some(0) => "done".to_string(),
+            Some(_) => "failed".to_string(),
+            None => "done".to_string(),
+        }
+    } else {
+        classify_status(&event.content, exit_code)
+    };
     // Strip the internal pending-input sentinel from the user-visible
     // content (it's only a classification signal); the apps then never
     // need to know about it.
