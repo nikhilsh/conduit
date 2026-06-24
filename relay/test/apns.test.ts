@@ -181,6 +181,8 @@ describe("sendApns", () => {
     expect(b.aps["content-state"]).toEqual(contentState);
     // No alert key on LA updates (per spec).
     expect(b.aps.alert).toBeUndefined();
+    // dismissal-date is only set on "end"; update events must not carry it.
+    expect(b.aps["dismissal-date"]).toBeUndefined();
   });
 
   it("uses event=end and content_state for liveactivity end event", async () => {
@@ -204,6 +206,10 @@ describe("sendApns", () => {
     const b = body as Record<string, any>;
     expect(b.aps.event).toBe("end");
     expect(b.aps["content-state"].status).toBe("exited");
+    // dismissal-date must be present on "end" so iOS removes the LA from the
+    // lock screen within ~5 min instead of the 4-hour Apple default.
+    expect(typeof b.aps["dismissal-date"]).toBe("number");
+    expect(b.aps["dismissal-date"]).toBeGreaterThan(b.aps.timestamp);
   });
 
   it("falls back to update event when event is absent in LA payload", async () => {

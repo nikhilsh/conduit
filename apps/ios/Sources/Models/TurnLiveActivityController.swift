@@ -318,7 +318,7 @@ public final class TurnLiveActivityController {
     /// that was so long ago" once a few sessions had finished (device
     /// feedback, round 4). 15 min is long enough to glance, short
     /// enough to never describe ancient history.
-    public static let doneLingerInterval: TimeInterval = 15 * 60
+    public static let doneLingerInterval: TimeInterval = 5 * 60
 
     private func endActivity(state: TurnActivityContentState, sessionID: String) {
         #if canImport(ActivityKit)
