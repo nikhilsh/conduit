@@ -54,15 +54,6 @@ object DemoData {
     )
 
     // -------------------------------------------------------------------------
-    // Conversations keyed by session id
-    // -------------------------------------------------------------------------
-
-    val conversationBySession: Map<String, List<ConversationItem>> = mapOf(
-        "demo-session-1" to session1Conversation,
-        "demo-session-2" to session2Conversation,
-    )
-
-    // -------------------------------------------------------------------------
     // Session 1: Build a to-do app
     // -------------------------------------------------------------------------
 
@@ -118,7 +109,7 @@ object DemoData {
             toolName = "bash",
             command = "python3 -c \"open('todo.py','w').write('...')\"",
             exitCode = 0,
-            durationMs = 350,
+            durationMs = 350UL,
             diffSummary = null,
             pendingOptions = emptyList(),
             sourceAgent = null,
@@ -138,7 +129,7 @@ object DemoData {
             toolName = "str_replace_based_edit_tool",
             command = "Write todo.py",
             exitCode = 0,
-            durationMs = 120,
+            durationMs = 120UL,
             diffSummary = null,
             pendingOptions = emptyList(),
             sourceAgent = null,
@@ -218,7 +209,7 @@ object DemoData {
             toolName = "bash",
             command = "pip install colorama",
             exitCode = 0,
-            durationMs = 1200,
+            durationMs = 1200UL,
             diffSummary = null,
             pendingOptions = emptyList(),
             sourceAgent = null,
@@ -238,7 +229,7 @@ object DemoData {
             toolName = "str_replace_based_edit_tool",
             command = "Update todo.py with colorama",
             exitCode = 0,
-            durationMs = 90,
+            durationMs = 90UL,
             diffSummary = null,
             pendingOptions = emptyList(),
             sourceAgent = null,
@@ -325,7 +316,7 @@ object DemoData {
             toolName = "bash",
             command = "grep -r 'expired_at\\|token' src/auth.py",
             exitCode = 0,
-            durationMs = 180,
+            durationMs = 180UL,
             diffSummary = null,
             pendingOptions = emptyList(),
             sourceAgent = null,
@@ -365,7 +356,7 @@ object DemoData {
             toolName = "str_replace_based_edit_tool",
             command = "Fix auth.py:47 >= to >",
             exitCode = 0,
-            durationMs = 80,
+            durationMs = 80UL,
             diffSummary = null,
             pendingOptions = emptyList(),
             sourceAgent = null,
@@ -394,5 +385,16 @@ object DemoData {
             resultSummary = null,
             planSteps = emptyList(),
         ),
+    )
+
+    // -------------------------------------------------------------------------
+    // Conversations keyed by session id (declared after the lists to respect
+    // Kotlin object-property initialization order — referencing them above
+    // would read uninitialized nulls and cause a compile error).
+    // -------------------------------------------------------------------------
+
+    val conversationBySession: Map<String, List<ConversationItem>> = mapOf(
+        "demo-session-1" to session1Conversation,
+        "demo-session-2" to session2Conversation,
     )
 }

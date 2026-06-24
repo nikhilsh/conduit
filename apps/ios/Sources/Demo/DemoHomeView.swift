@@ -188,7 +188,7 @@ private struct DemoSessionList: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 6, leading: 14, bottom: 2, trailing: 14))
-                ForEach(DemoData.sessions) { session in
+                ForEach(DemoData.sessions, id: \.id) { session in
                     DemoSessionRow(session: session)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -294,7 +294,7 @@ struct DemoChatView: View {
         VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(items) { item in
+                    ForEach(items, id: \.id) { item in
                         DemoChatRow(item: item)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 6)
