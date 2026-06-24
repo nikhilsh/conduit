@@ -5010,20 +5010,39 @@ final class SessionStore {
         live: [ConversationItem],
         pending: [ConversationItem]
     ) -> [ConversationItem] {
-        let liveFingerprints = Set(live.map { "\($0.role)|\($0.content)" })
-        let pastNotInLive = past.filter {
-            !liveFingerprints.contains("\($0.role)|\($0.content)")
+        // Use the stripped key (drops [[conduit:needs-input]] and
+        // [[conduit:resolved]] lines) so the resolved and unanswered versions
+        // of the same AskUserQuestion card are treated as one logical item.
+        // For normal messages the stripped key equals the raw content.
+        let resolvedMarker = ConduitUI.ChatViewModel.pendingResolvedMarker
+        func fp(_ item: ConversationItem) -> String {
+            "\(item.role)|\(ConduitUI.ChatViewModel.pendingInputStrippedKey(item.content))"
         }
-        let combined = (pastNotInLive + live + pending).sortedByConversationTs { $0.ts }
-        // Defensive dedup: the broker replays a pending AskUserQuestion on
-        // reconnect with a fresh timestamp, so apply_chat stores it as a second
-        // Rust conversation item (same role+content, different ts → not deduped
-        // by the (role,content,ts) check). Both items appear in `live`, and since
-        // liveFingerprints is a Set one entry covers both, so pastNotInLive is
-        // empty — but both live copies survive into the combined output and render
-        // as duplicate bubbles. Keep only the first occurrence by role|content.
+        // Keys where past (HTTP transcript) carries the resolved marker but
+        // the matching live item doesn't. On a fresh app restart
+        // resolvedPendingInputIDs is empty, so the transcript version must win
+        // over the unanswered live replay — it's the only signal that the card
+        // was already answered.
+        let liveByKey = Dictionary(live.map { (fp($0), $0) }, uniquingKeysWith: { f, _ in f })
+        let resolvedPastKeys = Set(past.compactMap { item -> String? in
+            let key = fp(item)
+            guard item.content.contains(resolvedMarker),
+                  !(liveByKey[key]?.content.contains(resolvedMarker) ?? false)
+            else { return nil }
+            return key
+        })
+        let liveFingerprints = Set(live.map { fp($0) })
+        let pastNotInLive = past.filter { item in
+            let key = fp(item)
+            return !liveFingerprints.contains(key) || resolvedPastKeys.contains(key)
+        }
+        // Drop live items superseded by the resolved past version.
+        let liveFiltered = live.filter { !resolvedPastKeys.contains(fp($0)) }
+        let combined = (pastNotInLive + liveFiltered + pending).sortedByConversationTs { $0.ts }
+        // Final dedup using stripped key: guards against replay with a fresh ts
+        // or other duplicate-introducing paths (keeps first occurrence).
         var seen = Set<String>()
-        return combined.filter { seen.insert("\($0.role)|\($0.content)").inserted }
+        return combined.filter { seen.insert(fp($0)).inserted }
     }
 
     /// Directly splice `hydratedChat[sessionID]` into `conversationLog`

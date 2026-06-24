@@ -473,6 +473,29 @@ struct MergeConversationTests {
         #expect(merged.count == 1)
         #expect(merged.first?.id == "orig")
     }
+
+    @Test func resolvedPastWinsOverUnansweredLive() {
+        // After close+reopen while a session is active: the live replay carries
+        // the unanswered pending_input (broker no longer re-broadcasts the
+        // resolved state). The HTTP transcript has the resolved version with
+        // [[conduit:resolved]]. resolvedPendingInputIDs is empty on a fresh app
+        // start, so the transcript version must win — it's the only source of
+        // truth that the card was answered.
+        let q = "Pick one\n1. A\n2. B"
+        let marker = "[[conduit:resolved]]"
+        let unansweredLive = item("live-1", "assistant", q, "2026-06-24T10:00:00Z")
+        let resolvedPast = item(
+            "saved-1", "assistant",
+            "\(marker){\"answered\":true,\"answer\":\"A\"}\n\(q)",
+            "2026-06-24T10:00:00Z"
+        )
+        let merged = SessionStore.mergeConversation(
+            past: [resolvedPast], live: [unansweredLive], pending: []
+        )
+        #expect(merged.count == 1)
+        #expect(merged.first?.content.contains(marker) == true)
+        #expect(merged.first?.id == "saved-1")
+    }
 }
 
 @Suite("SessionStore.stripPendingSentinel — HTTP replay matches the live path")
