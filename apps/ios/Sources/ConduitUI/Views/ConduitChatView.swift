@@ -2645,21 +2645,12 @@ extension NeonTheme {
 
 // MARK: - Tool bundle card (round-3 §1)
 
-// MARK: - §10/§10b pure logic helpers (testable)
+// MARK: - §10 pure logic helpers (testable)
 
 /// Pure-data helpers extracted so unit tests can exercise the
-/// collapse-threshold, failed-row surfacing, and ticker-fraction logic
-/// without a SwiftUI host. Internal (not private) so `@testable import`
-/// reaches them from ConduitTests.
+/// failed-row surfacing and ticker-fraction logic without a SwiftUI host.
+/// Internal (not private) so `@testable import` reaches them from ConduitTests.
 enum CommandRunBlockLogic {
-
-    /// Number of commands at or above which §10b collapse-at-scale activates.
-    static let collapseThreshold = 10
-
-    /// Whether a run should collapse (true = §10b, false = §10 settled block).
-    static func shouldCollapse(count: Int) -> Bool {
-        count >= collapseThreshold
-    }
 
     /// The failed items from a run (status == fail or exitCode != 0).
     static func failedItems(from items: [ConversationItem]) -> [ConversationItem] {
@@ -3015,93 +3006,22 @@ private struct ConduitToolBundleCard: View {
             .overlay(Capsule().stroke(color.opacity(0.35), lineWidth: 1))
     }
 
-    // MARK: - §10 / §10b Mono block (commandRunBlock flag)
+    // MARK: - §10 Mono block (commandRunBlock flag)
 
-    /// §10 / §10b entry point.
+    /// §10 entry point.
     /// While running -> Option-C inline ticker.
-    /// >= threshold -> §10b collapse-at-scale layout.
-    /// < threshold  -> §10 flat settled block.
+    /// Settled -> collapse block (always starts collapsed).
     @ViewBuilder
     private var monoBlockBody: some View {
         if anyRunning {
             MonoRunningTicker(items: items)
-        } else if CommandRunBlockLogic.shouldCollapse(count: items.count) {
-            MonoCollapseBlock(items: items, displayItems: displayItems, failCount: failCount)
         } else {
-            MonoSettledBlock(items: items, displayItems: displayItems, failCount: failCount)
+            MonoCollapseBlock(items: items, displayItems: displayItems, failCount: failCount)
         }
     }
 }
 
 // MARK: - §10 Mono block views (commandRunBlock flag)
-
-// ---------------------------------------------------------------------------
-// MonoSettledBlock — §10 Option B, runs of < 10 commands.
-// Flat codeBg surface, hairline border, header + per-row grid.
-// ---------------------------------------------------------------------------
-private struct MonoSettledBlock: View {
-    let items: [ConversationItem]
-    let displayItems: [ConversationItem]
-    let failCount: Int
-
-    @Environment(\.neonTheme) private var neon
-
-    private var allPassed: Bool { failCount == 0 }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            monoHeader
-            Divider()
-                .background(neon.border)
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(displayItems, id: \.id) { item in
-                    MonoCommandRow(item: item)
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius, style: .continuous)
-                .fill(neon.codeBg)
-                .overlay(
-                    RoundedRectangle(cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius, style: .continuous)
-                        .stroke(neon.border, lineWidth: 0.5)
-                )
-        )
-        .onAppear {
-            Telemetry.breadcrumb("chat", "mono-block render", data: [
-                "count": "\(items.count)",
-                "failCount": "\(failCount)",
-                "collapsed": "false",
-            ])
-        }
-    }
-
-    private var monoHeader: some View {
-        HStack(spacing: 0) {
-            Text("RUN \(items.count)")
-                .font(.system(size: 10, weight: .medium).monospaced())
-                .foregroundStyle(neon.textFaint)
-            Text("  \(items.count == 1 ? "command" : "commands")")
-                .font(.system(size: 10).monospaced())
-                .foregroundStyle(neon.textFaint)
-            Spacer(minLength: 8)
-            if failCount > 0 {
-                Text("\(failCount) failed")
-                    .font(.system(size: 10, weight: .medium).monospaced())
-                    .foregroundStyle(neon.red)
-            } else {
-                Text("\u{2713}")
-                    .font(.system(size: 10).monospaced())
-                    .foregroundStyle(neon.textFaint)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // MonoCommandRow — one row in the settled or expanded ledger.
@@ -3198,7 +3118,7 @@ private struct MonoCommandRow: View {
 }
 
 // ---------------------------------------------------------------------------
-// MonoCollapseBlock — §10b, runs of >= 10 commands.
+// MonoCollapseBlock — §10 collapsible block, always starts collapsed.
 // Collapsed: one-line summary. On failure: failed rows inline + footer.
 // Expand: height-capped scrollable ledger with All/Failed filter.
 // ---------------------------------------------------------------------------

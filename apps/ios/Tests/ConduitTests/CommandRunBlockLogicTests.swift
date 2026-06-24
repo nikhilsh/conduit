@@ -9,36 +9,6 @@ import Foundation
 @Suite("CommandRunBlockLogic")
 struct CommandRunBlockLogicTests {
 
-    // MARK: - Collapse threshold
-
-    @Test func collapseThresholdIs10() {
-        #expect(CommandRunBlockLogic.collapseThreshold == 10)
-    }
-
-    @Test func runBeforeThresholdDoesNotCollapse() {
-        // Runs of 1 through 9 use the full §10 settled block.
-        for count in 1..<10 {
-            #expect(
-                CommandRunBlockLogic.shouldCollapse(count: count) == false,
-                "count \(count) should NOT collapse"
-            )
-        }
-    }
-
-    @Test func runAtThresholdCollapses() {
-        // Exactly 10 crosses into §10b.
-        #expect(CommandRunBlockLogic.shouldCollapse(count: 10))
-    }
-
-    @Test func runAboveThresholdCollapses() {
-        #expect(CommandRunBlockLogic.shouldCollapse(count: 11))
-        #expect(CommandRunBlockLogic.shouldCollapse(count: 73))
-    }
-
-    @Test func zeroCountDoesNotCollapse() {
-        #expect(CommandRunBlockLogic.shouldCollapse(count: 0) == false)
-    }
-
     // MARK: - Failed-row surfacing
 
     @Test func noFailedItemsReturnsEmpty() {

@@ -7,7 +7,7 @@ import org.junit.Test
 import uniffi.conduit_core.ConversationItem
 
 /**
- * Pure-logic unit tests for the §10 / §10b command-run Mono block helpers
+ * Pure-logic unit tests for the §10 command-run Mono block helpers
  * and the groupChatUnits monoBlock parameter. Runs under plain JUnit --
  * all tested functions are top-level internal with no Compose dependency.
  */
@@ -43,27 +43,6 @@ class CommandRunBlockTest {
         resultSummary = null,
         planSteps = emptyList(),
     )
-
-    // ── COMMAND_RUN_COLLAPSE_THRESHOLD ───────────────────────────────────
-
-    @Test fun threshold_is10() {
-        assertEquals(10, COMMAND_RUN_COLLAPSE_THRESHOLD)
-    }
-
-    // ── shouldCollapseCluster ────────────────────────────────────────────
-
-    @Test fun shouldCollapse_below() {
-        assertFalse(shouldCollapseCluster(1))
-        assertFalse(shouldCollapseCluster(9))
-    }
-
-    @Test fun shouldCollapse_atThreshold() {
-        assertTrue(shouldCollapseCluster(10))
-    }
-
-    @Test fun shouldCollapse_above() {
-        assertTrue(shouldCollapseCluster(73))
-    }
 
     // ── clusterFailCount ─────────────────────────────────────────────────
 

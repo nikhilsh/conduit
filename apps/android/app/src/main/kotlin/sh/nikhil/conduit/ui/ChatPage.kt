@@ -2865,13 +2865,7 @@ private fun clusterRowLabel(ev: ConversationItem): String {
     return ev.kind.replaceFirstChar { it.uppercase() }
 }
 
-// ── §10 / §10b Mono block helpers (pure, internal, testable) ────────────────
-
-/**
- * Collapse threshold for §10b. Runs of [COMMAND_RUN_COLLAPSE_THRESHOLD] or
- * more commands collapse to a single header line with [AnimatedVisibility].
- */
-internal const val COMMAND_RUN_COLLAPSE_THRESHOLD = 10
+// ── §10 Mono block helpers (pure, internal, testable) ───────────────────────
 
 /**
  * Returns true when the cluster is still running (any item has status
@@ -2912,11 +2906,6 @@ internal fun clusterTickerFraction(items: List<ConversationItem>): Float {
     }
     return (done.toFloat() / items.size.toFloat()).coerceIn(0f, 1f)
 }
-
-/**
- * §10b should-collapse decision: true when the item count meets the threshold.
- */
-internal fun shouldCollapseCluster(count: Int): Boolean = count >= COMMAND_RUN_COLLAPSE_THRESHOLD
 
 // ── §10b Running ticker (Option C) ──────────────────────────────────────────
 
@@ -3107,86 +3096,7 @@ private fun MonoCommandRow(ev: ConversationItem, neon: NeonTheme) {
     }
 }
 
-/**
- * §10 Mono block: flat codeBg Surface, hairline border, neon.radiusDp —
- * for settled runs of < COMMAND_RUN_COLLAPSE_THRESHOLD items. Shows a faint
- * header row (RUN N / commands; aggregate status) followed by per-command rows
- * in a fixed-grid layout.
- */
-@Composable
-private fun MonoCommandBlockSettled(items: List<ConversationItem>) {
-    val neon = LocalNeonTheme.current
-    val n = items.size
-    val failCount = remember(items) { clusterFailCount(items) }
-    val anyFailed = failCount > 0
-
-    Telemetry.breadcrumb(
-        "chat",
-        "command_run_block_render",
-        mapOf(
-            "count" to n.toString(),
-            "failCount" to failCount.toString(),
-            "collapsed" to "false",
-        ),
-    )
-
-    val shape = RoundedCornerShape(neon.radiusDp.dp)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(neon.codeBg)
-            .border(0.5.dp, neon.border, shape),
-    ) {
-        // Header row: RUN N / commands (left) · aggregate status (right).
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "RUN $n",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = neon.mono,
-                fontWeight = FontWeight.Bold,
-                color = neon.textFaint,
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                if (n == 1) "command" else "commands",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = neon.mono,
-                color = neon.textFaint,
-            )
-            Spacer(Modifier.weight(1f))
-            if (anyFailed) {
-                Text(
-                    "$failCount failed",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = neon.mono,
-                    fontWeight = FontWeight.Bold,
-                    color = neon.red,
-                )
-            } else {
-                Icon(
-                    Icons.Filled.Check,
-                    contentDescription = null,
-                    tint = neon.textFaint,
-                    modifier = Modifier.size(12.dp),
-                )
-            }
-        }
-        HorizontalDivider(color = neon.border, thickness = 0.5.dp)
-        // Per-command rows.
-        items.forEach { ev ->
-            MonoCommandRow(ev, neon)
-            HorizontalDivider(color = neon.border, thickness = 0.5.dp)
-        }
-    }
-}
-
-// ── §10b Collapse-at-scale (>= threshold) ───────────────────────────────────
+// ── §10b Collapsible block ───────────────────────────────────────────────────
 
 /**
  * §10b expanded ledger: a height-capped, internally-scrolling LazyColumn of
@@ -3294,9 +3204,9 @@ private fun MonoCommandLedger(items: List<ConversationItem>, neon: NeonTheme) {
 }
 
 /**
- * §10b collapse-at-scale block for settled runs of >= COMMAND_RUN_COLLAPSE_THRESHOLD.
- * Default: collapsed to one header line. On failure: always surfaces failed
- * rows inline. Expanded: height-capped ledger with All/Failed filter.
+ * §10 collapsible block for settled runs. Default: collapsed to one header
+ * line. On failure: always surfaces failed rows inline. Expanded: height-capped
+ * ledger with All/Failed filter.
  */
 @Composable
 private fun MonoCommandBlockCollapsible(items: List<ConversationItem>) {
@@ -3437,15 +3347,13 @@ private fun MonoCommandBlockCollapsible(items: List<ConversationItem>) {
     }
 }
 
-// ── Top-level §10 / §10b dispatcher ─────────────────────────────────────────
+// ── Top-level §10 dispatcher ─────────────────────────────────────────────────
 
 /**
- * Dispatcher for the §10 / §10b Mono block. Called by [ToolClusterCard] site
- * when the chat.commandRunBlock flag is ON. Routes to:
+ * Dispatcher for the §10 Mono block. Called by [ToolClusterCard] when the
+ * chat.commandRunBlock flag is ON. Routes to:
  *  - [CommandRunTicker] while any command is running (Option C).
- *  - [MonoCommandBlockCollapsible] for settled runs of >= threshold.
- *  - [MonoCommandBlockSettled] for settled runs of < threshold (including lone
- *    single commands per screen 11).
+ *  - [MonoCommandBlockCollapsible] for settled runs (always collapsed by default).
  */
 @Composable
 private fun NeonMonoCommandCluster(items: List<ConversationItem>) {
@@ -3454,11 +3362,7 @@ private fun NeonMonoCommandCluster(items: List<ConversationItem>) {
         CommandRunTicker(items)
         return
     }
-    if (shouldCollapseCluster(items.size)) {
-        MonoCommandBlockCollapsible(items)
-    } else {
-        MonoCommandBlockSettled(items)
-    }
+    MonoCommandBlockCollapsible(items)
 }
 
 /**
