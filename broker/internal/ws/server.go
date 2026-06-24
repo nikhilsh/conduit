@@ -331,6 +331,7 @@ func (s *Server) Handler() http.Handler {
 	// from a push notification action without opening the app (Round-3 fix #9).
 	// Exact match: wins over the `/api/session/` prefix (serveSessionDelete).
 	mux.HandleFunc("/api/session/approval", s.serveSessionApproval)
+	mux.HandleFunc("/api/session/answer", s.serveSessionAnswer)
 	// Found Sessions: discover external Claude/Codex sessions + adopt (resume).
 	// /api/sessions/discovered/transcript must be registered BEFORE
 	// /api/sessions/discovered so ServeMux longest-prefix wins correctly.

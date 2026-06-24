@@ -1352,6 +1352,27 @@ func (s *Session) ResolveApproval(decision string) bool {
 	return false
 }
 
+// AnswerPendingAsk delivers answer to the stashed AskUserQuestion, callable
+// from HTTP without a WS connection (same encodeAskAnswer path as SendChat).
+func (s *Session) AnswerPendingAsk(answer string) bool {
+	s.mu.Lock()
+	ask := s.pendingAsk
+	if ask == nil {
+		s.mu.Unlock()
+		return false
+	}
+	s.pendingAsk = nil
+	s.mu.Unlock()
+	if ask.timer != nil {
+		ask.timer.Stop()
+	}
+	if line, err := encodeAskAnswer(ask.requestID, ask.input, answer); err == nil {
+		_ = ask.cp.SendRaw(line)
+	}
+	s.recordPendingResolution(ask, answer, true)
+	return true
+}
+
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
 		// Flag the teardown FIRST: killing the PTY below wakes drain()
