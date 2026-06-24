@@ -3698,8 +3698,13 @@ final class SessionStore {
     func hasPendingAsk(sessionID: String) -> Bool {
         let items = conversationLog[sessionID] ?? []
         guard let last = items.last(where: { $0.role.lowercased() != "user" }) else { return false }
-        return last.kind.lowercased() == "pending_input"
-            && !resolvedPendingInputIDs.contains(last.id)
+        guard last.kind.lowercased() == "pending_input" else { return false }
+        if resolvedPendingInputIDs.contains(last.id) { return false }
+        // Belt-and-suspenders: if the item carries a persisted resolution marker
+        // (set by the broker on answer, kept in content by mapRemoteItem), the
+        // card is already answered — don't route the next message as an answer.
+        if ConduitUI.ChatViewModel.parsePendingResolution(last.content)?.answered == true { return false }
+        return true
     }
 
     /// Optimistically mark the last unanswered `pending_input` item for a
@@ -5035,10 +5040,27 @@ final class SessionStore {
         // Drop live items superseded by the resolved past version.
         let liveFiltered = live.filter { !resolvedPastKeys.contains(fp($0)) }
         let combined = (pastNotInLive + liveFiltered + pending).sortedByConversationTs { $0.ts }
-        // Final dedup using stripped key: guards against replay with a fresh ts
-        // or other duplicate-introducing paths (keeps first occurrence).
-        var seen = Set<String>()
-        return combined.filter { seen.insert(fp($0)).inserted }
+        // Final dedup: resolved pending_input beats unresolved for the same key
+        // so that answered AskUserQuestion state survives close+reopen. Without
+        // this the broker-persisted resolved card was silently dropped in favour
+        // of the original unanswered entry which shares the same ts.
+        var bestByKey = [String: ConversationItem]()
+        for item in combined {
+            let key = fp(item)
+            if let existing = bestByKey[key] {
+                if item.content.contains(resolvedMarker) && !existing.content.contains(resolvedMarker) {
+                    bestByKey[key] = item
+                }
+            } else {
+                bestByKey[key] = item
+            }
+        }
+        var seenKeys = Set<String>()
+        return combined.compactMap { item in
+            let key = fp(item)
+            guard seenKeys.insert(key).inserted else { return nil }
+            return bestByKey[key]
+        }
     }
 
     /// Directly splice `hydratedChat[sessionID]` into `conversationLog`
@@ -5105,6 +5127,17 @@ final class SessionStore {
         guard let items = try? await fetchConversation(sessionID: sessionID),
               !items.isEmpty else { return }
         hydratedChat[sessionID] = items
+        // Seed resolvedPendingInputIDs from the transcript so hasPendingAsk stays
+        // correct after close+reopen (resolvedPendingInputIDs is ephemeral).
+        // Mirror of Android's mapRemoteItem which seeds _resolvedPendingInputIDs.
+        let resolvedIDs = items.compactMap { item -> String? in
+            guard item.kind == "pending_input" else { return nil }
+            guard ConduitUI.ChatViewModel.parsePendingResolution(item.content)?.answered == true else { return nil }
+            return item.id
+        }
+        if !resolvedIDs.isEmpty {
+            resolvedPendingInputIDs.formUnion(resolvedIDs)
+        }
         refreshConversationOffMain(sessionID: sessionID)
     }
 

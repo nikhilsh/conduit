@@ -1391,11 +1391,24 @@ internal fun dropPendingInputEchoes(items: List<ConversationItem>): List<Convers
         .filter { it.kind == "pending_input" }
         .map { PendingQuestions.strippedKey(it.content) }
         .filter { it.length >= 8 }
-    if (pendingBodies.isEmpty()) return deduped
+    // Exact-option-match filter: drop user messages that are exact matches
+    // of any pending_input option regardless of the 8-char floor. Handles
+    // short answers ("Yes", "No", "1") from broker's appendUser.
+    val pendingOptionSet = deduped
+        .filter { it.kind == "pending_input" }
+        .flatMap { it.pendingOptions }
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .toSet()
+    if (pendingBodies.isEmpty() && pendingOptionSet.isEmpty()) return deduped
 
     return deduped.filter { item ->
         if (item.kind == "pending_input") return@filter true
         val c = item.content.trim()
+        // Exact option match: drop regardless of length floor (covers short
+        // answers like "Yes", "No", "1" that appendUser writes to conversation.jsonl).
+        if (item.role.lowercase() == "user" && pendingOptionSet.isNotEmpty() &&
+            c in pendingOptionSet) return@filter false
         if (c.length < 8) return@filter true
         pendingBodies.none { it == c || it.contains(c) }
     }
