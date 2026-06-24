@@ -4435,6 +4435,8 @@ private struct ConduitPendingInputCard: View {
     @State private var localSubmitted = false
     /// The chosen answer text, kept so the locked card can echo it.
     @State private var sentAnswer: String?
+    /// Collapsed by default; tap the chip to expand, tap the header to collapse.
+    @State private var isExpanded = false
 
     /// The card is settled once submitted locally OR recorded answered
     /// upstream — the second source is what makes the lock survive a
@@ -4455,8 +4457,10 @@ private struct ConduitPendingInputCard: View {
     var body: some View {
         if submitted {
             answeredChip
-        } else {
+        } else if isExpanded {
             unansweredCard
+        } else {
+            pendingChip
         }
     }
 
@@ -4478,6 +4482,31 @@ private struct ConduitPendingInputCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    // Compact inline pill shown before the user expands the card.
+    private var pendingChip: some View {
+        Button { isExpanded = true } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "questionmark.circle.fill")
+                    .font(.system(size: 12, weight: .bold))
+                let prompt = questions.first?.prompt
+                Text(prompt?.isEmpty == false ? prompt! : "Needs Your Input")
+                    .font(neon.mono(12).weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer()
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .foregroundStyle(neon.claude)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
+            .background(Capsule(style: .continuous).fill(neon.claude.opacity(0.10)))
+            .overlay(Capsule(style: .continuous).stroke(neon.claude.opacity(0.30), lineWidth: 1))
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+    }
+
     private var unansweredCard: some View {
         let questions = self.questions
         // The explicit Send appears for multiple questions OR any
@@ -4485,11 +4514,20 @@ private struct ConduitPendingInputCard: View {
         // keeps tap-to-send.
         let needsSend = questions.count > 1 || questions.contains { $0.multiSelect }
         return VStack(alignment: .leading, spacing: 12) {
-            Text("NEEDS YOUR INPUT")
-                .font(neon.mono(11).weight(.bold))
-                .tracking(0.8)
-                .foregroundStyle(neon.claude)
-                .neonTextGlow(neon.textGlow?.tinted(neon.claude))
+            Button { isExpanded = false } label: {
+                HStack(spacing: 6) {
+                    Text("NEEDS YOUR INPUT")
+                        .font(neon.mono(11).weight(.bold))
+                        .tracking(0.8)
+                        .foregroundStyle(neon.claude)
+                        .neonTextGlow(neon.textGlow?.tinted(neon.claude))
+                    Spacer()
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(neon.claude)
+                }
+            }
+            .buttonStyle(.plain)
             ForEach(Array(questions.enumerated()), id: \.offset) { qIdx, question in
                 VStack(alignment: .leading, spacing: 8) {
                     if !question.prompt.isEmpty {
