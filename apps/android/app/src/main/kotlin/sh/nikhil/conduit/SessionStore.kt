@@ -1950,6 +1950,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * Called once per connect (the single chokepoint covering reconnect /
      * selectSavedServer / SSH paths).
      */
+    suspend fun refreshLiveSessions() { reconcileLiveSessions() }
+
     private suspend fun reconcileLiveSessions() {
         val base = _endpoint.value.httpBaseUrl ?: return
         val token = _endpoint.value.token

@@ -39,6 +39,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -49,7 +50,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -170,6 +173,8 @@ fun HistoryScreen(
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(HistoryFilter.ALL) }
     var pendingDelete by remember { mutableStateOf<SavedSession?>(null) }
+    var isRefreshing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     BackHandler { onDismiss() }
 
@@ -266,6 +271,17 @@ fun HistoryScreen(
 
             HistoryFilterBar(selected = filter, onSelect = { filter = it })
 
+            PullToRefreshBox(
+                isRefreshing = isRefreshing,
+                onRefresh = {
+                    scope.launch {
+                        isRefreshing = true
+                        store.refreshLiveSessions()
+                        isRefreshing = false
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+            ) {
             when {
                 source.isEmpty() -> EmptyHistoryState()
                 groups.isEmpty() -> NoMatchesState()
@@ -315,6 +331,7 @@ fun HistoryScreen(
                     }
                 }
             }
+            } // PullToRefreshBox
         }
     }
     }
