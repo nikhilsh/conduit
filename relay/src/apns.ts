@@ -100,19 +100,24 @@ function buildBody(payload: PushPayload): string {
       box: payload.box,
     });
   }
-  // App-level categories ("approval"/"input") ride in aps.category so iOS can
-  // attach registered notification actions (Approve/Deny); plain alerts omit it.
+  // App-level categories ("approval"/"input"/"ask") ride in aps.category so iOS
+  // can attach registered notification actions; plain alerts omit it.
+  // "ask" pushes also carry options[] and mutable-content:1 so the
+  // UNNotificationServiceExtension runs and registers dynamic action labels.
   const apsCategory =
     payload.category && payload.category !== "alert" ? payload.category : undefined;
+  const hasOptions = Array.isArray(payload.options) && payload.options.length > 0;
   return JSON.stringify({
     aps: {
       alert: { title: payload.title, body: payload.body },
       sound: "default",
       ...(apsCategory ? { category: apsCategory } : {}),
+      ...(hasOptions ? { "mutable-content": 1 } : {}),
     },
     session_id: payload.session_id,
     box: payload.box,
     ...(apsCategory ? { category: apsCategory } : {}),
+    ...(hasOptions ? { options: payload.options } : {}),
   });
 }
 
