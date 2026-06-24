@@ -334,7 +334,7 @@ mod tests {
         let mut state = ProjectSessionState::new(session);
         state.push_chat_event(ChatEvent {
             role: "tool".to_string(),
-            content: "running cargo test".to_string(),
+            content: "Bash: cargo test".to_string(),
             ts: "2026-05-18T00:00:00Z".to_string(),
             files: vec![],
         });
@@ -343,6 +343,8 @@ mod tests {
         let item = &state.chat.conversation[0];
         assert_eq!(item.role, "tool");
         assert_eq!(item.kind, "tool");
-        assert_eq!(item.status, "running");
+        // Tool items always classify as "done" (or "failed" via exit_code) —
+        // content-text heuristics are for assistant text only.
+        assert_eq!(item.status, "done");
     }
 }
