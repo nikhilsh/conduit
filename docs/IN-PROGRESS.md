@@ -7,12 +7,7 @@ Items currently being built. On merge, move each to
 
 ## Active
 
-### feat/apple-review-demo-mode-impl -- Apple reviewer demo mode
-Branch: feat/apple-review-demo-mode-impl
-PR: (fill in after push)
-Description: Adds an in-process "Try Demo" path so App Store reviewers can explore
-the app without a real VPS/broker. Fake sessions + scripted chat, no network calls.
-iOS + Android, phone + tablet layouts.
+*(none)*
 
 ## Deferred (not active)
 

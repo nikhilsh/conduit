@@ -9,6 +9,14 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.197
+
+**Apple App Store reviewer demo mode (iOS + Android).** PR #753.
+
+- **App Store reviewer demo mode (PR #753)** — adds an in-process "Try Demo" path so Apple App Store reviewers can explore the app without a real VPS/broker. A "Explore without a server" CTA on the onboarding welcome screen activates demo mode: fake sessions ("Build a to-do app", "Fix authentication bug") with scripted chat history, disabled composer with real-server CTA. iOS phone + tablet and Android phone + tablet. No network calls. "Exit Demo" button in top-right returns to onboarding. Verify: fresh install (no saved servers) → onboarding → "Explore without a server" → fake home with 2 sessions → tap a session → scripted chat visible → disabled composer shows message → "Exit Demo" → returns to onboarding. [iOS + Android, on-device]
+
+---
+
 ## v0.0.196
 
 **Apple Watch ask notification actions + subagents earlier-agents collapse + voice pause fix + pull-to-refresh sessions + pending-chat reconnect fix + persistent agent memory.** PRs #743 (iOS + broker + relay), #748 (iOS + Android), #749 (iOS + Android), #750 (iOS + Android), #751 (iOS + Android), #752 (broker).
