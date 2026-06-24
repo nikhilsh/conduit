@@ -9,6 +9,15 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.192 (unreleased)
+
+**LA zombie + [[conduit:resolved]] chat garble fixes.** PR #734. App-only (relay + iOS).
+
+- **LA zombie on lock screen** — relay `apns.ts` now sets `dismissal-date = now + 5 min` on `event=end` Live Activity pushes; without it Apple defaults to ~4 hours. In-process `doneLingerInterval` also reduced 15 min → 5 min for symmetry. Verify: end a session → the done-state Live Activity disappears from the lock screen within ~5 minutes. [iOS, on-device]
+- **[[conduit:resolved]] raw text in chat** — `parsePendingQuestions` already filtered the marker from visible prose; confirmed no regression. `stripPendingSentinel` was (correctly) left as-is so `persistedResolution` can decode the answered state on rehydration. Net: no user-visible change to the rehydration path, garble is prevented by the existing filter in `parsePendingQuestions`. [iOS — verify answered card rehydrates correctly after close+reopen]
+
+---
+
 ## v0.0.191
 
 **Shared-agent-credential lineage — "never fork the OAuth refresher" (broker, behind `CONDUIT_SHARED_AGENT_CREDS`, default OFF).** PR #732 (design doc + broker). Broker-only; no app change → iOS/Android parity preserved by construction (WS contract unchanged). Tag cut at `2e263e98`. **Ships DORMANT — the flag is OFF in this release, so production behaviour is byte-for-byte identical to v0.0.190; nothing is fixed for the owner yet.** Full design in [PLAN-AGENT-CREDENTIAL-LINEAGE.md](PLAN-AGENT-CREDENTIAL-LINEAGE.md).
