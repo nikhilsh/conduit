@@ -11,8 +11,10 @@ release, the section for that version is the device-test punch list.
 
 ## v0.0.194
 
-**Chat ticker + ask-queue fixes.** PRs #739 (iOS + Android), #740 (iOS + Android), #742 (core Rust).
+**Chat ticker + ask-queue fixes + chip persistence + approvals UX.** PRs #738 (iOS + Android), #739 (iOS + Android), #740 (iOS + Android), #741 (iOS + Android), #742 (core Rust).
 
+- **Answered pending-input chip survives view close+reopen (PR #738)** — `answeredPendingFingerprints` moved from ephemeral `@State`/`remember{}` to `SessionStore` (keyed by sessionID), so the green chip stays after dismissing and reopening chat. Verify: answer an AskUserQuestion card → dismiss chat → reopen → chip still shows `✓ [answer]`, not the full NEEDS YOUR INPUT card. [iOS + Android, on-device]
+- **Approvals panel: AskUserQuestion renders options as tappable choices (PR #741)** — when the pending item has `[[conduit:needs-input]]`, the Approvals sheet shows each answer option as a button instead of generic Approve/Deny. Tapping sends the answer via `sendChat`. Verify: trigger an AskUserQuestion from a running agent → open Approvals → see option buttons → tap one → card resolves with "Sent: …". [iOS + Android, on-device]
 - **Tool cluster expand resets on stream (PR #739)** — iOS: removed count from `toolgroup-{id}-{count}` row ID so SwiftUI preserves `@State` across streaming. Android: keyed `remember` on `items.firstOrNull()?.id` not full items. [iOS + Android, on-device]
 - **AskUserQuestion answer echo + queue (PR #739)** — removed duplicate YOU bubble when answering a pending-input card; `hasPendingAsk` now checks `resolvedPendingInputIDs` so the queue is drained; multi-option chip joins answers with `·`. [iOS + Android, on-device]
 - **Running ticker resets to 0 on chat open (PR #740)** — `MonoRunningTicker` (iOS) and `CommandRunTicker` (Android) now seed elapsed time from the first item's `ts` instead of starting at 0; reopening a chat shows the correct elapsed time. [iOS + Android, on-device]
