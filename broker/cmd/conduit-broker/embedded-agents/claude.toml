@@ -2,7 +2,7 @@ name                = "claude"
 command             = ["claude"]
 args                = ["--dangerously-skip-permissions"]
 env_passthrough     = ["ANTHROPIC_API_KEY"]
-workdir             = "/root"
+workdir             = "$HOME"
 chat_event_port_env = "AGENT_CHAT_PORT"
 # Structured chat channel (device bug #6 / task #24): run claude headless
 # in stream-json for clean Chat events; the Terminal tab hosts a shell.

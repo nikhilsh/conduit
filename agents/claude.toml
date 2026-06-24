@@ -2,7 +2,7 @@ name                = "claude"
 command             = ["claude"]
 args                = ["--dangerously-skip-permissions"]
 env_passthrough     = ["ANTHROPIC_API_KEY"]
-workdir             = "/root"
+workdir             = "$HOME"
 chat_event_port_env = "AGENT_CHAT_PORT"
 # Surfaced on the iOS / Android agent pill so users can see what
 # they're paying for at a glance. Threading it from a CLI flag is

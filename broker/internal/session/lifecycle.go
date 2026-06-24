@@ -47,23 +47,37 @@ func (s *Session) prepareFilesystem() error {
 	return nil
 }
 
+func userHomeDir() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		return home
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		return home
+	}
+	return "/"
+}
+
 func (s *Session) commandDir(adapter agents.Adapter) string {
 	if s.requestedCWD != "" && dirExists(s.requestedCWD) {
 		return s.requestedCWD
 	}
 	if adapter.Workdir != "" {
-		if filepath.IsAbs(adapter.Workdir) {
-			if dirExists(adapter.Workdir) {
-				return adapter.Workdir
+		resolved := os.ExpandEnv(adapter.Workdir)
+		if filepath.IsAbs(resolved) {
+			if dirExists(resolved) {
+				return resolved
 			}
 		} else {
-			if dirExists(adapter.Workdir) {
-				return adapter.Workdir
+			if dirExists(resolved) {
+				return resolved
 			}
-			if dirExists(filepath.Join(s.repoRoot, adapter.Workdir)) {
-				return filepath.Join(s.repoRoot, adapter.Workdir)
+			if dirExists(filepath.Join(s.repoRoot, resolved)) {
+				return filepath.Join(s.repoRoot, resolved)
 			}
 		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && dirExists(home) {
+		return home
 	}
 	return s.worktreeDir
 }
