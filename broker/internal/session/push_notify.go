@@ -48,6 +48,11 @@ type pushNotifyState struct {
 	// dispatcher is the Dispatcher (type-asserting notifier) used when
 	// per-device targeting is possible. Nil when notifier is not a *Dispatcher.
 	dispatcher *push.Dispatcher
+	// presenceTracker records foreground heartbeats from the owner device via
+	// POST /api/device/presence. When a recent heartbeat exists the push gate
+	// treats the device as "present" even though its session WS is closed (the
+	// background-throttle path). Nil = feature disabled (broadcast semantics).
+	presenceTracker *push.PresenceTracker
 	// lastIdle records when the session last transitioned to idle. Used to
 	// ensure at most one push per idle-transition: a turn that completes and
 	// immediately starts another turn should not deliver two pushes.
@@ -87,6 +92,16 @@ func (s *Session) SetPushOwner(ownerDeviceID string, reg *push.Registry, d *push
 	s.pushState.ownerDeviceID = ownerDeviceID
 	s.pushState.registry = reg
 	s.pushState.dispatcher = d
+	s.pushState.mu.Unlock()
+}
+
+// SetPresenceTracker wires the process-level PresenceTracker into the session
+// so ownerPresenceGate can check for a recent foreground heartbeat. Called by
+// the Manager on session creation. nil disables the heartbeat path (broadcast
+// semantics / legacy behavior unchanged).
+func (s *Session) SetPresenceTracker(pt *push.PresenceTracker) {
+	s.pushState.mu.Lock()
+	s.pushState.presenceTracker = pt
 	s.pushState.mu.Unlock()
 }
 
@@ -327,16 +342,29 @@ func (s *Session) maybeNotifyPendingInput() {
 // Two-path logic (Option A, PLAN-SSH-CHAT-TAKEOVER.md §3):
 //   - Legacy (OwnerDeviceID == ""): suppress when any PTY subscriber is present,
 //     exactly as before. Preserves byte-identical behavior for old clients.
-//   - Modern (OwnerDeviceID != ""): suppress only when an owner-device WS client
-//     is connected. Non-owner subscribers (SSH CLI, future PTY viewers that are
-//     not the owner phone) do NOT suppress the owner phone's alert pushes.
+//   - Modern (OwnerDeviceID != ""): suppress when the owner-device WS client is
+//     connected OR when a recent foreground heartbeat was received via
+//     POST /api/device/presence within the last 60 seconds. The heartbeat covers
+//     the background-throttle case (PR #746) where the session WS is closed while
+//     the app is on the home screen — OwnerDeviceConnected() returns false, so
+//     without the heartbeat check pushes fire spuriously.
 func (s *Session) ownerPresenceGate() bool {
 	if s.OwnerDeviceID() == "" {
 		// Legacy path: any subscriber suppresses (unchanged behavior).
 		return s.SubscriberCount() > 0
 	}
-	// Modern path: only owner-device presence suppresses.
-	return s.OwnerDeviceConnected()
+	// Modern path: connected WS *or* recent foreground heartbeat.
+	if s.OwnerDeviceConnected() {
+		return true
+	}
+	s.pushState.mu.Lock()
+	pt := s.pushState.presenceTracker
+	ownerDeviceID := s.pushState.ownerDeviceID
+	s.pushState.mu.Unlock()
+	if pt != nil {
+		return pt.Present(ownerDeviceID, 60*time.Second)
+	}
+	return false
 }
 
 // truncatePushBody truncates s to at most maxLen runes, appending "…" when

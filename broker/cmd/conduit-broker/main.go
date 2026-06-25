@@ -252,6 +252,13 @@ func runUp(args []string) int {
 		srv.WithNtfyURL(ntfyURL)
 		log.Printf("push: ntfy distributor configured url=%s", ntfyURL)
 	}
+	// PresenceTracker: process-level foreground-heartbeat store shared by all
+	// sessions. The app calls POST /api/device/presence while in the foreground
+	// so pushes are suppressed even when the session WS is closed (PR #746
+	// background throttle). One singleton per broker process is correct because
+	// there is only one operator identity today.
+	presenceTracker := push.NewPresenceTracker()
+	srv.WithPresenceTracker(presenceTracker)
 	log.Printf("push: registry loaded; relay=%v; unifiedpush=always; ntfy=%v", relayURL != "", ntfyURL != "")
 	// Replay HTTP surface lives on the same mux as the WS server.
 	// Secret = bearer token: anyone who can already attach to the WS

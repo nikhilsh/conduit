@@ -1806,6 +1806,10 @@ type Manager struct {
 	// push-to-start token (PlatformAPNsLiveActivityStart). Wired via
 	// SetLAAlertRegistry so emitLAStart can call StartTokenFor.
 	laPushAlertReg *push.Registry
+	// presenceTracker is the process-level foreground-heartbeat tracker wired
+	// via SetPresenceTracker. Shared across all sessions; each session reads its
+	// own ownerDeviceID to check presence. nil = heartbeat gate disabled.
+	presenceTracker *push.PresenceTracker
 }
 
 // SetCredentialStore wires the per-identity OAuth credential store into
@@ -1912,6 +1916,16 @@ func (m *Manager) SetLASender(reg *push.LARegistry, sender push.Sender, identity
 func (m *Manager) SetLAAlertRegistry(reg *push.Registry) {
 	m.mu.Lock()
 	m.laPushAlertReg = reg
+	m.mu.Unlock()
+}
+
+// SetPresenceTracker wires the process-level foreground-heartbeat tracker into
+// the Manager so new sessions can check it from ownerPresenceGate. The tracker
+// is shared across all sessions (it is keyed by deviceID). nil disables the
+// heartbeat path (no behavioral change from before).
+func (m *Manager) SetPresenceTracker(pt *push.PresenceTracker) {
+	m.mu.Lock()
+	m.presenceTracker = pt
 	m.mu.Unlock()
 }
 
@@ -2375,6 +2389,11 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 	// SetPushOwner is a no-op when ownerDeviceID is empty (old clients).
 	if opts.OwnerDeviceID != "" && m.pushRegistry != nil && m.pushDispatcher != nil {
 		s.SetPushOwner(opts.OwnerDeviceID, m.pushRegistry, m.pushDispatcher)
+	}
+	// Wire the foreground-heartbeat tracker so ownerPresenceGate can suppress
+	// pushes when the app is foregrounded but the session WS is closed.
+	if m.presenceTracker != nil {
+		s.SetPresenceTracker(m.presenceTracker)
 	}
 	// Wire the Live Activity sender so the session can emit content-state
 	// updates to the iOS lock-screen turn card. nil reg/sender = no-op.
