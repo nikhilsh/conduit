@@ -6224,6 +6224,24 @@ final class SessionStore {
                 ])
             }
 
+            // Evict .exited sessions the broker has GC'd (no longer on disk).
+            // Only runs when fetchLiveSessions() succeeded, so the broker's view
+            // is current. Safe to remove: the server-side file is gone.
+            let brokerKnownIDs = Set(running.map { $0.id }).union(recoverableSessionIDs)
+            let gcEvicted = SavedSessionsStore.shared.sessions.filter {
+                $0.serverID == serverID &&
+                $0.status == .exited &&
+                !brokerKnownIDs.contains($0.id)
+            }
+            if !gcEvicted.isEmpty {
+                for s in gcEvicted {
+                    SavedSessionsStore.shared.remove(id: s.id)
+                }
+                Telemetry.breadcrumb("session", "reconcile_gc_evicted", data: [
+                    "count": "\(gcEvicted.count)",
+                ])
+            }
+
             // CHANGE 4: Auto-resume sessions snapshotted at broker-update
             // confirm time. Only resume the ids we snapshotted — never
             // mass-resume arbitrary old recoverable sessions.
