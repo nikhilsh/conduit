@@ -168,6 +168,9 @@ struct ConduitApp: App {
                             Telemetry.breadcrumb("push", "active with existing sessions — requesting authorization")
                             PushNotificationManager.shared.requestAuthorizationIfNeeded()
                         }
+                        if newPhase == .active {
+                            Task { await store.reportDevicePresence() }
+                        }
                     }
                     // WS-P.3: request push permission after the user's FIRST
                     // session exists — onboarding is accounts-free by design,

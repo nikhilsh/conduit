@@ -1600,6 +1600,46 @@ class SessionStore : ViewModel(), ConduitDelegate {
         pausedSessionIds.clear()
     }
 
+    /**
+     * POST /api/device/presence so the broker knows this device is online.
+     * Fire-and-forget; never surfaces errors to the caller.
+     */
+    private suspend fun reportDevicePresence() {
+        val ctx = appContext ?: return
+        val devId = PushStore.getOrCreateDeviceId(ctx)
+        val ep = _endpoint.value
+        if (!ep.isComplete) return
+        val base = ep.httpBaseUrl ?: return
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val body = JSONObject().apply { put("device_id", devId) }.toString()
+                val conn = (URL("$base/api/device/presence").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    setRequestProperty("Authorization", "Bearer ${ep.token}")
+                    setRequestProperty("Content-Type", "application/json")
+                    connectTimeout = 10_000
+                    readTimeout = 10_000
+                }
+                try {
+                    conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                    val code = conn.responseCode
+                    Telemetry.breadcrumb(
+                        "device_presence", "heartbeat",
+                        mapOf("host" to ep.displayHost, "status" to code.toString())
+                    )
+                } finally {
+                    conn.disconnect()
+                }
+            }
+        }.getOrElse { e ->
+            Telemetry.breadcrumb(
+                "device_presence", "heartbeat error",
+                mapOf("host" to ep.displayHost, "error" to (e.message ?: "unknown"))
+            )
+        }
+    }
+
     private val lifecycleObserver = object : DefaultLifecycleObserver {
         override fun onResume(owner: LifecycleOwner) {
             // App came back from background — local sockets may be
@@ -1617,6 +1657,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
             // suspended — flush any message the user sent right before they
             // backgrounded the app (the lost-send bug).
             flushPendingChats()
+            // Report presence so the broker knows the device is online.
+            viewModelScope.launch { reportDevicePresence() }
         }
 
         override fun onStop(owner: LifecycleOwner) {

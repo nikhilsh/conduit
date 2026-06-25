@@ -966,6 +966,56 @@ func (s *Server) serveSessionAnswer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// devicePresenceRequest is the body for POST /api/device/presence.
+// device_id may also be supplied as the ?device_id= query param; the JSON
+// body takes precedence when both are present.
+type devicePresenceRequest struct {
+	DeviceID string `json:"device_id"`
+}
+
+// serveDevicePresence handles POST /api/device/presence.
+// Records a foreground heartbeat from the calling device so the broker can
+// suppress alert pushes while the app is alive and visible (even when the
+// session WS is closed due to background throttling).
+//
+// Wire contract:
+//
+//	POST /api/device/presence
+//	Authorization: Bearer <token>   (or ?token=<token>)
+//	{"device_id":"<uuid>"}          (or ?device_id=<uuid>)
+//
+//	200 {}
+//	400 {"error":"invalid_request","message":"device_id is required"}
+//	401 {"error":"auth_expired","message":"unauthorized"}
+func (s *Server) serveDevicePresence(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+
+	// Accept device_id from JSON body or query param (body wins when both supplied).
+	deviceID := strings.TrimSpace(r.URL.Query().Get("device_id"))
+	var req devicePresenceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+		if id := strings.TrimSpace(req.DeviceID); id != "" {
+			deviceID = id
+		}
+	}
+	if deviceID == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "device_id is required")
+		return
+	}
+
+	if s.PresenceTracker != nil {
+		s.PresenceTracker.Record(deviceID)
+		log.Printf("presence: heartbeat recorded device_id=%s", deviceID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
 func newSessionID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])

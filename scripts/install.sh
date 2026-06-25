@@ -223,6 +223,21 @@ fi
 
 echo "✓ installed conduit-broker to $BIN_DIR/conduit-broker"
 
+# If a conduit-broker systemd service is active, make sure it picks up the
+# new binary. When the service binary lives at a different path (e.g.
+# /root/.conduit/conduit-broker-latest from the SSH bootstrap), move the
+# newly-installed file there atomically before restarting.
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet conduit-broker 2>/dev/null; then
+    SVC_BIN=$(systemctl show conduit-broker --property=ExecStart 2>/dev/null \
+        | sed 's/.*path=\([^ ;]*\) .*/\1/' || true)
+    if [ -n "$SVC_BIN" ] && [ "$SVC_BIN" != "$BIN_DIR/conduit-broker" ]; then
+        mv "$BIN_DIR/conduit-broker" "$SVC_BIN"
+        echo "-> moved to $SVC_BIN (service binary path)"
+    fi
+    systemctl restart conduit-broker
+    echo "-> restarted conduit-broker service"
+fi
+
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) echo "  note: $BIN_DIR is not on PATH — add it to your shell rc" ;;

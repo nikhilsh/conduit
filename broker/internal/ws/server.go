@@ -156,6 +156,13 @@ type Server struct {
 	// not available on this host.
 	NtfyURL string
 
+	// PresenceTracker records per-device foreground heartbeats received via
+	// POST /api/device/presence. Sessions read it from ownerPresenceGate to
+	// suppress alert pushes while the app is foregrounded but its session WS
+	// is closed (background-throttle case). Nil-safe: absent = heartbeat gate
+	// disabled.
+	PresenceTracker *push.PresenceTracker
+
 	// chatDedup remembers forwarded chat client_msg_ids per session so a
 	// resend (same id, after an app kill/reconnect) is acked but not
 	// re-delivered to the agent. Process-level so it survives a client
@@ -266,6 +273,18 @@ func (s *Server) WithNtfyURL(u string) *Server {
 	return s
 }
 
+// WithPresenceTracker wires the foreground-heartbeat tracker into the server.
+// The tracker is shared with all sessions via the Manager so ownerPresenceGate
+// can suppress pushes when the app is foregrounded but the session WS is closed.
+// Also wires it into the session Manager so newly created sessions inherit it.
+func (s *Server) WithPresenceTracker(pt *push.PresenceTracker) *Server {
+	s.PresenceTracker = pt
+	if s.Sessions != nil && pt != nil {
+		s.Sessions.SetPresenceTracker(pt)
+	}
+	return s
+}
+
 // pushIdentity is the single-operator bucket every device token is
 // registered under today. See the Server.Push field comment.
 const pushIdentity = "broker"
@@ -338,6 +357,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/sessions/discovered/transcript", s.serveDiscoveredTranscript)
 	mux.HandleFunc("/api/sessions/discovered", s.serveDiscoveredSessions)
 	mux.HandleFunc("/api/sessions/adopt", s.serveAdoptSession)
+	// POST /api/device/presence — foreground heartbeat: tells the broker the
+	// app is alive in the foreground so push notifications are suppressed even
+	// when the session WS is closed (background-throttle path, PR #746).
+	mux.HandleFunc("/api/device/presence", s.serveDevicePresence)
 	return mux
 }
 
