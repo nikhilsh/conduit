@@ -4352,6 +4352,32 @@ final class SessionStore {
     /// Best-effort per provider: a missing local credential, an encode
     /// failure, a network error, or a non-2xx (notably `503` from an old
     /// broker without the credential store) just breadcrumbs and moves on.
+    /// POST /api/device/presence to every connected box so the broker knows
+    /// this device is online. Fire-and-forget; never surfaces errors.
+    func reportDevicePresence() async {
+        let endpoints: [StoredEndpoint]
+        if boxConnections.isEmpty {
+            guard self.endpoint.isComplete else { return }
+            endpoints = [self.endpoint]
+        } else {
+            endpoints = boxConnections.values.map { $0.endpoint }
+        }
+        for endpoint in endpoints {
+            guard let base = endpoint.httpBaseURL else { continue }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/device/presence"
+            guard let url = components?.url else { continue }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 10
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: ["device_id": DeviceIdentity.deviceID])
+            Telemetry.breadcrumb("device_presence", "heartbeat", data: ["host": endpoint.displayHost])
+            _ = try? await URLSession.shared.data(for: req)
+        }
+    }
+
     /// Never throws — callers fire it from connect closures and must not
     /// have a propagate failure break the connect.
     ///
