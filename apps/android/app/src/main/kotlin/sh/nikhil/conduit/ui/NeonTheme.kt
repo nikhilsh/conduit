@@ -14,9 +14,8 @@ import sh.nikhil.conduit.R
  * exact ARGB / hex values for dark-Ice + light-Ice).
  *
  * Scope is the theme SYSTEM only (palettes + resolver + glow descriptors
- * + CompositionLocal injection). Later card work consumes the resolved
- * [NeonTheme] (including glow) from [LocalNeonTheme]; nothing renders the
- * glow yet.
+ * + CompositionLocal injection). Glow is consumed by [NeonComponents.kt]
+ * (`neonCardSurface`/`neonGlowBox`) and [ChatPage]'s accent-text path.
  *
  * User choices feeding the resolver:
  *   - palette : [NeonPalette] (Ice / Synthwave / Matrix / Amber CRT)
@@ -51,9 +50,9 @@ enum class NeonPalette(
 
 // region Glow descriptors
 //
-// Glow renders as layered shadows (README §3.5). Nothing renders these
-// yet, but the resolved theme carries them so step-3 card work can
-// consume the rules without recomputing:
+// Glow renders as layered shadows. Consumed by NeonComponents.kt
+// (`neonCardSurface` / `neonGlowBox`) and ChatPage accent-text:
+//   (rules below, mirrored in those consumers)
 //   - text glow (dark only): 0 0 6px {c}CC, 0 0 16px {c}66 (× strength)
 //   - box glow:              0 0 10px {c}33, 0 0 26px {c}1F ; light ×0.5
 //   - glow OFF: no shadow (borderStrong hairline instead); light mode

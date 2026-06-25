@@ -3109,6 +3109,66 @@ private fun MonoCommandRow(ev: ConversationItem, neon: NeonTheme) {
     }
 }
 
+// ── §10 Inline block (small runs ≤ MONO_COLLAPSE_THRESHOLD) ─────────────────
+
+/**
+ * §10 always-expanded flat mono block (B · Mono block). Used for small runs
+ * (≤ [MONO_COLLAPSE_THRESHOLD]). Header: "run · N commands · exit 0 / N
+ * failed". Rows: [MonoCommandRow] per item, hairline-divided.
+ */
+@Composable
+private fun MonoCommandBlockInline(items: List<ConversationItem>) {
+    val neon = LocalNeonTheme.current
+    val failCount = remember(items) { clusterFailCount(items) }
+    val ok = failCount == 0
+    val shape = RoundedCornerShape(neon.radiusDp.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(neon.codeBg)
+            .border(0.5.dp, neon.border, shape),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "run",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.5.sp,
+                ),
+                fontFamily = neon.mono,
+                color = neon.textFaint,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "${items.size} command${if (items.size == 1) "" else "s"}",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                color = neon.textFaint,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (ok) "exit 0" else "$failCount failed",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                fontFamily = neon.mono,
+                color = if (ok) neon.textFaint else neon.red,
+            )
+        }
+        HorizontalDivider(color = neon.border, thickness = 0.5.dp)
+        items.forEachIndexed { idx, ev ->
+            MonoCommandRow(ev, neon)
+            if (idx < items.size - 1) {
+                HorizontalDivider(color = neon.border, thickness = 0.5.dp)
+            }
+        }
+    }
+}
+
 // ── §10b Collapsible block ───────────────────────────────────────────────────
 
 /**
@@ -3362,11 +3422,14 @@ private fun MonoCommandBlockCollapsible(items: List<ConversationItem>) {
 
 // ── Top-level §10 / §10b dispatcher ─────────────────────────────────────────
 
+/** Small runs use the always-expanded inline block; large runs collapse. */
+private const val MONO_COLLAPSE_THRESHOLD = 1
+
 /**
- * Dispatcher for the §10 Mono block. Called by [ToolClusterCard] when the
- * chat.commandRunBlock flag is ON. Routes to:
+ * Dispatcher for the §10/§10b Mono block. Routes to:
  *  - [CommandRunTicker] while any command is running (Option C).
- *  - [MonoCommandBlockCollapsible] for settled runs (always collapsed by default).
+ *  - [MonoCommandBlockInline] for settled small runs (≤ [MONO_COLLAPSE_THRESHOLD]).
+ *  - [MonoCommandBlockCollapsible] for settled large runs (> threshold).
  */
 @Composable
 private fun NeonMonoCommandCluster(items: List<ConversationItem>) {
@@ -3375,7 +3438,11 @@ private fun NeonMonoCommandCluster(items: List<ConversationItem>) {
         CommandRunTicker(items)
         return
     }
-    MonoCommandBlockCollapsible(items)
+    if (items.size <= MONO_COLLAPSE_THRESHOLD) {
+        MonoCommandBlockInline(items)
+    } else {
+        MonoCommandBlockCollapsible(items)
+    }
 }
 
 /**

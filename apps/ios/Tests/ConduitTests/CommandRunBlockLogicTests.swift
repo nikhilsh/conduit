@@ -92,9 +92,9 @@ struct CommandRunBlockLogicTests {
 
     // MARK: - Feature-flag persistence
 
-    @Test func commandRunBlockDefaultsOff() {
+    @Test func commandRunBlockDefaultsOn() {
         let flags = FeatureFlags(defaults: freshDefaults())
-        #expect(flags.commandRunBlock == false)
+        #expect(flags.commandRunBlock == true)
     }
 
     @Test func commandRunBlockPersists() {

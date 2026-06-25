@@ -366,13 +366,27 @@ jobs:
             "$ARCHIVE_PATH/dSYMs"
 
       # ---- Automated TestFlight post-processing (litter-style) ----
-      # Generate the per-build "What to Test" from the recent commit log.
+      # Generate the per-build "What to Test".
+      # Priority: repo-root WHATS_NEW.md (curated per-release notes) →
+      # filtered git log (strips docs:/test:/chore:/ci: commits, cleans prefixes).
       - name: Generate What to Test
         run: |
-          {
-            git log --no-merges -n 8 --pretty='- %s' | sed '/^[[:space:]]*$/d'
-          } > "$RUNNER_TEMP/whats-new.txt"
-          echo "What to Test:"; cat "$RUNNER_TEMP/whats-new.txt"
+          if [ -f "WHATS_NEW.md" ]; then
+            cp WHATS_NEW.md "$RUNNER_TEMP/whats-new.txt"
+            echo "Using curated WHATS_NEW.md:"
+          else
+            {
+              git log --no-merges -n 40 --pretty='%s' \
+                | grep -vE '^(docs|test|chore|refactor|ci|style|build):' \
+                | sed -E 's/^(feat|fix|perf|improvement)(\([^)]+\))?: //' \
+                | sed -E 's/ \(#[0-9]+\)$//' \
+                | grep -vE '^\s*$' \
+                | head -n 10 \
+                | sed 's/^/• /'
+            } > "$RUNNER_TEMP/whats-new.txt"
+            echo "Generated from git log:"
+          fi
+          cat "$RUNNER_TEMP/whats-new.txt"
 
       # Wait for processing, set What to Test, and assign the build to the beta
       # group(s) so it lands for internal testers without any manual ASC step.
