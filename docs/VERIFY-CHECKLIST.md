@@ -11,6 +11,10 @@ release, the section for that version is the device-test punch list.
 
 ## v0.0.202
 
+**GC'd sessions evicted from local history on reconcile (iOS + Android).** PR #763.
+
+- **Broker-GC'd session eviction (PR #763)** — `SavedSessionsStore` (device-local `saved-sessions.json`) kept every session ever seen with no TTL; sessions GC'd on the broker (> 7 days old) remained visible indefinitely. Fix: in `reconcileLiveSessions()`, after the demote loop, any `.exited` SavedSession whose ID is not in the broker's current `running ∪ recoverable` set is evicted from local storage. Only runs when `fetchLiveSessions()` succeeded so the broker's view is current. Verify: reconnect to a box — sessions older than 7 days should no longer appear in the Sessions list. [iOS + Android, needs-device-verify]
+
 **Terminal row: full command now visible (iOS).** PR #761.
 
 **Recap screen wired into Session Info + running bar sheen (iOS + Android).** PR #762.
