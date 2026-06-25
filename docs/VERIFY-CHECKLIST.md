@@ -11,7 +11,11 @@ release, the section for that version is the device-test punch list.
 
 ## v0.0.201
 
-**Device presence heartbeat — push-suppression fix (iOS + Android + broker).** PR #759.
+**§10/§10b command-run Mono block — now default ON (iOS + Android).** PR #760.
+
+- **Command-run block default-on (PR #760)** — flips `chat.commandRunBlock` to `true` on both iOS and Android. Single-command runs render as an always-expanded flat mono block: "run" header + command row + exit-0/N-failed status. Two or more commands collapse to the summary ledger (§10b). Verify: run a single shell command — it renders inline; run multiple commands — they collapse with failures surfaced. Check phone and tablet. [iOS + Android phone + tablet, needs-device-verify]
+
+**Device presence heartbeat — push-suppression fix (iOS + Android + broker).** PR #759. — push-suppression fix (iOS + Android + broker).** PR #759.
 
 - **Device presence heartbeat (PR #759)** — spurious push notifications fired when the app was on the home screen with the session WS closed (background throttle, PR #746): `OwnerDeviceConnected()` returned false so pushes fired even with the app visible. Fix: new `POST /api/device/presence` broker endpoint + `PresenceTracker` (60s TTL); push gate now suppresses when the owner device has an active WS connection **or** a heartbeat was recorded within 60s. iOS/Android apps POST the heartbeat on every foreground transition (`scenePhase == .active` / `onResume`). Also: `install.sh` now auto-detects and restarts the systemd `conduit-broker` service after a binary install. Verify: (a) with app foregrounded on home screen, trigger a turn end — no push notification should fire; (b) let 60s elapse after last foreground, trigger turn end — push fires normally; (c) `install.sh` on a bootstrapped box with active systemd unit — binary moved and service restarts automatically. [iOS + Android + broker, needs-device-verify; broker redeploy required]
 

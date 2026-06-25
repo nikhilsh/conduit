@@ -7,11 +7,7 @@ Items currently being built. On merge, move each to
 
 ## Active
 
-- **§10/§10b command-run Mono block — default ON** — PR #760. Flips `chat.commandRunBlock` to
-  `true` on both iOS and Android, adds the always-expanded `MonoInlineBlock`/`MonoCommandBlockInline`
-  for single-command runs (§10 B), and threshold-dispatches: 1 command = inline flat block, 2+
-  = collapsible (§10b). Branch `worktree-feat+cmd-run-block-default-on`.
-  [iOS + Android phone + tablet, needs on-device verification]
+*(none)*
 
 ## Deferred (not active)
 
