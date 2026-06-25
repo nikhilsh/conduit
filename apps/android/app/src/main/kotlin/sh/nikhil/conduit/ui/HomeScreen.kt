@@ -78,6 +78,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import sh.nikhil.conduit.BrokerVersionStatus
 import sh.nikhil.conduit.BuildConfig
 import sh.nikhil.conduit.HarnessState
@@ -377,7 +378,19 @@ fun HomeScreen(
         Spacer(Modifier.height(8.dp))
 
         // Sessions list
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        var isRefreshing by remember { mutableStateOf(false) }
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = {
+                scope.launch {
+                    isRefreshing = true
+                    store.refreshLiveSessions()
+                    isRefreshing = false
+                }
+            },
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        ) {
+        Box(modifier = Modifier.fillMaxSize()) {
             val hasCreating = visible.any { it is VisibleSession.Creating }
             if (sessions.isEmpty() && !hasCreating) {
                 // iOS ConduitHomeView empty-state parity: hero glyph
@@ -725,6 +738,7 @@ fun HomeScreen(
                 }
             }
         }
+        } // PullToRefreshBox
 
         // No-boxes CTA: surface the onboarding guide for first-run users
         // who land here without any paired boxes.

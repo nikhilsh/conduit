@@ -776,6 +776,12 @@ extension ConduitUI {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            .refreshable {
+                store.reconcileLiveSessions()
+                while store.isLoadingSessions {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+            }
         }
 
         /// No-boxes CTA card: shown under BOXES when the user has no paired
