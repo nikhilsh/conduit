@@ -280,7 +280,7 @@ class AppearanceStore : ViewModel() {
      * AnimatedVisibility; a running cluster shows the Option C ticker.
      * Mirror of iOS `AppearanceStore.commandRunBlock`.
      */
-    private val _commandRunBlock = MutableStateFlow(false)
+    private val _commandRunBlock = MutableStateFlow(true)
     val commandRunBlock: StateFlow<Boolean> = _commandRunBlock.asStateFlow()
 
     /**
@@ -336,7 +336,7 @@ class AppearanceStore : ViewModel() {
         _onboardingFurthestStep.value = p.getInt(KEY_ONB_FURTHEST_STEP, 0)
         _onboardingGuide.value = p.getBoolean(KEY_ONB_GUIDE, true)
         _showSubagentPanel.value = p.getBoolean(KEY_SHOW_SUBAGENT_PANEL, FeatureFlags.showSubagentPanel)
-        _commandRunBlock.value = p.getBoolean(KEY_COMMAND_RUN_BLOCK, false)
+        _commandRunBlock.value = p.getBoolean(KEY_COMMAND_RUN_BLOCK, true)
         _enabledAgents.value =
             p.getStringSet(KEY_ENABLED_AGENTS, null)?.toSet() ?: FeatureFlags.defaultEnabledAgents.toSet()
 
