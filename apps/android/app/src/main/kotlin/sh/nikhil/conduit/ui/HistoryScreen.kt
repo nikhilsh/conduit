@@ -26,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Link
@@ -55,6 +56,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -67,6 +69,7 @@ import sh.nikhil.conduit.SavedSessionStatus
 import sh.nikhil.conduit.SessionNaming
 import sh.nikhil.conduit.SessionRecencyGrouping
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
 
 /**
  * "Resume an old thread" surface — Android mirror of iOS
@@ -173,6 +176,7 @@ fun HistoryScreen(
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(HistoryFilter.ALL) }
     var pendingDelete by remember { mutableStateOf<SavedSession?>(null) }
+    var showDeleteArchivedConfirm by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -213,6 +217,12 @@ fun HistoryScreen(
         savedServers.associate { it.id to it.name }
     }
 
+    // Archived (exited) sessions from the non-tombstoned source — drives the
+    // bulk-delete button visibility and the delete-all action.
+    val archivedSessions = remember(source) {
+        source.filter { it.status == SavedSessionStatus.EXITED }
+    }
+
     val neon = LocalNeonTheme.current
     Box(modifier = Modifier.fillMaxSize()) {
         GlassAppBackground()
@@ -232,6 +242,21 @@ fun HistoryScreen(
                     if (!embedded) {
                         IconButton(onClick = onDismiss) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = neon.accent)
+                        }
+                    }
+                },
+                actions = {
+                    if (archivedSessions.isNotEmpty()) {
+                        IconButton(onClick = {
+                            Telemetry.breadcrumb("history", "bulk_delete_archived_tapped",
+                                mapOf("count" to "${archivedSessions.size}"))
+                            showDeleteArchivedConfirm = true
+                        }) {
+                            Icon(
+                                Icons.Filled.DeleteSweep,
+                                contentDescription = "Delete archived",
+                                tint = MaterialTheme.colorScheme.error,
+                            )
                         }
                     }
                 },
@@ -302,6 +327,8 @@ fun HistoryScreen(
                                 row = row,
                                 title = titleFor(row, displayNames, brokerTitles),
                                 serverChip = if (showServerChip) serverNames[row.serverId] ?: row.serverId else null,
+                                modifier = if (row.status == SavedSessionStatus.EXITED)
+                                    Modifier.alpha(0.62f) else Modifier,
                                 onTap = {
                                     val server = savedServers.firstOrNull { it.id == row.serverId }
                                     val connectedToRowServer = server?.let { it.endpoint == endpoint } ?: true
@@ -362,6 +389,29 @@ fun HistoryScreen(
             },
         )
     }
+
+    if (showDeleteArchivedConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteArchivedConfirm = false },
+            title = { Text("Delete all archived sessions?") },
+            text = {
+                Text("Permanently removes all archived sessions from History. This can't be undone.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    Telemetry.breadcrumb("history", "bulk_delete_archived_confirmed",
+                        mapOf("count" to "${archivedSessions.size}"))
+                    archivedSessions.forEach { row -> store.deletePermanently(row.id) }
+                    showDeleteArchivedConfirm = false
+                }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteArchivedConfirm = false }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -403,12 +453,13 @@ private fun HistoryRow(
     serverChip: String?,
     onTap: () -> Unit,
     onLongPress: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val neon = LocalNeonTheme.current
     val tint = neonAgentColor(row.agent, neon)
     val shape = RoundedCornerShape(14.dp)
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .neonCardSurface(neon = neon, shape = shape, fill = neon.surface)
             .combinedClickable(
