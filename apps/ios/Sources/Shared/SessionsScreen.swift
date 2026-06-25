@@ -250,6 +250,8 @@ struct SessionsScreen: View {
     /// Keyed by `compoundID` (not the bare session id, which isn't unique
     /// across servers).
     @State private var transcriptTarget: TranscriptTarget?
+    /// Drives the bulk-delete-archived confirmation alert.
+    @State private var showDeleteArchivedConfirm = false
 
     private var savedStore: SavedSessionsStore { SavedSessionsStore.shared }
 
@@ -282,6 +284,24 @@ struct SessionsScreen: View {
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
         .neonAccentTint()
+        .toolbar {
+            // Bulk-delete button: only shown when there is at least one
+            // archived (exited) session in the current view to act on.
+            let archivedSessions = savedStore.recent(limit: 500).filter { $0.status == .exited }
+            if !archivedSessions.isEmpty {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        Telemetry.breadcrumb("history", "bulk_delete_archived_tapped",
+                                            data: ["count": "\(archivedSessions.count)"])
+                        showDeleteArchivedConfirm = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .foregroundStyle(Color.red)
+                    }
+                    .accessibilityLabel("Delete All Archived")
+                }
+            }
+        }
         .navigationDestination(item: $transcriptTarget) { target in
             SavedTranscriptView(session: target.session).environment(store)
         }
@@ -306,6 +326,22 @@ struct SessionsScreen: View {
             }
         } message: { target in
             Text("Removes this session from History. This can't be undone.\n\n\(target.title)")
+        }
+        .alert(
+            "Delete all archived sessions?",
+            isPresented: $showDeleteArchivedConfirm
+        ) {
+            Button("Delete", role: .destructive) {
+                let archived = savedStore.recent(limit: 500).filter { $0.status == .exited }
+                Telemetry.breadcrumb("history", "bulk_delete_archived_confirmed",
+                                    data: ["count": "\(archived.count)"])
+                for row in archived {
+                    store.permanentlyDelete(sessionID: row.id)
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Permanently removes all archived sessions from History. This can't be undone.")
         }
         .appearanceColorScheme()
     }
@@ -393,6 +429,7 @@ struct SessionsScreen: View {
                 Section {
                     ForEach(section.sessions, id: \.compoundID) { row in
                         sessionRow(row, serverName: showServerChip ? model.serverName(for: row) : nil)
+                            .opacity(row.status == .exited ? 0.62 : 1.0)
                             .listRowBackground(Color.clear)
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
