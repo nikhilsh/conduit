@@ -650,8 +650,6 @@ extension ConduitUI {
                     .font(neon.mono(12))
                     .foregroundStyle(terminalCopied ? neon.green : neon.text)
                     .multilineTextAlignment(.trailing)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
             }
             .contentShape(Rectangle())
             .onTapGesture {
