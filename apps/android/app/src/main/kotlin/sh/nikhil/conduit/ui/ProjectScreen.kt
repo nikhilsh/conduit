@@ -378,8 +378,8 @@ fun ProjectScreen(
     }
 
     if (showDiff) {
-        // Diff review for this session. Commit/PR CTAs stay default no-ops —
-        // no backend action exists yet.
+        // Diff review for this session. Commit/PR CTAs call broker endpoints
+        // (PR #764) directly from within DiffReviewScreen.
         DiffReviewScreen(store = store, session = session, onDismiss = { showDiff = false })
     }
 
