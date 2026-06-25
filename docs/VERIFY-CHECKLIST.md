@@ -15,6 +15,10 @@ release, the section for that version is the device-test punch list.
 
 - **Broker-update banner install URL (PR #754)** — the "Copy install command" button for token-paired boxes showed `curl -fsSL https://conduit.nikhil.sh/install.sh | sh`, a URL that returns 404. Replaced with the versioned GitHub releases URL (`https://github.com/nikhilsh/conduit/releases/download/v{appVersion}/install.sh`) derived from the app's own version at runtime. Verify: on a token-paired box with a stale broker, the banner appears and the copied install command downloads and runs successfully. [iOS + Android, needs-device-verify]
 
+**Pull-to-refresh on home screen sessions list (iOS + Android).** PR #756.
+
+- **Pull-to-refresh on home screen (PR #756)** — the main home screen sessions list had no pull-to-refresh gesture; the feature only worked on the Sessions history screen. Added `.refreshable` to `homeList` in `ConduitHomeView.swift` (iOS) and wrapped the sessions `Box` in `PullToRefreshBox` in `HomeScreen.kt` (Android), using the same `reconcileLiveSessions`/`refreshLiveSessions` wiring already present in SessionsScreen/HistoryScreen. Verify: pull down on the home screen — spinner appears and newly started sessions (e.g. from a terminal on the box) appear in the list after the refresh completes. [iOS + Android, needs-device-verify]
+
 ---
 
 ## v0.0.198
