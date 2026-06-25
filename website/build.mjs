@@ -69,6 +69,7 @@ async function fetchLatestRelease() {
         publishedAt: r.published_at,
         ipa: assets.find((a) => a.name === "Conduit.ipa"),
         apk: assets.find((a) => a.name.endsWith(".apk")),
+        installSh: assets.find((a) => a.name === "install.sh"),
     };
 }
 
@@ -353,6 +354,20 @@ async function build() {
     // Privacy policy is a static standalone page (no release data injected) —
     // emitted at /privacy.html, which is the URL given to App Store Connect.
     await writeFile(path.join(outDir, "privacy.html"), await readFile(privacyPath, "utf8"));
+
+    // Serve install.sh at the vanity URL conduit.kaopeh.com/install.sh so
+    // `curl -fsSL https://conduit.kaopeh.com/install.sh | sh` works.
+    // Content is fetched directly from the release asset so it stays in sync
+    // with each website deploy (which triggers after every broker release).
+    if (r.installSh) {
+        const res = await fetch(r.installSh.browser_download_url, { headers });
+        if (!res.ok) throw new Error(`install.sh fetch: ${res.status}`);
+        const text = await res.text();
+        await writeFile(path.join(outDir, "install.sh"), text);
+        console.log(`wrote out/install.sh from ${r.tagName}`);
+    } else {
+        console.warn("install.sh not found in release assets — skipping");
+    }
     if (existsSync(deployYaml)) {
         await copyFile(deployYaml, path.join(outDir, ".deploy.yaml"));
     }
