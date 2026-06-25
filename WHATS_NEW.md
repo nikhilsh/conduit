@@ -1,7 +1,4 @@
-• Command runs now show as a clean code block by default — single commands expand inline, multiple commands collapse to a summary with failures surfaced
-
-• Device presence heartbeat: the app now reports when it's active so your box knows when you're available
-
-• Fix: device presence heartbeat endpoint and broker restart on install
-
-• Fix: install.sh now resolves the correct release URL (prerelease tags no longer 404)
+• Recap: tap ⓘ on any completed session to see a summary of what changed, files touched, commands run, and duration — previously this screen was hidden
+• Running command blocks now show an animated progress bar sheen
+• Fix: terminal attach command in Session Info now shows the full command (no more middle truncation)
+• Command runs now show as a clean code block — single commands expand inline, multiple commands collapse to a summary with failures surfaced

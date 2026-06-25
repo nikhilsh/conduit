@@ -13,6 +13,11 @@ release, the section for that version is the device-test punch list.
 
 **Terminal row: full command now visible (iOS).** PR #761.
 
+**Recap screen wired into Session Info + running bar sheen (iOS + Android).** PR #762.
+
+- **Recap navigation (PR #762)** — `SessionRecapView` (iOS) and `SessionRecapScreen` (Android) were fully built but not reachable. Added a "Recap" button to the Session Info action row (⓪ icon); tapping it opens the Recap sheet showing session identity, what changed, file stats, commands run, and duration/tokens. Verify: open Session Info (⓪) on a completed session → tap "Recap" → sheet opens with real session data. [iOS + Android, needs-device-verify]
+- **Running command bar sheen (PR #762)** — the progress bar during a command-run RUNNING state now shows an animated cyan sheen sweep (1.5s linear infinite), matching the design spec's RunC `sheen` prop. Verify: trigger a multi-command run while watching the chat → progress bar shows a moving highlight sweep. Respects Reduce Motion. [iOS + Android, needs-device-verify]
+
 - **Terminal attach command unwrapped (PR #761)** — the Terminal row in Session Info was showing `CONDUIT_TOKEN=<tok>…<end-of-session-id>` (middle-truncated, 2-line limit) making it look like only the token. Removed `lineLimit(2)` and `.truncationMode(.middle)` so the full `CONDUIT_TOKEN=… conduit-broker chat <id>` command wraps across as many lines as needed. Verify: open the ⓘ sheet on a live session → Terminal row shows the complete command (both the `CONDUIT_TOKEN=…` env var and the `conduit-broker chat <id>` suffix are visible); tap to copy → paste in terminal and confirm it connects. [iOS, needs-device-verify]
 
 ---

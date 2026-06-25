@@ -7,7 +7,7 @@ Items currently being built. On merge, move each to
 
 ## Active
 
-- **Recap navigation + running bar sheen** — wires `SessionRecapView` / `SessionRecapScreen` into Session Info action row on both iOS and Android; adds animated sheen sweep to the running-command progress bar (design spec RunC). Branch `feat/recap-nav-and-sheen`, PR #762.
+*(none)*
 
 ## Deferred (not active)
 
