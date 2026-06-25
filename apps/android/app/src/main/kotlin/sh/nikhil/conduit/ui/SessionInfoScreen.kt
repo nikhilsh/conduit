@@ -1,6 +1,5 @@
 package sh.nikhil.conduit.ui
 
-import android.content.Intent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -32,8 +31,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Summarize
 import androidx.compose.material.icons.outlined.UnfoldLess
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -68,7 +67,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -111,7 +109,6 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     val events = conversationLog[session.id].orEmpty()
     val stats = remember(events) { SessionStats.compute(events) }
     val name = displayNames[session.id] ?: session.name
-    val context = LocalContext.current
     val neon = LocalNeonTheme.current
 
     val subagentRosterMap by store.subagentRoster.collectAsState()
@@ -120,6 +117,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     var showRename by remember { mutableStateOf(false) }
     var showFork by remember { mutableStateOf(false) }
     var showEndConfirm by remember { mutableStateOf(false) }
+    var showRecap by remember { mutableStateOf(false) }
     var renameDraft by remember { mutableStateOf(name) }
 
     // Descriptor-driven capability flags (WS-3.2). Collected unconditionally
@@ -474,16 +472,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 ActionPill(Icons.AutoMirrored.Filled.CallSplit, "Fork", neon.accent, Modifier.weight(1f)) { showFork = true }
-                ActionPill(Icons.Default.Share, "Export", neon.accent, Modifier.weight(1f)) {
-                    // Export shares the actual conversation transcript as
-                    // markdown — the chat itself, not session metadata.
-                    val transcript = buildTranscriptMarkdown(name, agent, session.branch, events)
-                    val intent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, transcript)
-                    }
-                    context.startActivity(Intent.createChooser(intent, "Export transcript"))
-                }
+                ActionPill(Icons.Default.Summarize, "Recap", neon.accent, Modifier.weight(1f)) { showRecap = true }
                 ActionPill(Icons.Default.Stop, "End", neon.red, Modifier.weight(1f)) { showEndConfirm = true }
             }
 
@@ -683,6 +672,14 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
             dismissButton = {
                 TextButton(onClick = { showEndConfirm = false }) { Text("Cancel") }
             },
+        )
+    }
+
+    if (showRecap) {
+        SessionRecapScreen(
+            store = store,
+            session = session,
+            onDismiss = { showRecap = false },
         )
     }
 }

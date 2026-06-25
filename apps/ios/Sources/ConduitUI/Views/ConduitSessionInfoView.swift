@@ -35,6 +35,7 @@ extension ConduitUI {
         @State private var showRename = false
         @State private var showFork = false
         @State private var showEndConfirm = false
+        @State private var showRecap = false
         @State private var compactRequested = false
         @State private var showEarlierAgents = false
         @State private var terminalCopied = false
@@ -100,6 +101,10 @@ extension ConduitUI {
                     currentEffort: store.statusBySession[session.id]?.reasoningEffort ?? session.reasoningEffort
                 )
                 .presentationDetents([.medium, .large])
+            }
+            .sheet(isPresented: $showRecap) {
+                ConduitUI.SessionRecapView(session: session)
+                    .presentationDetents([.large])
             }
             // A centered `.alert` (not `.confirmationDialog`): inside a
             // presentation-detent sheet the action sheet rendered as a
@@ -703,10 +708,9 @@ extension ConduitUI {
                 actionPill(systemImage: "arrow.triangle.branch", label: "Fork", tint: neon.accent) {
                     showFork = true
                 }
-                ShareLink(item: transcriptMarkdown) {
-                    actionPillBody(systemImage: "square.and.arrow.up", label: "Export", tint: neon.accent)
+                actionPill(systemImage: "doc.text.magnifyingglass", label: "Recap", tint: neon.accent) {
+                    showRecap = true
                 }
-                .buttonStyle(.plain)
                 actionPill(systemImage: "stop.circle", label: "End", tint: neon.red) {
                     showEndConfirm = true
                 }

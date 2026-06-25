@@ -3021,13 +3021,45 @@ private fun CommandRunTicker(items: List<ConversationItem>) {
                 )
             }
         }
-        // Determinate progress rule (fraction = done / total). Never indeterminate.
-        androidx.compose.material3.LinearProgressIndicator(
-            progress = { fraction },
-            modifier = Modifier.fillMaxWidth(),
-            color = neon.accent2,
-            trackColor = neon.border,
-        )
+        // Determinate progress rule with sheen sweep. Never indeterminate.
+        // The sheen is a narrow horizontal gradient that slides left-to-right
+        // over the bar every 1.5s. Skipped when animator-duration-scale == 0
+        // (system reduced-motion setting).
+        Box(modifier = Modifier.fillMaxWidth()) {
+            androidx.compose.material3.LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier.fillMaxWidth(),
+                color = neon.accent2,
+                trackColor = neon.border,
+            )
+            if (!reduceMotion) {
+                val sheenTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "sheen")
+                val sheenX by sheenTransition.animateFloat(
+                    initialValue = -0.4f,
+                    targetValue = 1.4f,
+                    animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                        animation = androidx.compose.animation.core.tween(
+                            durationMillis = 1500,
+                            easing = androidx.compose.animation.core.LinearEasing,
+                        ),
+                    ),
+                    label = "sheenX",
+                )
+                Spacer(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            Brush.horizontalGradient(
+                                colorStops = arrayOf(
+                                    0.0f to Color.Transparent,
+                                    sheenX.coerceIn(0f, 1f) to neon.accent2.copy(alpha = 0.55f),
+                                    (sheenX + 0.15f).coerceIn(0f, 1f) to Color.Transparent,
+                                ),
+                            ),
+                        ),
+                )
+            }
+        }
     }
 }
 

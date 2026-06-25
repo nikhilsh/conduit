@@ -3380,6 +3380,7 @@ private struct MonoRunningTicker: View {
 
     @State private var elapsedSeconds: Int = 0
     @State private var timerTask: Task<Void, Never>? = nil
+    @State private var sheen: Bool = false
     @Environment(\.neonTheme) private var neon
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -3440,7 +3441,7 @@ private struct MonoRunningTicker: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            // Determinate progress rule.
+            // Determinate progress rule with sheen sweep.
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Rectangle()
@@ -3449,6 +3450,28 @@ private struct MonoRunningTicker: View {
                     Rectangle()
                         .fill(neon.accent2)
                         .frame(width: geo.size.width * progressFraction, height: 1.5)
+                        .overlay(
+                            // Sheen sweep: a narrow gradient that slides left-to-right
+                            // over the filled portion of the bar. Skipped when the
+                            // system has reduced-motion enabled.
+                            Group {
+                                if !reduceMotion {
+                                    LinearGradient(
+                                        colors: [
+                                            Color.clear,
+                                            neon.accent2.opacity(0.7),
+                                            Color.clear,
+                                        ],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                    .frame(width: geo.size.width * 0.35)
+                                    // offset: -1.0 = fully left of bar, 1.5 = fully right
+                                    .offset(x: (sheen ? 1.5 : -1.0) * geo.size.width)
+                                }
+                            }
+                        )
+                        .clipped()
                 }
             }
             .frame(height: 2)
@@ -3473,6 +3496,14 @@ private struct MonoRunningTicker: View {
                     if !Task.isCancelled {
                         elapsedSeconds += 1
                     }
+                }
+            }
+            // Sheen sweep: animate from -1.0 to 1.5 (left-off-screen to
+            // right-off-screen) on a 1.5s linear infinite repeat. Skipped
+            // when reduceMotion is on (the overlay is hidden in that case).
+            if !reduceMotion {
+                withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+                    sheen = true
                 }
             }
         }
