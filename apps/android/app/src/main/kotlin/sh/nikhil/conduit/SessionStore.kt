@@ -2202,6 +2202,21 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     mapOf("server" to serverID, "count" to demoted.toString()))
             }
 
+            // Evict EXITED sessions the broker has GC'd (no longer on disk).
+            // Only runs when fetchLiveSessions() succeeded, so the broker's view
+            // is current. Safe to remove: the server-side file is gone.
+            val brokerKnownIDs = aliveIDs + recoverableIDs
+            val gcEvicted = _savedSessions.value.filter {
+                it.serverId == serverID &&
+                it.status == SavedSessionStatus.EXITED &&
+                it.id !in brokerKnownIDs
+            }
+            if (gcEvicted.isNotEmpty()) {
+                for (s in gcEvicted) removeSavedSession(s.id)
+                Telemetry.breadcrumb("session", "reconcile_gc_evicted",
+                    mapOf("server" to serverID, "count" to gcEvicted.size.toString()))
+            }
+
             // -- 4. CHANGE 4: Auto-resume sessions snapshotted at broker-update
             //    confirm time. Only resume the ids we snapshotted — never
             //    mass-resume arbitrary old recoverable sessions.
