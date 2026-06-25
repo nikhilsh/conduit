@@ -2,9 +2,9 @@
 # install.sh — one-command installer for conduit-broker (server).
 #
 # Usage:
-#   curl -sSL https://github.com/nikhilsh/conduit/releases/latest/download/install.sh | sh
-#   curl -sSL https://github.com/nikhilsh/conduit/releases/latest/download/install.sh | sh -s -- --up [--local]
-#   curl -sSL https://github.com/nikhilsh/conduit/releases/latest/download/install.sh | sudo sh -s -- --service [--addr :1977] [--local]
+#   curl -fsSL https://conduit.kaopeh.com/install.sh | sh
+#   curl -fsSL https://conduit.kaopeh.com/install.sh | sh -s -- --up [--local]
+#   curl -fsSL https://conduit.kaopeh.com/install.sh | sudo sh -s -- --service [--addr :1977] [--local]
 #
 # Flags:
 #   --version <vN.N.N>   pin a specific tag instead of `latest`
@@ -142,22 +142,18 @@ if [ -z "$BIN_DIR" ]; then
 fi
 mkdir -p "$BIN_DIR"
 
-# Pick the release tag.
-if [ -z "$VERSION" ]; then
-    TAG_URL="https://github.com/$REPO/releases/latest"
-else
-    TAG_URL="https://github.com/$REPO/releases/tag/$VERSION"
-fi
-# `releases/latest/download/<asset>` follows the same redirect as a
-# specific tag URL, so this asset URL works for both forms.
+# Pick the release tag. /releases/latest only resolves for non-prerelease
+# releases; all conduit releases are prereleases, so query the API to get the
+# most recent tag when no version is pinned.
 ASSET_NAME="conduit-broker-${OS}-${ARCH}"
 if [ -z "$VERSION" ]; then
-    ASSET="https://github.com/$REPO/releases/latest/download/${ASSET_NAME}"
-    SUMS_URL="https://github.com/$REPO/releases/latest/download/SHA256SUMS"
-else
-    ASSET="https://github.com/$REPO/releases/download/${VERSION}/${ASSET_NAME}"
-    SUMS_URL="https://github.com/$REPO/releases/download/${VERSION}/SHA256SUMS"
+    VERSION=$($FETCH "https://api.github.com/repos/${REPO}/releases?per_page=1" \
+        | grep '"tag_name"' | head -1 \
+        | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+    [ -n "$VERSION" ] || die "could not resolve latest release tag from GitHub API"
 fi
+ASSET="https://github.com/$REPO/releases/download/${VERSION}/${ASSET_NAME}"
+SUMS_URL="https://github.com/$REPO/releases/download/${VERSION}/SHA256SUMS"
 
 TMP="$(mktemp -t conduit-broker.XXXXXX)" || die "mktemp failed"
 trap 'rm -f "$TMP"' EXIT
