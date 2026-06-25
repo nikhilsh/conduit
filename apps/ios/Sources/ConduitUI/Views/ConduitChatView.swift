@@ -3025,11 +3025,16 @@ private struct ConduitToolBundleCard: View {
 
     /// §10 entry point.
     /// While running -> Option-C inline ticker.
-    /// Settled -> collapse block (always starts collapsed).
+    /// Small settled runs (≤ threshold) -> always-expanded inline block (§10 B).
+    /// Large settled runs (> threshold) -> collapsible ledger block (§10b).
+    private static let monoCollapseThreshold = 10
+
     @ViewBuilder
     private var monoBlockBody: some View {
         if anyRunning {
             MonoRunningTicker(items: items)
+        } else if items.count <= Self.monoCollapseThreshold {
+            MonoInlineBlock(items: items, failCount: failCount)
         } else {
             MonoCollapseBlock(items: items, displayItems: displayItems, failCount: failCount)
         }
@@ -3133,7 +3138,65 @@ private struct MonoCommandRow: View {
 }
 
 // ---------------------------------------------------------------------------
-// MonoCollapseBlock — §10 collapsible block, always starts collapsed.
+// MonoInlineBlock — §10 always-expanded flat mono block (B · Mono block).
+// Used for small runs (≤ monoCollapseThreshold).
+// Header: "run  N commands  exit 0 / N failed". Rows: MonoCommandRow.
+// ---------------------------------------------------------------------------
+private struct MonoInlineBlock: View {
+    let items: [ConversationItem]
+    let failCount: Int
+
+    @Environment(\.neonTheme) private var neon
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                Text("run")
+                    .font(.system(size: 10, weight: .bold).monospaced())
+                    .foregroundStyle(neon.textFaint)
+                    .kerning(1.2)
+                Text("  \(items.count) command\(items.count == 1 ? "" : "s")")
+                    .font(.system(size: 10).monospaced())
+                    .foregroundStyle(neon.textFaint)
+                Spacer(minLength: 8)
+                if failCount > 0 {
+                    Text("\(failCount) failed")
+                        .font(.system(size: 10, weight: .semibold).monospaced())
+                        .foregroundStyle(neon.red)
+                } else {
+                    Text("exit 0")
+                        .font(.system(size: 10).monospaced())
+                        .foregroundStyle(neon.textFaint)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            Divider().background(neon.border)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
+                    MonoCommandRow(item: item)
+                    if idx < items.count - 1 {
+                        Divider().background(neon.border)
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius, style: .continuous)
+                .fill(neon.codeBg)
+                .overlay(
+                    RoundedRectangle(cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius, style: .continuous)
+                        .stroke(neon.border, lineWidth: 0.5)
+                )
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MonoCollapseBlock — §10b collapsible block (runs > monoCollapseThreshold).
 // Collapsed: one-line summary. On failure: failed rows inline + footer.
 // Expand: height-capped scrollable ledger with All/Failed filter.
 // ---------------------------------------------------------------------------
