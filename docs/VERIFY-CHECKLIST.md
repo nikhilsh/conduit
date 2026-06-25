@@ -19,6 +19,14 @@ release, the section for that version is the device-test punch list.
 
 - **Pull-to-refresh on home screen (PR #756)** — the main home screen sessions list had no pull-to-refresh gesture; the feature only worked on the Sessions history screen. Added `.refreshable` to `homeList` in `ConduitHomeView.swift` (iOS) and wrapped the sessions `Box` in `PullToRefreshBox` in `HomeScreen.kt` (Android), using the same `reconcileLiveSessions`/`refreshLiveSessions` wiring already present in SessionsScreen/HistoryScreen. Verify: pull down on the home screen — spinner appears and newly started sessions (e.g. from a terminal on the box) appear in the list after the refresh completes. [iOS + Android, needs-device-verify]
 
+**Terminal attach command in session info sheet (iOS + Android).** PR #757.
+
+- **Copyable terminal attach row (PR #757)** — session info (ⓘ) sheet now shows a "Terminal" row in the Details section with a tap-to-copy `conduit-broker chat <session-id>` command. For SSH-paired boxes the full one-liner is `ssh user@host 'CONDUIT_TOKEN=… conduit-broker chat <id>'`; for token-paired boxes the command omits the SSH prefix (user must already be on the box). Verify: open the ⓘ sheet on a live session → Terminal row visible → tap to copy → paste in terminal → attaches to the running session and shows the chat. [iOS + Android, needs-device-verify]
+
+**Website: install.sh served at conduit.kaopeh.com/install.sh.** PR #755.
+
+- **Website install.sh vanity URL (PR #755)** — `conduit.kaopeh.com/install.sh` previously returned 404. The website build now downloads `install.sh` from the current release's GitHub assets and writes it to `out/install.sh`, so `curl -fsSL https://conduit.kaopeh.com/install.sh | sh` works after each website redeploy. [website deploy needed — no app changes]
+
 ---
 
 ## v0.0.198
