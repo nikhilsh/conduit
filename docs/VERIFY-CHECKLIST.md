@@ -9,6 +9,14 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.202
+
+**Terminal row: full command now visible (iOS).** PR #761.
+
+- **Terminal attach command unwrapped (PR #761)** — the Terminal row in Session Info was showing `CONDUIT_TOKEN=<tok>…<end-of-session-id>` (middle-truncated, 2-line limit) making it look like only the token. Removed `lineLimit(2)` and `.truncationMode(.middle)` so the full `CONDUIT_TOKEN=… conduit-broker chat <id>` command wraps across as many lines as needed. Verify: open the ⓘ sheet on a live session → Terminal row shows the complete command (both the `CONDUIT_TOKEN=…` env var and the `conduit-broker chat <id>` suffix are visible); tap to copy → paste in terminal and confirm it connects. [iOS, needs-device-verify]
+
+---
+
 ## v0.0.201
 
 **§10/§10b command-run Mono block — now default ON (iOS + Android).** PR #760.
