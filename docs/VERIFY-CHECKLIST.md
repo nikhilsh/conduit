@@ -9,6 +9,14 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.200
+
+**install.sh prerelease 404 fix.** PR #758.
+
+- **install.sh resolves latest tag via GitHub API (PR #758)** — `curl … install.sh | sh` failed with 404 when downloading the broker binary because the script used `/releases/latest/download/` which GitHub only resolves for non-prerelease releases. All conduit releases are prereleases. Fixed by querying `api.github.com/repos/.../releases?per_page=1` to resolve the current tag, then using the versioned `/releases/download/<tag>/` URL. Also updated header usage comments to reference `conduit.kaopeh.com/install.sh`. [broker-only script change — no app verify needed; verify: `curl -fsSL https://conduit.kaopeh.com/install.sh | sh` installs successfully]
+
+---
+
 ## v0.0.199
 
 **Broker-update banner install URL fix (iOS + Android).** PR #754.
