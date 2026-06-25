@@ -481,11 +481,27 @@ func (s *Server) serveSessionDelete(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
 	}
+
+	// Route git sub-paths before the DELETE-only check.
+	// Paths: /api/session/{id}/git/commit
+	//        /api/session/{id}/git/pr
+	tail := strings.TrimPrefix(r.URL.Path, "/api/session/")
+	if strings.HasSuffix(tail, "/git/commit") {
+		sessionID := strings.TrimSuffix(tail, "/git/commit")
+		s.serveSessionGitCommit(w, r, sessionID)
+		return
+	}
+	if strings.HasSuffix(tail, "/git/pr") {
+		sessionID := strings.TrimSuffix(tail, "/git/pr")
+		s.serveSessionGitPR(w, r, sessionID)
+		return
+	}
+
 	if r.Method != http.MethodDelete {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "DELETE required")
 		return
 	}
-	id := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/api/session/"))
+	id := strings.TrimSpace(tail)
 	if id == "" || strings.Contains(id, "/") {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", "missing or invalid session id")
 		return
