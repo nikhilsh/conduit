@@ -3423,7 +3423,7 @@ private fun MonoCommandBlockCollapsible(items: List<ConversationItem>) {
 // ── Top-level §10 / §10b dispatcher ─────────────────────────────────────────
 
 /** Small runs use the always-expanded inline block; large runs collapse. */
-private const val MONO_COLLAPSE_THRESHOLD = 10
+private const val MONO_COLLAPSE_THRESHOLD = 1
 
 /**
  * Dispatcher for the §10/§10b Mono block. Routes to:

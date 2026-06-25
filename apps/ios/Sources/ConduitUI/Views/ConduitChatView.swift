@@ -3027,7 +3027,7 @@ private struct ConduitToolBundleCard: View {
     /// While running -> Option-C inline ticker.
     /// Small settled runs (≤ threshold) -> always-expanded inline block (§10 B).
     /// Large settled runs (> threshold) -> collapsible ledger block (§10b).
-    private static let monoCollapseThreshold = 10
+    private static let monoCollapseThreshold = 1
 
     @ViewBuilder
     private var monoBlockBody: some View {
