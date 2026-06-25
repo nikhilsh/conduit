@@ -9,6 +9,20 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.203
+
+**DiffReview "Commit & push" / "Open PR" now functional (iOS + Android + broker).** PRs #764 + #766.
+
+- **Broker git endpoints (PR #764)** — adds `POST /api/session/{id}/git/commit` (stages all, commits with message, optional push; returns sha) and `POST /api/session/{id}/git/pr` (runs `gh pr create`; returns URL). Both run in the session workdir, auth-gated, return `{ok, stdout/stderr}`. Verify on broker: call both endpoints via curl on a live session with a dirty git tree; confirm commit lands and PR opens. [broker, needs-verify; **broker redeploy required**]
+- **DiffReview app wiring (PR #766)** — "Commit & push" and "Open PR" buttons in the DiffReview sheet are no longer stubs. Tapping "Commit & push" shows a commit-message input then calls the broker endpoint and shows the resulting SHA. Tapping "Open PR" shows title+body fields, calls the endpoint, and shows the PR URL with an open-in-browser action. Buttons are disabled during inflight requests. Verify: open DiffReview on a session with changes → commit → SHA shown; → Open PR → URL shown. [iOS + Android, needs-device-verify; broker redeploy required]
+
+**Archived session opacity + bulk delete (iOS + Android).** PR #765.
+
+- **Archived session opacity (PR #765)** — archived/ended sessions now render at 0.62 opacity in the History list on both platforms, visually distinguishing them from active sessions (design spec compliance). Verify: open History — ended sessions appear dimmed vs active ones. [iOS + Android, needs-device-verify]
+- **Bulk delete archived sessions (PR #765)** — a trash icon in the History screen top bar (shown only when archived sessions exist) triggers a confirmation dialog then permanently deletes all archived sessions. Verify: archive 2+ sessions → trash button appears → tap → confirm → sessions gone. [iOS + Android, needs-device-verify]
+
+---
+
 ## v0.0.202
 
 **GC'd sessions evicted from local history on reconcile (iOS + Android).** PR #763.

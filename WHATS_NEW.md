@@ -1,4 +1,4 @@
-• Recap: tap ⓘ on any completed session to see a summary of what changed, files touched, commands run, and duration — previously this screen was hidden
-• Running command blocks now show an animated progress bar sheen
-• Fix: terminal attach command in Session Info now shows the full command (no more middle truncation)
-• Command runs now show as a clean code block — single commands expand inline, multiple commands collapse to a summary with failures surfaced
+• DiffReview: "Commit & push" and "Open PR" now work — enter a commit message or PR title and the app commits/creates the PR directly from your box
+• History: swipe to archive is now visually dimmed (archived sessions show at reduced opacity), and a new "Delete All Archived" button clears your history in one tap
+• Recap: tap ⓘ on any completed session → Recap shows what changed, files touched, commands run, and duration
+• Running command blocks now show an animated progress bar
