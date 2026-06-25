@@ -1,5 +1,7 @@
 package sh.nikhil.conduit.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -18,10 +20,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
@@ -31,22 +37,31 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
 import uniffi.conduit_core.ConversationItem
 import uniffi.conduit_core.ProjectSession
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
- * Diff review → commit / PR  (handoff §B.6).
+ * Diff review -> commit / PR  (handoff §B.6).
  *
  * A session's changed files, top to bottom:
  *   1. Summary bar — `N files · +added −removed` + a stacked add/del bar
@@ -56,38 +71,23 @@ import uniffi.conduit_core.ProjectSession
  *      unified diff (mono, +green / −red).
  *   3. Commit bar — message field + `Commit & push` / `Open PR`.
  *
- * HONEST DATA NOTES (see [DiffReviewStats] for the full audit):
- *   • Per-file +/- and the inline diff body are RECOVERED BY PARSING the raw
- *     patch text in the most recent `kind == "diff"` [ConversationItem]
- *     (`content`). Never fabricated. [uniffi.conduit_core.ViewEventFile] only
- *     carries `(path, rev)` — no per-file counts — so when no parseable
- *     `diff` item exists we render the summary bar + distinct paths + an
- *     "Open the chat for the full diff" note instead of inventing hunks.
- *   • There is NO broker/store commit/push/PR method in the bindings today
- *     (grep of `SessionStore` + the UDL finds none). So the two CTAs are
- *     caller-supplied closures ([onCommitPush] / [onOpenPR]), defaulted to
- *     no-ops. WIRE THE BACKEND LATER — inert until a real `commit_push` /
- *     `open_pr` core method lands.
- *
- * HOW TO PRESENT / ENTRY SUGGESTION (caller wires later):
- *   • Push as a full screen from the chat header's "Changes" affordance, OR
- *     add a "Review changes" row to [SessionInfoScreen] that navigates here.
- *     Gate the entry on `session.linesAdded`/`linesRemoved > 0` or a
- *     `kind == "diff"` item existing in `store.conversationLog[session.id]`.
- *   • Mirror of iOS `ConduitUI.DiffReviewView`. Reads `conversationLog` from
- *     the [SessionStore] just like [SessionInfoScreen].
+ * The Commit & push and Open PR buttons call broker endpoints:
+ *   POST /api/session/{id}/git/commit  — broker PR #764
+ *   POST /api/session/{id}/git/pr      — broker PR #764
+ * Both buttons are disabled while an inflight request is in progress.
  */
 @Composable
 fun DiffReviewScreen(
     store: SessionStore,
     session: ProjectSession,
-    onCommitPush: (String) -> Unit = {},
-    onOpenPR: () -> Unit = {},
     onDismiss: () -> Unit = {},
 ) {
     val neon = LocalNeonTheme.current
     val conversationLog by store.conversationLog.collectAsState()
     val displayNames by store.displayNames.collectAsState()
+    val endpoint by store.endpoint.collectAsState()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     val log = conversationLog[session.id].orEmpty()
     val files = remember(log) { DiffReviewStats.files(log) }
@@ -100,6 +100,45 @@ fun DiffReviewScreen(
 
     var commitMessage by remember { mutableStateOf(TextFieldValue("")) }
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
+
+    // Inflight state — buttons are disabled while a request is in flight.
+    var isCommitting by remember { mutableStateOf(false) }
+    var isOpeningPR by remember { mutableStateOf(false) }
+
+    // Dialog state
+    var commitResultSha by remember { mutableStateOf<String?>(null) }
+    var prResultUrl by remember { mutableStateOf<String?>(null) }
+    var showPRInput by remember { mutableStateOf(false) }
+    var prTitle by remember { mutableStateOf("") }
+    var prBody by remember { mutableStateOf("") }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    // Helper: POST to broker and parse {"ok":bool,...} response.
+    // Returns a Result<JSONObject> from an IO dispatcher.
+    fun postToEndpoint(path: String, body: JSONObject): Result<JSONObject> {
+        val base = endpoint.httpBaseUrl ?: return Result.failure(Exception("No active endpoint"))
+        return runCatching {
+            val conn = (URL("$base$path").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                setRequestProperty("Content-Type", "application/json")
+                connectTimeout = 10_000
+                readTimeout = 20_000
+            }
+            try {
+                conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val text = stream?.bufferedReader()?.use { it.readText() } ?: "{}"
+                conn.disconnect()
+                JSONObject(text)
+            } catch (e: Exception) {
+                conn.disconnect()
+                throw e
+            }
+        }
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -206,9 +245,192 @@ fun DiffReviewScreen(
         CommitBar(
             message = commitMessage,
             onMessageChange = { commitMessage = it },
-            onCommitPush = { onCommitPush(commitMessage.text) },
-            onOpenPR = onOpenPR,
+            isCommitting = isCommitting,
+            isOpeningPR = isOpeningPR,
+            onCommitPush = {
+                val msg = commitMessage.text.trim()
+                if (msg.isEmpty()) return@CommitBar
+                isCommitting = true
+                Telemetry.breadcrumb(
+                    "diff-review",
+                    "commit start",
+                    mapOf("session" to session.id, "host" to endpoint.displayHost),
+                )
+                scope.launch {
+                    val body = JSONObject().apply {
+                        put("message", msg)
+                        put("push", true)
+                    }
+                    val result = withContext(Dispatchers.IO) {
+                        postToEndpoint("/api/session/${session.id}/git/commit", body)
+                    }
+                    isCommitting = false
+                    result.onSuccess { json ->
+                        val ok = json.optBoolean("ok", false)
+                        if (ok) {
+                            val sha = json.optString("commit_sha", "(unknown)")
+                            Telemetry.breadcrumb(
+                                "diff-review",
+                                "commit ok",
+                                mapOf("session" to session.id, "sha" to sha),
+                            )
+                            commitMessage = TextFieldValue("")
+                            commitResultSha = sha
+                        } else {
+                            val stderr = json.optString("stderr", "Commit failed")
+                            Telemetry.diagnostic(
+                                "diff-review commit failed",
+                                tags = mapOf("surface" to "android", "phase" to "diff-review"),
+                                extras = mapOf("session" to session.id, "stderr" to stderr),
+                            )
+                            errorMessage = stderr
+                        }
+                    }.onFailure { e ->
+                        Telemetry.capture(
+                            error = e,
+                            message = "diff-review commit network error",
+                            tags = mapOf("surface" to "android", "phase" to "diff-review"),
+                            extras = mapOf("session" to session.id),
+                        )
+                        errorMessage = e.message ?: "Network error"
+                    }
+                }
+            },
+            onOpenPR = {
+                prTitle = ""
+                prBody = ""
+                showPRInput = true
+            },
             neon = neon,
+        )
+    }
+
+    // PR input dialog
+    if (showPRInput) {
+        AlertDialog(
+            onDismissRequest = { showPRInput = false },
+            title = { Text("Open Pull Request") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = prTitle,
+                        onValueChange = { prTitle = it },
+                        label = { Text("Title (required)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = prBody,
+                        onValueChange = { prBody = it },
+                        label = { Text("Description (optional)") },
+                        minLines = 3,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = prTitle.trim().isNotEmpty(),
+                    onClick = {
+                        showPRInput = false
+                        val title = prTitle.trim()
+                        isOpeningPR = true
+                        Telemetry.breadcrumb(
+                            "diff-review",
+                            "open-pr start",
+                            mapOf("session" to session.id, "host" to endpoint.displayHost),
+                        )
+                        scope.launch {
+                            val body = JSONObject().apply {
+                                put("title", title)
+                                put("body", prBody)
+                            }
+                            val result = withContext(Dispatchers.IO) {
+                                postToEndpoint("/api/session/${session.id}/git/pr", body)
+                            }
+                            isOpeningPR = false
+                            result.onSuccess { json ->
+                                val ok = json.optBoolean("ok", false)
+                                if (ok) {
+                                    val url = json.optString("pr_url", "")
+                                    Telemetry.breadcrumb(
+                                        "diff-review",
+                                        "open-pr ok",
+                                        mapOf("session" to session.id, "url" to url),
+                                    )
+                                    prResultUrl = url
+                                } else {
+                                    val stderr = json.optString("stderr", "Failed to open PR")
+                                    Telemetry.diagnostic(
+                                        "diff-review open-pr failed",
+                                        tags = mapOf("surface" to "android", "phase" to "diff-review"),
+                                        extras = mapOf("session" to session.id, "stderr" to stderr),
+                                    )
+                                    errorMessage = stderr
+                                }
+                            }.onFailure { e ->
+                                Telemetry.capture(
+                                    error = e,
+                                    message = "diff-review open-pr network error",
+                                    tags = mapOf("surface" to "android", "phase" to "diff-review"),
+                                    extras = mapOf("session" to session.id),
+                                )
+                                errorMessage = e.message ?: "Network error"
+                            }
+                        }
+                    },
+                ) { Text("Open PR") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPRInput = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    // Commit success dialog
+    commitResultSha?.let { sha ->
+        AlertDialog(
+            onDismissRequest = { commitResultSha = null },
+            title = { Text("Committed") },
+            text = { Text("SHA: $sha") },
+            confirmButton = {
+                TextButton(onClick = { commitResultSha = null }) { Text("OK") }
+            },
+        )
+    }
+
+    // PR success dialog — shows URL and an "Open" button
+    prResultUrl?.let { url ->
+        AlertDialog(
+            onDismissRequest = { prResultUrl = null },
+            title = { Text("Pull Request Opened") },
+            text = { Text(url) },
+            confirmButton = {
+                TextButton(onClick = {
+                    prResultUrl = null
+                    runCatching {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                }) { Text("Open") }
+            },
+            dismissButton = {
+                TextButton(onClick = { prResultUrl = null }) { Text("OK") }
+            },
+        )
+    }
+
+    // Error dialog
+    errorMessage?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { errorMessage = null },
+            title = { Text("Error") },
+            text = { Text(msg) },
+            confirmButton = {
+                TextButton(onClick = { errorMessage = null }) { Text("OK") }
+            },
         )
     }
 }
@@ -357,6 +579,8 @@ private fun FallbackNote(text: String, neon: NeonTheme) {
 private fun CommitBar(
     message: TextFieldValue,
     onMessageChange: (TextFieldValue) -> Unit,
+    isCommitting: Boolean,
+    isOpeningPR: Boolean,
     onCommitPush: () -> Unit,
     onOpenPR: () -> Unit,
     neon: NeonTheme,
@@ -390,7 +614,7 @@ private fun CommitBar(
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-            val canCommit = message.text.isNotBlank()
+            val canCommit = message.text.isNotBlank() && !isCommitting && !isOpeningPR
             Surface(
                 shape = RoundedCornerShape(50),
                 color = neon.green.copy(alpha = if (canCommit) 1f else 0.55f),
@@ -398,30 +622,63 @@ private fun CommitBar(
                     .weight(1f)
                     .let { if (canCommit) it.clickable(onClick = onCommitPush) else it },
             ) {
-                Text(
-                    "Commit & push",
+                Row(
                     modifier = Modifier.padding(vertical = 12.dp),
-                    fontFamily = neon.mono,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 13.sp,
-                    color = neon.accentText,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (isCommitting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .height(14.dp)
+                                .width(14.dp),
+                            color = neon.accentText,
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(
+                        if (isCommitting) "Committing..." else "Commit & push",
+                        fontFamily = neon.mono,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = neon.accentText,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                }
             }
+            val canPR = !isCommitting && !isOpeningPR
             Surface(
                 shape = RoundedCornerShape(50),
                 color = neon.surface,
-                modifier = Modifier.weight(1f).clickable(onClick = onOpenPR),
+                modifier = Modifier
+                    .weight(1f)
+                    .let { if (canPR) it.clickable(onClick = onOpenPR) else it },
             ) {
-                Text(
-                    "Open PR",
+                Row(
                     modifier = Modifier.padding(vertical = 12.dp),
-                    fontFamily = neon.mono,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 13.sp,
-                    color = neon.accent,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (isOpeningPR) {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .height(14.dp)
+                                .width(14.dp),
+                            color = neon.accent,
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(
+                        if (isOpeningPR) "Opening..." else "Open PR",
+                        fontFamily = neon.mono,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = neon.accent,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                }
             }
         }
     }
@@ -539,7 +796,7 @@ object DiffReviewStats {
         return files.filter { !(it.path.isEmpty() && it.added == 0 && it.removed == 0 && it.lines.isEmpty()) }
     }
 
-    /** `diff --git a/src/x.ts b/src/x.ts` → `src/x.ts` (prefers the b-side). */
+    /** `diff --git a/src/x.ts b/src/x.ts` -> `src/x.ts` (prefers the b-side). */
     fun pathFromGitHeader(line: String): String {
         val rest = line.removePrefix("diff --git ")
         val parts = rest.split(" ", limit = 2)
@@ -547,7 +804,7 @@ object DiffReviewStats {
         return stripABPrefix(parts[1])
     }
 
-    /** `+++ b/src/x.ts` → `src/x.ts`. Trims a trailing tab-timestamp. */
+    /** `+++ b/src/x.ts` -> `src/x.ts`. Trims a trailing tab-timestamp. */
     fun pathFromTripleHeader(line: String): String {
         var rest = line.removePrefix("+++ ")
         val tab = rest.indexOf('\t')

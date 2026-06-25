@@ -17,21 +17,9 @@ import SwiftUI
 //     `(path, rev)` — no per-file counts — so when no parseable `diff` item
 //     exists we render the summary bar + the distinct file paths + a
 //     "Open the chat for the full diff" note instead of inventing hunks.
-//   • There is **no broker/store commit/push/PR method** in the bindings
-//     today (grep of `SessionStore` + the UDL finds none). So the two CTAs
-//     are caller-supplied closures (`onCommitPush` / `onOpenPR`), defaulted
-//     to no-ops. WIRE THE BACKEND ACTION LATER — the buttons are inert until
-//     a real `commit_push` / `open_pr` core method lands.
-//
-// HOW TO PRESENT / ENTRY SUGGESTION (caller wires later):
-//   • Push as a full screen (`NavigationStack` push) from the chat header's
-//     "Changes" affordance, OR add a "Review changes" row to the Session
-//     Info sheet (`ConduitSessionInfoView`) that pushes this. Gate the entry
-//     on `session.linesAdded`/`linesRemoved` > 0 or a `kind == "diff"` item
-//     existing in `store.conversationLog[session.id]` so it only appears when
-//     there's something to review.
-//   • Reads `@Environment(SessionStore.self)` for `conversationLog` — same
-//     access pattern as `ConduitSessionInfoView`.
+//   • Commit/push and Open PR call the broker via
+//     `POST /api/session/{id}/git/commit` and `POST /api/session/{id}/git/pr`
+//     respectively (broker PR #764). Both endpoints return `{"ok":bool,...}`.
 
 extension ConduitUI {
 
@@ -42,18 +30,30 @@ extension ConduitUI {
 
         let session: ProjectSession
 
-        /// Commit message + "Commit & push" tap. Default no-op — the backend
-        /// action does not exist yet (see header note); the caller wires a
-        /// real handler once a core `commit_push` method lands.
-        var onCommitPush: (String) -> Void = { _ in }
-        /// "Open PR" tap. Default no-op for the same reason.
-        var onOpenPR: () -> Void = {}
         /// Hosted inline (tablet right pane) rather than as a pushed screen →
         /// drop the leading back button.
         var embedded: Bool = false
 
         @State private var commitMessage: String = ""
         @State private var expanded: Set<String> = []
+
+        // MARK: Inflight state
+        @State private var isCommitting = false
+        @State private var isOpeningPR = false
+
+        // MARK: Commit result alert
+        @State private var commitAlert: CommitAlert? = nil
+
+        // MARK: PR sheet
+        @State private var showPRSheet = false
+        @State private var prTitle: String = ""
+        @State private var prBody: String = ""
+
+        // MARK: PR result alert
+        @State private var prAlert: PRAlert? = nil
+
+        // MARK: Error alert (shared)
+        @State private var errorAlert: ErrorAlert? = nil
 
         private var log: [ConversationItem] { store.conversationLog[session.id] ?? [] }
         private var files: [ConduitUI.DiffFile] { ConduitUI.DiffReviewModel.files(from: log) }
@@ -81,6 +81,46 @@ extension ConduitUI {
             }
             .navigationTitle("Changes")
             .navigationBarTitleDisplayMode(.inline)
+            // Commit result alert
+            .alert("Committed", isPresented: Binding(
+                get: { commitAlert != nil },
+                set: { if !$0 { commitAlert = nil } }
+            )) {
+                Button("OK") { commitAlert = nil }
+            } message: {
+                if let a = commitAlert {
+                    Text("SHA: \(a.sha)")
+                }
+            }
+            // Error alert (commit or PR failure)
+            .alert("Error", isPresented: Binding(
+                get: { errorAlert != nil },
+                set: { if !$0 { errorAlert = nil } }
+            )) {
+                Button("OK") { errorAlert = nil }
+            } message: {
+                if let a = errorAlert {
+                    Text(a.message)
+                }
+            }
+            // PR URL result alert — shows URL and an "Open in Safari" button
+            .alert("Pull Request Opened", isPresented: Binding(
+                get: { prAlert != nil },
+                set: { if !$0 { prAlert = nil } }
+            )) {
+                if let a = prAlert, let url = URL(string: a.prUrl) {
+                    Link("Open in Safari", destination: url)
+                }
+                Button("OK") { prAlert = nil }
+            } message: {
+                if let a = prAlert {
+                    Text(a.prUrl)
+                }
+            }
+            // PR input sheet
+            .sheet(isPresented: $showPRSheet) {
+                prInputSheet
+            }
         }
 
         // MARK: Header (display name + branch chip)
@@ -320,33 +360,59 @@ extension ConduitUI {
                             .overlay(RoundedRectangle(cornerRadius: 10).stroke(neon.border, lineWidth: 1))
                     )
                 HStack(spacing: 10) {
+                    let canCommit = !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        && !isCommitting && !isOpeningPR
                     Button {
-                        onCommitPush(commitMessage)
+                        commitAndPush()
                     } label: {
-                        Label("Commit & push", systemImage: "arrow.up.circle.fill")
-                            .font(neon.mono(13).weight(.semibold))
-                            .foregroundStyle(neon.accentText)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Capsule().fill(neon.green))
-                            .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.green) : nil)
+                        HStack(spacing: 6) {
+                            if isCommitting {
+                                ProgressView()
+                                    .progressViewStyle(.circular)
+                                    .tint(neon.accentText)
+                                    .scaleEffect(0.7)
+                            } else {
+                                Image(systemName: "arrow.up.circle.fill")
+                                    .font(.system(size: 14, weight: .semibold))
+                            }
+                            Text(isCommitting ? "Committing..." : "Commit & push")
+                                .font(neon.mono(13).weight(.semibold))
+                        }
+                        .foregroundStyle(neon.accentText)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Capsule().fill(neon.green.opacity(canCommit ? 1 : 0.55)))
+                        .neonGlowBox(neon.glow && canCommit ? neon.glowBox?.tinted(neon.green) : nil)
                     }
                     .buttonStyle(.plain)
-                    .disabled(commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .opacity(commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.55 : 1)
+                    .disabled(!canCommit)
 
                     Button {
-                        onOpenPR()
+                        prTitle = ""
+                        prBody = ""
+                        showPRSheet = true
                     } label: {
-                        Label("Open PR", systemImage: "arrow.triangle.pull")
-                            .font(neon.mono(13).weight(.semibold))
-                            .foregroundStyle(neon.accent)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Capsule().fill(neon.surface))
-                            .overlay(Capsule().stroke(neon.borderStrong, lineWidth: 1))
+                        HStack(spacing: 6) {
+                            if isOpeningPR {
+                                ProgressView()
+                                    .progressViewStyle(.circular)
+                                    .tint(neon.accent)
+                                    .scaleEffect(0.7)
+                            } else {
+                                Image(systemName: "arrow.triangle.pull")
+                                    .font(.system(size: 14, weight: .semibold))
+                            }
+                            Text(isOpeningPR ? "Opening..." : "Open PR")
+                                .font(neon.mono(13).weight(.semibold))
+                        }
+                        .foregroundStyle(neon.accent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Capsule().fill(neon.surface))
+                        .overlay(Capsule().stroke(neon.borderStrong, lineWidth: 1))
                     }
                     .buttonStyle(.plain)
+                    .disabled(isCommitting || isOpeningPR)
                 }
             }
             .padding(.horizontal, 16)
@@ -354,6 +420,251 @@ extension ConduitUI {
             .padding(.bottom, 12)
             .background(.ultraThinMaterial)
             .overlay(alignment: .top) { Divider().background(neon.border) }
+        }
+
+        // MARK: PR input sheet
+
+        private var prInputSheet: some View {
+            NavigationStack {
+                ZStack {
+                    GlassAppBackground()
+                    VStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("PR Title")
+                                .font(neon.mono(11).weight(.semibold))
+                                .foregroundStyle(neon.textDim)
+                                .textCase(.uppercase)
+                            TextField("Title (required)", text: $prTitle)
+                                .font(neon.sans(14))
+                                .foregroundStyle(neon.text)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(neon.surface2)
+                                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(neon.border, lineWidth: 1))
+                                )
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Description (optional)")
+                                .font(neon.mono(11).weight(.semibold))
+                                .foregroundStyle(neon.textDim)
+                                .textCase(.uppercase)
+                            TextField("Body", text: $prBody, axis: .vertical)
+                                .font(neon.sans(14))
+                                .foregroundStyle(neon.text)
+                                .lineLimit(4...8)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(neon.surface2)
+                                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(neon.border, lineWidth: 1))
+                                )
+                        }
+                        Spacer()
+                    }
+                    .padding(16)
+                }
+                .navigationTitle("Open Pull Request")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showPRSheet = false }
+                            .foregroundStyle(neon.textDim)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Open PR") {
+                            showPRSheet = false
+                            openPR()
+                        }
+                        .font(neon.sans(14).weight(.semibold))
+                        .foregroundStyle(neon.accent)
+                        .disabled(prTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }
+            .environment(\.neonTheme, neon)
+        }
+
+        // MARK: - API calls
+
+        /// POST /api/session/{id}/git/commit {"message": ..., "push": true}
+        private func commitAndPush() {
+            let msg = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !msg.isEmpty else { return }
+
+            let endpoint = store.endpoint
+            guard endpoint.isComplete, let base = endpoint.httpBaseURL else {
+                errorAlert = ErrorAlert(message: "No active endpoint")
+                return
+            }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/session/\(session.id)/git/commit"
+            guard let url = components?.url else {
+                errorAlert = ErrorAlert(message: "Bad URL")
+                return
+            }
+
+            isCommitting = true
+            Telemetry.breadcrumb("diff-review", "commit start",
+                data: ["session": session.id, "host": endpoint.displayHost])
+
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 30
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            struct CommitBody: Encodable {
+                let message: String
+                let push: Bool
+            }
+            guard let body = try? JSONEncoder().encode(CommitBody(message: msg, push: true)) else {
+                isCommitting = false
+                errorAlert = ErrorAlert(message: "Encoding error")
+                return
+            }
+            req.httpBody = body
+
+            Task { @MainActor in
+                defer { isCommitting = false }
+                do {
+                    let (data, resp) = try await URLSession.shared.data(for: req)
+                    guard let http = resp as? HTTPURLResponse else {
+                        errorAlert = ErrorAlert(message: "Invalid response")
+                        return
+                    }
+                    struct CommitResponse: Decodable {
+                        let ok: Bool
+                        let stderr: String?
+                        let commit_sha: String?
+                    }
+                    let parsed = try? JSONDecoder().decode(CommitResponse.self, from: data)
+                    if http.statusCode >= 200 && http.statusCode < 300, let r = parsed, r.ok {
+                        let sha = r.commit_sha ?? "(unknown)"
+                        Telemetry.breadcrumb("diff-review", "commit ok",
+                            data: ["session": session.id, "sha": sha])
+                        commitMessage = ""
+                        commitAlert = CommitAlert(sha: sha)
+                    } else {
+                        let detail = parsed?.stderr ?? "HTTP \(http.statusCode)"
+                        Telemetry.capture(
+                            error: NSError(domain: "ios.diff-review", code: 1,
+                                userInfo: [NSLocalizedDescriptionKey: "commit failed"]),
+                            message: "diff-review commit failed",
+                            tags: ["surface": "ios", "phase": "diff-review"],
+                            extras: ["session": session.id, "status": "\(http.statusCode)",
+                                     "stderr": detail]
+                        )
+                        errorAlert = ErrorAlert(message: detail)
+                    }
+                } catch {
+                    Telemetry.capture(
+                        error: error,
+                        message: "diff-review commit network error",
+                        tags: ["surface": "ios", "phase": "diff-review"],
+                        extras: ["session": session.id]
+                    )
+                    errorAlert = ErrorAlert(message: error.localizedDescription)
+                }
+            }
+        }
+
+        /// POST /api/session/{id}/git/pr {"title": ..., "body": ...}
+        private func openPR() {
+            let title = prTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { return }
+
+            let endpoint = store.endpoint
+            guard endpoint.isComplete, let base = endpoint.httpBaseURL else {
+                errorAlert = ErrorAlert(message: "No active endpoint")
+                return
+            }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/session/\(session.id)/git/pr"
+            guard let url = components?.url else {
+                errorAlert = ErrorAlert(message: "Bad URL")
+                return
+            }
+
+            isOpeningPR = true
+            Telemetry.breadcrumb("diff-review", "open-pr start",
+                data: ["session": session.id, "host": endpoint.displayHost])
+
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 30
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            struct PRBody: Encodable {
+                let title: String
+                let body: String
+            }
+            guard let bodyData = try? JSONEncoder().encode(PRBody(title: title, body: prBody)) else {
+                isOpeningPR = false
+                errorAlert = ErrorAlert(message: "Encoding error")
+                return
+            }
+            req.httpBody = bodyData
+
+            Task { @MainActor in
+                defer { isOpeningPR = false }
+                do {
+                    let (data, resp) = try await URLSession.shared.data(for: req)
+                    guard let http = resp as? HTTPURLResponse else {
+                        errorAlert = ErrorAlert(message: "Invalid response")
+                        return
+                    }
+                    struct PRResponse: Decodable {
+                        let ok: Bool
+                        let pr_url: String?
+                        let stderr: String?
+                    }
+                    let parsed = try? JSONDecoder().decode(PRResponse.self, from: data)
+                    if http.statusCode >= 200 && http.statusCode < 300, let r = parsed, r.ok,
+                       let prUrl = r.pr_url {
+                        Telemetry.breadcrumb("diff-review", "open-pr ok",
+                            data: ["session": session.id, "url": prUrl])
+                        prAlert = PRAlert(prUrl: prUrl)
+                    } else {
+                        let detail = parsed?.stderr ?? "HTTP \(http.statusCode)"
+                        Telemetry.capture(
+                            error: NSError(domain: "ios.diff-review", code: 2,
+                                userInfo: [NSLocalizedDescriptionKey: "open PR failed"]),
+                            message: "diff-review open-pr failed",
+                            tags: ["surface": "ios", "phase": "diff-review"],
+                            extras: ["session": session.id, "status": "\(http.statusCode)",
+                                     "stderr": detail]
+                        )
+                        errorAlert = ErrorAlert(message: detail)
+                    }
+                } catch {
+                    Telemetry.capture(
+                        error: error,
+                        message: "diff-review open-pr network error",
+                        tags: ["surface": "ios", "phase": "diff-review"],
+                        extras: ["session": session.id]
+                    )
+                    errorAlert = ErrorAlert(message: error.localizedDescription)
+                }
+            }
+        }
+
+        // MARK: Alert models
+
+        private struct CommitAlert: Identifiable {
+            let id = UUID()
+            let sha: String
+        }
+
+        private struct PRAlert: Identifiable {
+            let id = UUID()
+            let prUrl: String
+        }
+
+        private struct ErrorAlert: Identifiable {
+            let id = UUID()
+            let message: String
         }
     }
 }
