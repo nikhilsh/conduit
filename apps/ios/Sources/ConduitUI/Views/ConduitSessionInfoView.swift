@@ -37,6 +37,7 @@ extension ConduitUI {
         @State private var showEndConfirm = false
         @State private var compactRequested = false
         @State private var showEarlierAgents = false
+        @State private var terminalCopied = false
 
         var body: some View {
             if embedded {
@@ -611,6 +612,8 @@ extension ConduitUI {
                         hairline
                         detailRow("Worktree", wt, mono: true)
                     }
+                    hairline
+                    copyableDetailRow("Terminal", terminalAttachCmd)
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -635,6 +638,44 @@ extension ConduitUI {
                     .lineLimit(2)
                     .truncationMode(.middle)
             }
+        }
+
+        private func copyableDetailRow(_ label: String, _ cmd: String) -> some View {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(label)
+                    .font(neon.sans(13).weight(.semibold))
+                    .foregroundStyle(neon.textDim)
+                Spacer(minLength: 12)
+                Text(terminalCopied ? "Copied!" : cmd)
+                    .font(neon.mono(12))
+                    .foregroundStyle(terminalCopied ? neon.green : neon.text)
+                    .multilineTextAlignment(.trailing)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                UIPasteboard.general.string = cmd
+                terminalCopied = true
+                Task {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    terminalCopied = false
+                }
+            }
+        }
+
+        /// Builds the terminal attach command for this session.
+        /// SSH-paired box: `ssh <user>@<host> [-p <port>] 'CONDUIT_TOKEN=<tok> conduit-broker chat <id>'`
+        /// Token-paired box: `CONDUIT_TOKEN=<tok> conduit-broker chat <id>`
+        private var terminalAttachCmd: String {
+            let token = store.endpoint.token
+            let sessionID = session.id
+            let innerCmd = "CONDUIT_TOKEN=\(token) conduit-broker chat \(sessionID)"
+            if let ssh = store.savedServers.first(where: { $0.endpoint == store.endpoint })?.ssh {
+                let portFlag = ssh.port != 22 ? " -p \(ssh.port)" : ""
+                return "ssh \(ssh.username)@\(ssh.host)\(portFlag) '\(innerCmd)'"
+            }
+            return innerCmd
         }
 
         /// `<host> · broker`. No round-trip latency is surfaced anywhere in
