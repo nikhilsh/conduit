@@ -55,7 +55,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -64,10 +67,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
+import sh.nikhil.conduit.Endpoint
+import sh.nikhil.conduit.SavedServer
 import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.SubagentEntry
@@ -454,6 +461,9 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                             Hairline(neon)
                             InfoDetailRow("Worktree", liveWorktree, neon)
                         }
+                        Hairline(neon)
+                        val terminalCmd = terminalAttachCmd(endpoint, savedServers, session.id)
+                        CopyableInfoDetailRow("Terminal", terminalCmd, neon)
                     }
                 }
             }
@@ -946,6 +956,38 @@ private fun InfoDetailRow(label: String, value: String, neon: NeonTheme) {
 }
 
 @Composable
+private fun CopyableInfoDetailRow(label: String, cmd: String, neon: NeonTheme) {
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var copied by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                clipboard.setText(AnnotatedString(cmd))
+                copied = true
+                scope.launch {
+                    delay(2000L)
+                    copied = false
+                }
+            },
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, fontFamily = neon.sans, color = neon.textDim)
+        Spacer(Modifier.width(12.dp))
+        Text(
+            if (copied) "Copied!" else cmd,
+            style = MaterialTheme.typography.bodyMedium,
+            fontFamily = neon.mono,
+            color = if (copied) neon.green else neon.text,
+            modifier = Modifier.weight(1f, fill = false),
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+        )
+    }
+}
+
+@Composable
 private fun Hairline(neon: NeonTheme) {
     Spacer(Modifier.height(9.dp))
     Box(Modifier.fillMaxWidth().height(1.dp).background(neon.border))
@@ -970,6 +1012,19 @@ private fun ActionPill(icon: ImageVector, label: String, tint: Color, modifier: 
             Text(label, style = MaterialTheme.typography.labelLarge, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, color = tint)
         }
     }
+}
+
+/**
+ * Builds the terminal attach command for a session.
+ * SSH-paired box: `ssh <user>@<host> [-p <port>] 'CONDUIT_TOKEN=<tok> conduit-broker chat <id>'`
+ * Token-paired box: `CONDUIT_TOKEN=<tok> conduit-broker chat <id>`
+ */
+private fun terminalAttachCmd(endpoint: Endpoint, savedServers: List<SavedServer>, sessionId: String): String {
+    val token = endpoint.token
+    val innerCmd = "CONDUIT_TOKEN=$token conduit-broker chat $sessionId"
+    val ssh = savedServers.firstOrNull { it.endpoint == endpoint }?.ssh ?: return innerCmd
+    val portFlag = if (ssh.port.toInt() != 22) " -p ${ssh.port}" else ""
+    return "ssh ${ssh.username}@${ssh.host}$portFlag '$innerCmd'"
 }
 
 private fun modelLine(agent: String, effort: String?): String =
