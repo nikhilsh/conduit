@@ -73,6 +73,9 @@ jobs:
         run: |
           if [ -n "${{ github.event.inputs.release_tag }}" ]; then
             tag="${{ github.event.inputs.release_tag }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            # triggered on a plain vX.Y.Z release tag — use it directly
+            tag="${GITHUB_REF_NAME}"
           elif [[ "${GITHUB_REF}" == refs/tags/tf-* ]]; then
             # strip the tf- prefix so the stamped version is plain vX.Y.Z
             tag="${GITHUB_REF_NAME#tf-}"
