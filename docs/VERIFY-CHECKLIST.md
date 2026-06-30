@@ -9,6 +9,17 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.204
+
+**FanOut compare + Pipeline Builder/Monitor (iOS). PR #776.**
+
+- **FanOut compare view (iOS)** — `ConduitFanOutCompareView` shows per-run diff stats (`N files · +X −Y`), expandable `diff_stat` mono block, `agent_summary` (1–2 lines), and **Open** / **Commit & PR** action buttons. Failed runs render greyed with error reason. `onCompare` wired in host via tracked session IDs derived from `store.sessions`. [iOS, needs-device-verify]
+- **Pipeline Builder (iOS)** — `ConduitPipelineBuilderView`: create a multi-step pipeline (title, task, ordered steps with agent type / role / prompt template / gate toggle). "Start pipeline" calls `POST /api/pipeline`. [iOS, needs-device-verify; **broker redeploy required for pipeline endpoints**]
+- **Pipeline Monitor (iOS)** — `ConduitPipelineMonitorView`: vertical stepper showing each step's live state (queued / running / awaiting-gate / done / failed); polls `GET /api/pipeline/{id}`; **Continue** button on gate; **Open session** on failure. [iOS, needs-device-verify]
+- **Gap A named-branch sessions (iOS)** — `ConduitUI.FanOutView` now tracks launched session IDs derived from `store.sessions` by branch name; `onCompare` receives populated `FanOutRun` list and can call the compare endpoint. [iOS, needs-device-verify]
+
+---
+
 ## v0.0.203
 
 **Settings cleanup for App Store prep (iOS + Android).** PR #768.

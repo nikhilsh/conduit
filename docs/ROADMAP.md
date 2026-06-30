@@ -5,7 +5,7 @@ the detailed forward-looking specs live in the active `PLAN-*.md` docs (linked
 below), and the frozen wire/lifecycle contracts live in their own references.
 Completed plans are archived under `docs/archive/` once their work ships.
 
-Last updated: 2026-06-25 (v0.0.200).
+Last updated: 2026-06-30 (v0.0.204+).
 
 **Lifecycle:** [ROADMAP.md](ROADMAP.md) (backlog) →
 [IN-PROGRESS.md](IN-PROGRESS.md) (building) →
@@ -40,18 +40,6 @@ For wire-level / lifecycle / adapter detail, read the frozen contracts:
   concurrent links = architect-scale refactor (per-box session/harness/usage
   state, merged session lists, reconnect fan-out).
 
-- **DiffReview "Commit & push" / "Open PR" actions** — both iOS
-  (`ConduitDiffReviewView.swift:23`) and Android (`DiffReviewScreen.kt:69`)
-  render the action buttons as explicit no-ops ("WIRE THE BACKEND LATER").
-  Broker needs `POST /api/session/{id}/git/commit` (message + push:bool) and
-  `POST /api/session/{id}/git/pr` (title + body); apps then connect the
-  callbacks. User can view diffs today but cannot commit or open a PR from the
-  app.
-
-- **Archived session opacity** — design spec (screens2.jsx) shows archived
-  session rows at 0.62 opacity. Not confirmed as consistently applied on both
-  platforms. Small visual-consistency fix; no backend work required.
-
 - **Cross-box agent OAuth sync** — sign an agent in (e.g. claude OAuth) on one
   box and have that credential propagate to every paired box, with refresh
   rebroadcast, so you don't re-authenticate per box. Shape: fan the agent OAuth
@@ -65,16 +53,6 @@ For wire-level / lifecycle / adapter detail, read the frozen contracts:
 - **Google Play distribution** — AAB build, data-safety form, Play-signing SHA
   into the Firebase API-key restriction. Needs the owner's Play dev account;
   the AAB build pipeline is the codeable part.
-
-- **FanOut "Compare & keep best"** — `FanOutScreen.kt:338` renders the
-  "Compare & keep best" button but `onCompare` is a no-op ("no backend yet").
-  Depends on True multi-box connect (above) to have N live results to compare.
-  Unblock after the concurrent-links refactor ships.
-
-- **Bulk delete archived sessions** — design spec shows a trash-icon affordance
-  in the History screen for permanently deleting all archived sessions; neither
-  iOS nor Android expose it today. Needs a broker `DELETE /api/sessions/archived`
-  endpoint (or a client-side loop over the existing per-session delete).
 
 ### Deferred
 
