@@ -9,6 +9,25 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.205
+
+**Command run block — collapse threshold + checkmark exit (iOS + Android). PR #779.**
+
+- **Mono tool-bundle collapse threshold 1 → 9** — runs of ≤9 items always expand inline; runs of 10+ collapse into the ledger block. `CommandRunBlockLogic.collapseThreshold = 9` / `shouldCollapse(count:)` shared between production code and tests. Android `MONO_COLLAPSE_THRESHOLD` raised to match. [iOS + Android, needs-device-verify]
+- **"exit 0" → "✓"** — inline block shows a checkmark instead of the "exit 0" text label. Android parity. [iOS + Android, needs-device-verify]
+- **Mono Command Block settings toggle** — new toggle in Settings (iOS + Android); default OFF. [iOS + Android, needs-device-verify]
+- **Telemetry breadcrumbs** — mono-block render breadcrumb on appear. [iOS + Android]
+
+**Shared credential lineage — MaterializeCanonical + startup seed + env strip (broker). PR #780.**
+
+- **`MaterializeCanonical`** — new `credentials.Store` method writes the credential blob directly into the provider-native config dir (not under a per-session HOME subtree); used by the `CONDUIT_SHARED_AGENT_CREDS` flag-ON path. [broker, **redeploy required**]
+- **`SeedSharedCredentialsAtStartup`** — broker seeds the canonical credential files at startup so broker-side fetchers can read them before the first session spawns. [broker, **redeploy required**]
+- **Env strip in `lifecycle.go`** — `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are stripped unconditionally from inherited env before re-injection, preventing stale deployment values from leaking into sessions. [broker, **redeploy required**]
+- **`cleanupAgentHomeCredentials` no-op under flag-ON** — skips credential removal when `CONDUIT_SHARED_AGENT_CREDS=1` since no per-session credential copy exists. [broker]
+- **Test fixes** — `TestSharedCreds_FlagOff_CodexHomeIsPerSession` checks `sharedCredConfigEnv == nil` instead of asserting `CLAUDE_CONFIG_DIR` absent (which was wrong); `TestCleanupAgentHomeKeepsConversations` pins `CONDUIT_SHARED_AGENT_CREDS=""` to exercise the flag-OFF path in envs where flag is live. [broker]
+
+---
+
 ## v0.0.204
 
 **Sequential agent pipeline — broker. PR #774.**
