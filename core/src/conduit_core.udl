@@ -27,6 +27,9 @@ dictionary SessionStatus {
     // broker predates this field (clients then fall back to inferring the
     // working state from the conversation log's trailing role).
     boolean? turn_active = null;
+    // Sub-state of an in-flight turn: "writing" | "working" | "thinking".
+    // null when no turn is active or the broker predates the field.
+    string? turn_phase = null;
     string? reasoning_effort;
     string? cwd;
     string? started_at;

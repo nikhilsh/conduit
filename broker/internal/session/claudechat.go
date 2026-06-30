@@ -189,7 +189,7 @@ func encodeClaudeUserMessage(text string) ([]byte, error) {
 // generator (task: ai-session-titles) which mints/refines the session
 // name from the conversation. gen / titleGen may be nil (feature disabled
 // / non-claude), in which case turn-end is a no-op for that one.
-func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta), onControl func(controlRequest, string), onInit func(string), onTurnEnd func(), onSubagent *subagentRegistryHandle) error {
+func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta), onControl func(controlRequest, string), onInit func(string), onTurnEnd func(), onSubagent *subagentRegistryHandle, onTurnPhase func(string)) error {
 	sc := bufio.NewScanner(r)
 	// Assistant turns can be large; raise the line cap well past bufio's
 	// 64KB default.
@@ -286,6 +286,21 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 			continue
 		}
 		for _, e := range evs {
+			// Signal turn phase before emitting any chat content so the
+			// status broadcast rides the same event loop tick.
+			if e.IsThinking {
+				if onTurnPhase != nil {
+					onTurnPhase("thinking")
+				}
+				continue
+			}
+			if onTurnPhase != nil {
+				if e.Text != "" {
+					onTurnPhase("writing")
+				} else if e.ToolName != "" {
+					onTurnPhase("working")
+				}
+			}
 			var role, content string
 			switch {
 			case e.Text != "":

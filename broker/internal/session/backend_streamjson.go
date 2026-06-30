@@ -83,6 +83,19 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 	// it can be captured by both the fork respawn and the normal respawn.
 	subagentH := s.subagentHandle()
 
+	// onTurnPhase updates the session's turnPhase field and broadcasts
+	// a fresh status frame whenever the phase changes. An empty phase
+	// string clears the field (turn ended).
+	onTurnPhase := func(phase string) {
+		s.mu.Lock()
+		changed := s.turnPhase != phase
+		s.turnPhase = phase
+		s.mu.Unlock()
+		if changed {
+			s.broadcastStatus()
+		}
+	}
+
 	argsFor := func(resume string, continueLatest bool) []string {
 		baseArgs := append(append([]string{}, adapter.Args...), s.override.extraArgsForAdapter(adapter)...)
 		// Apply the chosen permission mode (e.g. plan): for claude this may
@@ -116,6 +129,7 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 			s.handleAskControl,
 			s.latchChatSessionID,
 			s.subagentHandle(),
+			onTurnPhase,
 		)
 		if cerr != nil {
 			fmt.Fprintf(os.Stderr, "session %s: fork startChatProcess: %v (chat disabled)\n", s.ID, cerr)
@@ -140,6 +154,7 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 				s.handleAskControl,
 				s.latchChatSessionID,
 				subagentH,
+				onTurnPhase,
 			)
 		}
 		return spawnResult{backend: chat, respawn: respawnFork}, nil
@@ -167,6 +182,7 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 		s.handleAskControl,
 		s.latchChatSessionID,
 		subagentH,
+		onTurnPhase,
 	)
 	if cerr != nil {
 		fmt.Fprintf(os.Stderr, "session %s: startChatProcess: %v (chat disabled)\n", s.ID, cerr)
@@ -196,6 +212,7 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 			s.handleAskControl,
 			s.latchChatSessionID,
 			subagentH,
+			onTurnPhase,
 		)
 		return fresh, ferr
 	}

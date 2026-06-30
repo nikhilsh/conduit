@@ -707,7 +707,7 @@ extension ConduitUI {
                         // the scroll content so it follows autoscroll like
                         // any new content while the user is at the bottom.
                         if isAgentWorking && !isReadOnly {
-                            ConduitTypingIndicator()
+                            ConduitTypingIndicator(phase: store.statusBySession[session.id]?.turnPhase)
                                 .padding(.horizontal, 16)
                                 .transition(.opacity)
                         }
@@ -2387,38 +2387,72 @@ private struct ConduitStructuredMarkdownView: View {
 // MARK: - Typing indicator
 //
 // BUG 3: a lightweight "agent is working" affordance shown at the bottom
-// of the message list while any turn is streaming. Three dots pulse in a
-// staggered loop (scale + opacity) so the user can tell the agent is
-// still generating. Matches the assistant role label styling so it reads
-// as the agent's in-progress turn.
+// of the message list while any turn is streaming. Shows distinct states:
+// three bouncing dots for "writing", a single pulsing dot for "working"
+// or "thinking". Falls back to three dots when phase is nil (unknown).
 private struct ConduitTypingIndicator: View {
-    @State private var phase = 0
+    var phase: String? // "writing" | "working" | "thinking" | nil
+    @State private var animPhase = 0
     @Environment(\.neonTheme) private var neon
 
     private let timer = Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("assistant")
+            Text(labelText)
                 .font(neon.mono(11).weight(.bold))
                 .foregroundStyle(neon.textDim)
                 .textCase(.uppercase)
+            indicatorDots
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel(accessibilityLabel)
+        .onReceive(timer) { _ in
+            animPhase = (animPhase + 1) % 3
+        }
+    }
+
+    private var labelText: String {
+        switch phase {
+        case "working": return "working..."
+        case "thinking": return "thinking..."
+        default: return "assistant"
+        }
+    }
+
+    private var accessibilityLabel: String {
+        switch phase {
+        case "working": return "Agent is working"
+        case "thinking": return "Agent is thinking"
+        default: return "Assistant is typing"
+        }
+    }
+
+    @ViewBuilder
+    private var indicatorDots: some View {
+        switch phase {
+        case "working", "thinking":
+            // Single pulsing dot for non-writing states
+            let isPulsePhase = animPhase == 0
+            Circle()
+                .fill(phase == "thinking" ? neon.textDim : neon.accent)
+                .frame(width: 7, height: 7)
+                .scaleEffect(isPulsePhase ? 1.0 : 0.6)
+                .opacity(isPulsePhase ? 1.0 : 0.4)
+                .animation(.easeInOut(duration: 0.6), value: animPhase)
+        default:
+            // Three bouncing dots for writing (current behavior)
             HStack(spacing: 5) {
                 ForEach(0..<3, id: \.self) { i in
                     Circle()
                         .fill(neon.accent)
                         .frame(width: 7, height: 7)
-                        .scaleEffect(phase == i ? 1.0 : 0.6)
-                        .opacity(phase == i ? 1.0 : 0.4)
-                        .neonGlowBox(phase == i ? neon.glowBox?.tinted(neon.accent) : nil)
-                        .animation(.easeInOut(duration: 0.3), value: phase)
+                        .scaleEffect(animPhase == i ? 1.0 : 0.6)
+                        .opacity(animPhase == i ? 1.0 : 0.4)
+                        .neonGlowBox(animPhase == i ? neon.glowBox?.tinted(neon.accent) : nil)
+                        .animation(.easeInOut(duration: 0.3), value: animPhase)
                 }
             }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityLabel("Assistant is typing")
-        .onReceive(timer) { _ in
-            phase = (phase + 1) % 3
         }
     }
 }

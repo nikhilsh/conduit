@@ -59,6 +59,11 @@ pub struct SessionStatus {
     /// log-role inference as a fallback).
     #[serde(default)]
     pub turn_active: Option<bool>,
+    /// Sub-state of an in-flight turn: "writing" (streaming text tokens),
+    /// "working" (tool call waiting for result), "thinking" (extended-thinking
+    /// block). `None` when no turn is active or the broker predates the field.
+    #[serde(default)]
+    pub turn_phase: Option<String>,
     /// Per-agent reasoning effort ("low" / "medium" / "high") read
     /// from the agent toml. The pill in the project header tracks
     /// this so users can see what they're paying for at a glance.

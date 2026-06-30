@@ -62,6 +62,7 @@ func startChatProcess(
 	onAsk func(controlRequest, *chatProcess, string),
 	onInit func(string),
 	onSubagent *subagentRegistryHandle,
+	onTurnPhase func(string),
 ) (*chatProcess, error) {
 	if len(command) == 0 {
 		return nil, errors.New("chat process: empty command")
@@ -104,6 +105,11 @@ func startChatProcess(
 		// that rides accumulateUsage carries turn_active=false.
 		_ = processClaudeStreamOutput(stdout, publish, gen, titleGen, onUsage, onControl, onInit,
 			func() {
+				// Clear the turn phase BEFORE marking turn inactive so
+				// the cleared phase rides the same status broadcast.
+				if onTurnPhase != nil {
+					onTurnPhase("")
+				}
 				cp.markTurnActive(false)
 				cp.mu.Lock()
 				idle := cp.onTurnIdle
@@ -111,7 +117,7 @@ func startChatProcess(
 				if idle != nil {
 					idle()
 				}
-			}, onSubagent)
+			}, onSubagent, onTurnPhase)
 		// EOF / agent exit: whatever turn was in flight is over.
 		cp.markTurnActive(false)
 		werr := cmd.Wait()

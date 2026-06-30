@@ -105,20 +105,23 @@ type claudeStreamMessage struct {
 }
 
 type claudeContentBlock struct {
-	Type  string          `json:"type"` // "text" | "tool_use"
-	Text  string          `json:"text"`
-	Name  string          `json:"name"`  // tool_use: the tool name
-	Input json.RawMessage `json:"input"` // tool_use: the tool args
+	Type     string          `json:"type"` // "text" | "tool_use" | "thinking"
+	Text     string          `json:"text"`
+	Name     string          `json:"name"`     // tool_use: the tool name
+	Input    json.RawMessage `json:"input"`    // tool_use: the tool args
+	Thinking string          `json:"thinking"` // thinking: the reasoning content
 }
 
 // ClaudeChatEvent is a chat item lifted from one stream-json line, ready to
 // be marshaled into a view_event{view:"chat"}. Either Text (assistant
 // prose) or ToolName (+ optional ToolInput) is set per event.
+// IsThinking is set for a thinking block (no chat content emitted).
 type ClaudeChatEvent struct {
-	Role      string          // "assistant" prose; the processor maps tool blocks to role:"tool"
-	Text      string          // assistant prose (set for a text block)
-	ToolName  string          // set for a tool_use block (Text empty)
-	ToolInput json.RawMessage // tool_use args, for the card summary
+	Role       string          // "assistant" prose; the processor maps tool blocks to role:"tool"
+	Text       string          // assistant prose (set for a text block)
+	ToolName   string          // set for a tool_use block (Text empty)
+	ToolInput  json.RawMessage // tool_use args, for the card summary
+	IsThinking bool            // set for a thinking/reasoning block
 }
 
 // claudeStreamLineIsTurnEnd reports whether a stream-json line is the
@@ -168,6 +171,10 @@ func parseClaudeStreamLine(line []byte) ([]ClaudeChatEvent, bool) {
 		case "tool_use":
 			if strings.TrimSpace(c.Name) != "" {
 				out = append(out, ClaudeChatEvent{Role: "assistant", ToolName: c.Name, ToolInput: c.Input})
+			}
+		case "thinking":
+			if strings.TrimSpace(c.Thinking) != "" {
+				out = append(out, ClaudeChatEvent{IsThinking: true})
 			}
 		}
 	}
