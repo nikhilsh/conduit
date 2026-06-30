@@ -11,6 +11,16 @@ release, the section for that version is the device-test punch list.
 
 ## v0.0.203
 
+**Settings cleanup for App Store prep (iOS + Android).** PR #768.
+
+- **Remove push-notification section** — the Settings push-notification section (test push, registration state) is removed from both iOS and Android. [iOS + Android, needs-device-verify]
+- **Slim down Conversation settings** — "Show command detail" and "Command-run Mono block" toggles removed; only Collapse Turns + Reply Haptics remain. [iOS + Android, needs-device-verify]
+- **Agent icons use AgentAvatar** — Settings > Agents now shows proper logo circles (Claude/Codex marks, monogram fallback) instead of generic SF Symbols / Material icons. [iOS + Android, needs-device-verify]
+
+**Pending chat reconciliation — dotted bubble clears when reply arrives (iOS + Android).** PR #769.
+
+- When the broker starts streaming an assistant reply, any `sent=true` pending-chat entries for that session are immediately cleared (bubbles go solid) without waiting for the `chat_ack`. Verify: send a message → while the reply streams in, the user message bubble should go solid, not stay dotted. [iOS + Android, needs-device-verify]
+
 **DiffReview "Commit & push" / "Open PR" now functional (iOS + Android + broker).** PRs #764 + #766.
 
 - **Broker git endpoints (PR #764)** — adds `POST /api/session/{id}/git/commit` (stages all, commits with message, optional push; returns sha) and `POST /api/session/{id}/git/pr` (runs `gh pr create`; returns URL). Both run in the session workdir, auth-gated, return `{ok, stdout/stderr}`. Verify on broker: call both endpoints via curl on a live session with a dirty git tree; confirm commit lands and PR opens. [broker, needs-verify; **broker redeploy required**]
