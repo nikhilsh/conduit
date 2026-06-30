@@ -1064,6 +1064,52 @@ async fn handle_text(
                             }
                         }
                     }
+                    // Streaming partial assistant text (view:"chat_streaming").
+                    // The broker emits one frame per token snapshot; the final
+                    // complete text arrives as view:"chat" at turn end. Route
+                    // to on_view_event so the apps can update their in-memory
+                    // streaming overlay without persisting to the Rust
+                    // conversation store.
+                    "chat_streaming" => {
+                        if let Some(obj) = ev.as_object() {
+                            let mut payload = HashMap::new();
+                            for (k, v) in obj {
+                                let s = match v {
+                                    serde_json::Value::String(s) => s.clone(),
+                                    other => other.to_string(),
+                                };
+                                payload.insert(k.clone(), s);
+                            }
+                            delegate.on_view_event(
+                                session_id.to_string(),
+                                "chat_streaming".to_string(),
+                                payload,
+                            );
+                        }
+                    }
+                    // Turn sub-phase indicator (view:"turn_phase"). The broker
+                    // emits this only on phase transitions ("writing",
+                    // "working", "thinking", or "" for idle) so the apps can
+                    // drive distinct composer indicators. Bypasses the Rust
+                    // SessionStatus struct (which has no turn_phase field) by
+                    // going straight to on_view_event.
+                    "turn_phase" => {
+                        if let Some(obj) = ev.as_object() {
+                            let mut payload = HashMap::new();
+                            for (k, v) in obj {
+                                let s = match v {
+                                    serde_json::Value::String(s) => s.clone(),
+                                    other => other.to_string(),
+                                };
+                                payload.insert(k.clone(), s);
+                            }
+                            delegate.on_view_event(
+                                session_id.to_string(),
+                                "turn_phase".to_string(),
+                                payload,
+                            );
+                        }
+                    }
                     _ => {}
                 }
             }

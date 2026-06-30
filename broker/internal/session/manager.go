@@ -1154,16 +1154,21 @@ func (s *Session) TurnActive() bool {
 	return active
 }
 
-// structuredTurnPhase returns the current turn phase and whether this
-// session has a structured chat backend (present=false for TUI-scrape).
-// When present is true, phase is "writing" | "working" | "thinking" | "".
+// structuredTurnPhase returns the current turn sub-phase (see turnPhaser)
+// if the session has a structured backend that supports it.
+// present is false when no backend or no TurnPhase() support.
 func (s *Session) structuredTurnPhase() (phase string, present bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.chat == nil {
+	chat := s.chat
+	s.mu.Unlock()
+	if chat == nil {
 		return "", false
 	}
-	return s.turnPhase, true
+	tp, ok := chat.(turnPhaser)
+	if !ok {
+		return "", false
+	}
+	return tp.TurnPhase(), true
 }
 
 // SendChat routes a composer message to the structured chat channel when

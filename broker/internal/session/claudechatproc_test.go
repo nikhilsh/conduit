@@ -28,23 +28,36 @@ func TestChatProcessRoundTrip(t *testing.T) {
 	}
 	defer cp.Close()
 
-	select {
-	case p := <-events:
-		var ev struct {
-			View  string `json:"view"`
-			Event struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
-			} `json:"event"`
+	// The script has a `result` line, so we expect:
+	//   1. view:"chat_streaming"  — partial snapshot emitted per text event
+	//   2. view:"chat"            — final persistent record emitted at turn end
+	// Drain events until we see the final view:"chat" assistant event.
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case p := <-events:
+			var ev struct {
+				View  string `json:"view"`
+				Event struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"event"`
+			}
+			if err := json.Unmarshal(p, &ev); err != nil {
+				t.Fatalf("publish payload not json: %v", err)
+			}
+			if ev.View == "chat_streaming" || ev.View == "turn_phase" {
+				// transient events — partial snapshot or phase change; keep draining
+				continue
+			}
+			if ev.View != "chat" || ev.Event.Role != "assistant" || ev.Event.Content != "pong" {
+				t.Fatalf("unexpected chat event: %s", p)
+			}
+			// Final view:"chat" — done.
+			return
+		case <-deadline:
+			t.Fatal("timeout waiting for chat event from fake agent")
 		}
-		if err := json.Unmarshal(p, &ev); err != nil {
-			t.Fatalf("publish payload not json: %v", err)
-		}
-		if ev.View != "chat" || ev.Event.Role != "assistant" || ev.Event.Content != "pong" {
-			t.Fatalf("unexpected chat event: %s", p)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for chat event from fake agent")
 	}
 }
 

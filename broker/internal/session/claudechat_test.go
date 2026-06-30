@@ -79,33 +79,58 @@ func TestProcessClaudeStreamOutput(t *testing.T) {
 		`{"type":"result","subtype":"success","result":"all done","is_error":false}`,
 	}, "\n")
 
-	type chatEv struct {
+	type chatEvFull struct {
 		View  string `json:"view"`
 		Event struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role      string `json:"role"`
+			Content   string `json:"content"`
+			TurnTS    string `json:"turn_ts"`
+			TurnPhase string `json:"turn_phase"`
 		} `json:"event"`
 	}
-	var got []chatEv
+	var all []chatEvFull
 	err := processClaudeStreamOutput(strings.NewReader(stream), func(p []byte) {
-		var ev chatEv
+		var ev chatEvFull
 		if json.Unmarshal(p, &ev) == nil {
-			got = append(got, ev)
+			all = append(all, ev)
 		}
 	}, nil, nil, nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("expected 2 chat events (tool card + assistant text), got %d: %+v", len(got), got)
+	// Separate chat events from phase-change notifications.
+	var got []chatEvFull
+	var phases []string
+	for _, ev := range all {
+		switch ev.View {
+		case "chat", "chat_streaming":
+			got = append(got, ev)
+		case "turn_phase":
+			phases = append(phases, ev.Event.TurnPhase)
+		}
+	}
+	// Expected chat events: [0] tool card, [1] streaming partial, [2] final record.
+	if len(got) != 3 {
+		t.Fatalf("expected 3 chat events (tool card + streaming partial + final assistant), got %d: %+v", len(got), got)
 	}
 	// [0] tool card from the tool_use block.
 	if got[0].View != "chat" || got[0].Event.Role != "tool" || got[0].Event.Content != "Bash: ls -la" {
 		t.Fatalf("unexpected tool event: %+v", got[0])
 	}
-	// [1] assistant prose.
-	if got[1].View != "chat" || got[1].Event.Role != "assistant" || got[1].Event.Content != "all done" {
-		t.Fatalf("unexpected assistant event: %+v", got[1])
+	// [1] streaming partial — view:"chat_streaming" with turn_ts set.
+	if got[1].View != "chat_streaming" || got[1].Event.Role != "assistant" || got[1].Event.Content != "all done" {
+		t.Fatalf("unexpected streaming event: %+v", got[1])
+	}
+	if got[1].Event.TurnTS == "" {
+		t.Fatalf("chat_streaming event missing turn_ts: %+v", got[1])
+	}
+	// [2] final persistent record — view:"chat" emitted at turn end.
+	if got[2].View != "chat" || got[2].Event.Role != "assistant" || got[2].Event.Content != "all done" {
+		t.Fatalf("unexpected final assistant event: %+v", got[2])
+	}
+	// Phase transitions: "working" (tool), "writing" (text), "" (turn end).
+	if len(phases) != 3 || phases[0] != "working" || phases[1] != "writing" || phases[2] != "" {
+		t.Fatalf("unexpected phase transitions: %v (want [working writing ''])", phases)
 	}
 }
 
@@ -161,15 +186,15 @@ func TestProcessClaudeStreamOutputAskUserQuestion(t *testing.T) {
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[{"question":"Proceed with the merge?","header":"Merge","options":[{"label":"Merge now"},{"label":"Hold off"}]}]}}]}}`,
 	}, "\n")
 
-	type chatEv struct {
+	type chatEvAsk struct {
 		Event struct {
 			Role    string `json:"role"`
 			Content string `json:"content"`
 		} `json:"event"`
 	}
-	var got []chatEv
+	var got []chatEvAsk
 	err := processClaudeStreamOutput(strings.NewReader(stream), func(p []byte) {
-		var ev chatEv
+		var ev chatEvAsk
 		if json.Unmarshal(p, &ev) == nil {
 			got = append(got, ev)
 		}
