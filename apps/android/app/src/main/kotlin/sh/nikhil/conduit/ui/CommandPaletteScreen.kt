@@ -102,6 +102,8 @@ fun CommandPaletteScreen(
     // "Fan out a task" action — caller presents the Fan-out surface
     // (`FanOutScreen`). Default no-op so the sheet compiles standalone.
     onFanOut: () -> Unit = {},
+    // "New pipeline" action — caller presents PipelineBuilderScreen.
+    onNewPipeline: () -> Unit = {},
     onDismiss: () -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -142,6 +144,7 @@ fun CommandPaletteScreen(
             PaletteActionSpec("new", "New session…", "⌘N"),
             PaletteActionSpec("pair", "Pair a box", null),
             PaletteActionSpec("fanout", "Fan out a task", null),
+            PaletteActionSpec("pipeline", "New pipeline", null),
         ).filter { q.isEmpty() || it.title.lowercase().contains(q) }
     }
 
@@ -151,6 +154,7 @@ fun CommandPaletteScreen(
             "new" -> onNewSession()
             "pair" -> onPairBox()
             "fanout" -> onFanOut()
+            "pipeline" -> onNewPipeline()
         }
     }
 

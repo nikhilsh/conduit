@@ -14,16 +14,24 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import sh.nikhil.conduit.FeatureFlags
 import sh.nikhil.conduit.HarnessState
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.push.PushRegistrationState
 import sh.nikhil.conduit.push.PushStore
+import java.net.HttpURLConnection
+import java.net.URL
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,6 +64,13 @@ fun AppRoot(
     // needs-you banner), and per-box health (from a Boxes-list tap).
     var showCommandPalette by remember { mutableStateOf(false) }
     var showFanOut by remember { mutableStateOf(false) }
+    // Fan-out compare: launched runs passed to FanOutScreen for compare call.
+    var fanOutLaunchedRuns by remember { mutableStateOf<List<FanOutRun>>(emptyList()) }
+    // FanOutCompareScreen state: compare results navigate here.
+    var compareRuns by remember { mutableStateOf<List<FanOutCompareRun>?>(null) }
+    // Pipeline screens
+    var showPipelineBuilder by remember { mutableStateOf(false) }
+    var pipelineMonitorTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showApprovals by remember { mutableStateOf(false) }
     var boxHealthTarget by remember { mutableStateOf<sh.nikhil.conduit.SavedServer?>(null) }
     // Read-only transcript drilldown from History. The full saved row
@@ -71,6 +86,7 @@ fun AppRoot(
     val harness by store.harness.collectAsState()
     val savedServers by store.savedServers.collectAsState()
     val isDemoMode by store.isDemoMode.collectAsState()
+    val scope = rememberCoroutineScope()
 
     // Onboarding gate (section 5) -- accounts-free, device-local. No sign-in wall:
     // show the wizard when this device holds no broker pairing key. `Full`
@@ -291,6 +307,7 @@ fun AppRoot(
             onPairBox = { showCommandPalette = false; showAddServer = true },
             onOpenSession = { id -> showCommandPalette = false; store.select(id) },
             onFanOut = { showCommandPalette = false; showFanOut = true },
+            onNewPipeline = { showCommandPalette = false; showPipelineBuilder = true },
             onRunOnBox = { text ->
                 // CommandPaletteScreen always calls onDismiss() before onRunOnBox(),
                 // so the palette is already in its dismiss-animation by the time this
@@ -317,12 +334,108 @@ fun AppRoot(
 
     if (showFanOut) {
         // One task -> N parallel sessions, one per branch. Launch is real:
-        // createSession per branch (no fan-out backend). Compare = no-op.
+        // createSession per branch (no fan-out backend). Compare calls
+        // POST /api/fanout/compare with the launched runs' session IDs.
+        // Session IDs are resolved from store.sessions by branch at compare time.
         FanOutScreen(
             store = store,
             onLaunch = { task, branches ->
+                // Record the launched branches; session IDs are populated
+                // from store.sessions at compare time by branch match.
+                fanOutLaunchedRuns = branches.map { FanOutRun(branch = it) }
                 branches.forEach { branch ->
                     store.createSession(assistant = "claude", branch = branch, initialPrompt = task)
+                }
+            },
+            runs = fanOutLaunchedRuns.map { run ->
+                // Resolve session ID from live sessions by branch name.
+                val matchedId = sessions.firstOrNull { it.branch == run.branch }?.id
+                if (matchedId != null) run.copy(sessionId = matchedId) else run
+            },
+            onCompare = compareOnClick@{
+                // Resolve session IDs from live store.sessions at compare time.
+                val resolvedRuns = fanOutLaunchedRuns.map { run ->
+                    val matchedId = sessions.firstOrNull { it.branch == run.branch }?.id
+                    if (matchedId != null) run.copy(sessionId = matchedId) else run
+                }
+                if (resolvedRuns.isEmpty()) return@compareOnClick
+                val base = endpoint.httpBaseUrl ?: return@compareOnClick
+                Telemetry.breadcrumb(
+                    "fanout",
+                    "compare_start",
+                    mapOf("run_count" to resolvedRuns.size.toString()),
+                )
+                scope.launch {
+                    val runsJson = JSONArray().apply {
+                        resolvedRuns.forEach { run ->
+                            put(JSONObject().apply {
+                                put("session_id", run.sessionId ?: "")
+                                put("label", run.branch)
+                            })
+                        }
+                    }
+                    val body = JSONObject().apply {
+                        put("base", "main")
+                        put("runs", runsJson)
+                    }
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val conn = (URL("$base/api/fanout/compare").openConnection() as HttpURLConnection).apply {
+                                requestMethod = "POST"
+                                doOutput = true
+                                setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                                setRequestProperty("Content-Type", "application/json")
+                                connectTimeout = 10_000
+                                readTimeout = 30_000
+                            }
+                            try {
+                                conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                                val code = conn.responseCode
+                                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                                val text = stream?.bufferedReader()?.use { it.readText() } ?: "{}"
+                                conn.disconnect()
+                                JSONObject(text)
+                            } catch (e: Exception) {
+                                conn.disconnect()
+                                throw e
+                            }
+                        }
+                    }
+                    result.onSuccess { json ->
+                        val runsArr = json.optJSONArray("runs")
+                        val parsed = mutableListOf<FanOutCompareRun>()
+                        if (runsArr != null) {
+                            for (i in 0 until runsArr.length()) {
+                                val r = runsArr.getJSONObject(i)
+                                parsed.add(
+                                    FanOutCompareRun(
+                                        sessionId = r.optString("session_id", ""),
+                                        label = r.optString("label", ""),
+                                        phase = r.optString("phase", ""),
+                                        filesChanged = r.optInt("files_changed", 0),
+                                        insertions = r.optInt("insertions", 0),
+                                        deletions = r.optInt("deletions", 0),
+                                        diffStat = r.optString("diff_stat", ""),
+                                        agentSummary = r.optString("agent_summary", ""),
+                                        error = r.optString("error", ""),
+                                    ),
+                                )
+                            }
+                        }
+                        Telemetry.breadcrumb(
+                            "fanout",
+                            "compare_success",
+                            mapOf("run_count" to parsed.size.toString()),
+                        )
+                        compareRuns = parsed
+                        showFanOut = false
+                    }.onFailure { e ->
+                        Telemetry.capture(
+                            error = e,
+                            message = "fanout compare network error",
+                            tags = mapOf("surface" to "android", "phase" to "fanout-compare"),
+                        )
+                    }
                 }
             },
             onDismiss = { showFanOut = false },
@@ -336,6 +449,42 @@ fun AppRoot(
             store = store,
             onOpenSession = { id -> showApprovals = false; store.select(id) },
             onDismiss = { showApprovals = false },
+        )
+    }
+
+    // FanOut compare results screen (full screen, no bottom sheet).
+    compareRuns?.let { runs ->
+        BackHandler(enabled = true) { compareRuns = null }
+        FanOutCompareScreen(
+            store = store,
+            runs = runs,
+            onOpenSession = { id -> compareRuns = null; store.select(id) },
+            onBack = { compareRuns = null },
+        )
+    }
+
+    // Pipeline builder screen.
+    if (showPipelineBuilder) {
+        BackHandler(enabled = true) { showPipelineBuilder = false }
+        PipelineBuilderScreen(
+            store = store,
+            onCreated = { id, title ->
+                showPipelineBuilder = false
+                pipelineMonitorTarget = Pair(id, title)
+            },
+            onBack = { showPipelineBuilder = false },
+        )
+    }
+
+    // Pipeline monitor screen.
+    pipelineMonitorTarget?.let { (id, title) ->
+        BackHandler(enabled = true) { pipelineMonitorTarget = null }
+        PipelineMonitorScreen(
+            store = store,
+            pipelineId = id,
+            pipelineTitle = title,
+            onOpenSession = { sessionId -> pipelineMonitorTarget = null; store.select(sessionId) },
+            onBack = { pipelineMonitorTarget = null },
         )
     }
 
