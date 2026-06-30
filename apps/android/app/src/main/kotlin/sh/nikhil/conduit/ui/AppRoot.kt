@@ -234,7 +234,6 @@ fun AppRoot(
     if (showSettings) {
         SettingsScreen(
             store = store,
-            pushStore = pushStore,
             onDismiss = { showSettings = false },
             onOpenLicenses = { showLicenses = true },
             // Fix 1: Settings passes the intent so replay/addMachine never
