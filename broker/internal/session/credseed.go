@@ -363,3 +363,24 @@ func seedClaudeCanonicalConfig(res credResolution) error {
 	// file becomes <dir>/.claude.json, which is what some builds read.
 	return seedClaudeConfig(dir)
 }
+
+// SeedSharedCredentialsAtStartup ensures the canonical credential files for
+// all known providers exist and are populated from the credential store at
+// broker startup. This is a best-effort call: it runs only when
+// CONDUIT_SHARED_AGENT_CREDS is on, and any error is logged but never fatal.
+//
+// Without this the canonical files are only seeded on the first session spawn.
+// Seeding at startup means broker-side fetchers (account usage, quick replies)
+// that run before the first session already read the fresh canonical file.
+//
+// This is an exported entry point for cmd/conduit-broker/main.go; the session
+// package must not import the main package, so the call flows outward.
+func SeedSharedCredentialsAtStartup(conduitRoot string, store *credentials.Store) {
+	if !sharedAgentCredsEnabled() {
+		return
+	}
+	if _, err := ensureSharedCred(conduitRoot, store); err != nil {
+		// Non-fatal. Each session spawn also calls ensureSharedCred.
+		fmt.Fprintf(os.Stderr, "startup: ensureSharedCred: %v (credentials will be seeded on first session spawn)\n", err)
+	}
+}

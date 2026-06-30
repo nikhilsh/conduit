@@ -200,6 +200,12 @@ func runUp(args []string) int {
 			credStore := credentials.NewStore(abs, []byte(token))
 			srv.WithCredentials(credStore)
 			log.Printf("credentials: per-user OAuth store at %s", abs)
+			// CONDUIT_SHARED_AGENT_CREDS: pre-seed the canonical credential
+			// files at startup so broker-side fetchers (account usage, AI
+			// niceties) can read them before the first session spawns. The
+			// call is best-effort; each session spawn also calls
+			// ensureSharedCred and is not blocked by a startup seed failure.
+			session.SeedSharedCredentialsAtStartup(conduitRootDir(), credStore)
 		} else {
 			log.Printf("credentials: ignoring --credentials-dir %q: %v", credDir, err)
 		}

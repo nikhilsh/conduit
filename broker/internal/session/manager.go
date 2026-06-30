@@ -269,14 +269,14 @@ type Session struct {
 	override SpawnOverride
 
 	// agentHomeDir is the per-session ephemeral $HOME. ALWAYS populated
-	// for every session (except in the rare case the mkdir fails, in
-	// which case the agent falls back to inheriting the broker $HOME).
-	// Sources: credStore Materialize (per-user OAuth, see
-	// docs/PLAN-AGENT-OAUTH.md §G.2) OR a copy of the broker's real
-	// $HOME credentials. The per-session HOME is what breaks the
-	// concurrent-refresh race on `.claude/.credentials.json` —
-	// each agent rotates its own copy of the OAuth refresh token,
-	// not a shared file. Removed on Close.
+	// for every session (except in the rare case the mkdir fails, in which
+	// case the agent falls back to inheriting the broker $HOME). Under
+	// CONDUIT_SHARED_AGENT_CREDS sessions point at the ONE canonical config
+	// dir (via CLAUDE_CONFIG_DIR / CODEX_HOME env vars — see credseed.go)
+	// so there is no per-session credential copy; on the default flag-off
+	// path each session still gets its own credential copy inside this
+	// ephemeral home. Credential files are removed on Close; transcripts
+	// survive for --resume (cleanupAgentHomeCredentials).
 	agentHomeDir string
 	// agentCredProvider is the OAuth provider key whose credentials were
 	// (attempted to be) populated into agentHomeDir ("anthropic" /
@@ -449,24 +449,20 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	// what this session changes (see outcome.go). Cheap; no-op when the cwd
 	// isn't a git repo.
 	s.recordStartCommit()
-	// ALWAYS isolate $HOME per session. Multiple concurrent claude/codex
-	// agents sharing the broker's real $HOME race on the OAuth refresh
-	// token rotation in `.claude/.credentials.json` (or `.codex/auth.json`)
-	// — whichever process refreshes last wins, all others get rejected
-	// and prompt "Please run /login". A per-session HOME breaks the race
-	// by giving each agent its own private copy of the credentials file
-	// to refresh in isolation.
+	// Credential setup. The per-session ephemeral HOME is ALWAYS created; what
+	// lives inside it depends on the flag:
 	//
-	// Two population sources, in priority order:
-	//   1. credStore (per-user OAuth blob, set via OAuth Stage 2) —
-	//      docs/PLAN-AGENT-OAUTH.md §G.2.
-	//   2. Otherwise: copy the broker's real $HOME credential files
-	//      (`~/.claude/.credentials.json` + `~/.claude.json` for claude,
-	//      `~/.codex/auth.json` + `~/.codex/config.toml` for codex).
+	// CONDUIT_SHARED_AGENT_CREDS ON (see docs/PLAN-AGENT-CREDENTIAL-LINEAGE.md):
+	// Sessions are pointed at ONE canonical config dir per provider via
+	// CLAUDE_CONFIG_DIR / CODEX_HOME (see credseed.go). No credential is
+	// forked into the per-session HOME; the agent CLIs' cross-process refresh
+	// coordination governs all refreshes, and the operator's host login is
+	// never stranded. ensureSharedCred seeds the canonical file once if needed.
 	//
-	// If the credentials don't exist on the broker host either, we log
-	// and let the agent prompt for login on its own — that's a clean
-	// "please /login" UX, far better than the silent refresh-token race.
+	// CONDUIT_SHARED_AGENT_CREDS OFF (default, legacy path):
+	// Each session gets a PRIVATE copy of the credential (credStore.Materialize
+	// OR mirrorHostCredentials). If the credentials don't exist on the broker
+	// host either, the agent prompts for login — a clean UX.
 	// Use the adapter manifest's login_provider (WS-1.2). Falls back to
 	// providerForAssistant(adapter.Name) via applyLegacyDefaults so
 	// third-party adapters without the field behave as before.
@@ -1493,8 +1489,18 @@ func (s *Session) Close() {
 // files from a session's agent-home while leaving everything else (most
 // importantly the CLIs' conversation/rollout files) in place. Missing
 // files are fine; other failures are logged and ignored.
+//
+// Under CONDUIT_SHARED_AGENT_CREDS the credential files are never written
+// into the session HOME (they live in the shared canonical dir), so there is
+// nothing to remove and the function is a no-op for claude/codex.
 func cleanupAgentHomeCredentials(homeDir, sessionID string) {
 	if homeDir == "" {
+		return
+	}
+	if sharedAgentCredsEnabled() {
+		// Flag ON: no per-session credential copy exists in the session HOME;
+		// the canonical dir (pointed at via CLAUDE_CONFIG_DIR / CODEX_HOME) is
+		// broker-owned and must NOT be cleaned up here. Skip entirely.
 		return
 	}
 	for _, rel := range []string{
@@ -1867,19 +1873,41 @@ func (m *Manager) SetCredentialStore(s *credentials.Store) {
 	m.mu.Unlock()
 }
 
-// RefreshAllSessionCredentials immediately re-materializes the just-stored
-// credential blob (for provider) into every live session that needs it.
-// Called synchronously after credentials.Store.Set succeeds — both from the
-// HTTP endpoint (serveAgentCredentials) and the WS control message
-// (handleSetAgentCredentials) — so the credential is available before the
-// next agent turn, without waiting for the 60-second watchdog tick.
+// RefreshAllSessionCredentials immediately propagates the just-stored
+// credential blob (for provider) so the next agent turn picks it up
+// without waiting for the 60-second watchdog tick. Called synchronously
+// after credentials.Store.Set succeeds — both from the HTTP endpoint
+// (serveAgentCredentials) and the WS control message
+// (handleSetAgentCredentials).
 //
-// The per-session refreshStaleAgentCredentials logic handles both cases:
+// Under CONDUIT_SHARED_AGENT_CREDS: there is no per-session copy to refresh.
+// Instead, re-seed the ONE canonical credential file from the just-pushed blob
+// so the next agent file-read picks it up immediately. The fan-out loop is
+// replaced by a single ensureSharedCred call.
+//
+// Flag OFF (legacy): the per-session refreshStaleAgentCredentials logic handles:
 //   - session has no credential file (app blob arrived after spawn): materialize it
 //   - session has an expired credential file: re-mirror from the host login
 //
 // Only sessions matching provider are touched; other sessions are skipped.
 func (m *Manager) RefreshAllSessionCredentials(provider string) {
+	if sharedAgentCredsEnabled() {
+		// Flag ON: account-switch re-seed of the ONE canonical credential file.
+		// ensureSharedCred is idempotent; on this call the store already has the
+		// new blob so it seeds the canonical file atomically. All live sessions
+		// (and any new ones spawned after this) read the updated file at their
+		// next inference call — no per-session iteration required.
+		m.mu.RLock()
+		store := m.credStore
+		conduitRoot := m.conduitRoot
+		m.mu.RUnlock()
+		log.Printf("RefreshAllSessionCredentials: re-seeding canonical %s credential (shared-creds)", provider)
+		if _, err := ensureSharedCred(conduitRoot, store); err != nil {
+			fmt.Fprintf(os.Stderr, "RefreshAllSessionCredentials: ensureSharedCred: %v\n", err)
+		}
+		return
+	}
+
 	m.mu.RLock()
 	sessions := make([]*Session, 0, len(m.sessions))
 	for _, s := range m.sessions {

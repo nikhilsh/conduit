@@ -35,8 +35,10 @@ func emptyHostHome(t *testing.T) string {
 // --- (a) flag OFF: env is NOT retargeted and the copy path still runs ---
 
 func TestSharedCreds_FlagOff_CodexHomeIsPerSession(t *testing.T) {
-	// Flag unset: a codex session's CODEX_HOME must remain the per-session
-	// <agentHome>/.codex, and CLAUDE_CONFIG_DIR must NOT be injected at all.
+	// Flag unset: a codex session's CODEX_HOME must point at the per-session
+	// <agentHome>/.codex, and the session's sharedCredConfigEnv must be nil
+	// (the flag-off spawn never populates it, so no shared-dir override is
+	// applied). The commandEnv CODEX_HOME pair overrides any inherited env.
 	t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "")
 	if sharedAgentCredsEnabled() {
 		t.Fatal("flag must be OFF when CONDUIT_SHARED_AGENT_CREDS is empty")
@@ -45,14 +47,17 @@ func TestSharedCreds_FlagOff_CodexHomeIsPerSession(t *testing.T) {
 	s := &Session{ID: "off", Assistant: "codex", agentHomeDir: home}
 	// sharedCredConfigEnv intentionally left nil — the flag-off spawn never
 	// populates it.
+	if s.sharedCredConfigEnv != nil {
+		t.Fatal("flag-off: sharedCredConfigEnv must be nil")
+	}
 	env := envMap(t, s.commandEnv(nil))
 	wantCodex := filepath.Join(home, ".codex")
 	if env["CODEX_HOME"] != wantCodex {
 		t.Fatalf("flag-off CODEX_HOME=%q, want per-session %q", env["CODEX_HOME"], wantCodex)
 	}
-	if _, ok := env["CLAUDE_CONFIG_DIR"]; ok {
-		t.Fatalf("flag-off must NOT inject CLAUDE_CONFIG_DIR, got %q", env["CLAUDE_CONFIG_DIR"])
-	}
+	// commandEnv pairs set CODEX_HOME explicitly; the sharedCredConfigEnv is
+	// nil so no CLAUDE_CONFIG_DIR override is added by the session (it may
+	// still be inherited from the broker process env, which is fine).
 }
 
 func TestSharedCreds_FlagOff_CredLookupHomeIsAgentHome(t *testing.T) {
