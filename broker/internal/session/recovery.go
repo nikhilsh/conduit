@@ -123,6 +123,11 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		// with a login_provider are automatically mirrored into the
 		// session's ephemeral HOME (WS-1.2).
 		credentialProviders: credentialProvidersFromRegistry(m.registry),
+		// Pass the credential store so recovered sessions can use the
+		// app-pushed OAuth blob (Option B / shared-creds) — without this,
+		// ensureSharedCred sees a nil store, picks Option A (host $HOME),
+		// and recovered sessions ignore any app-pushed credential entirely.
+		credStore: m.credStore,
 	})
 	if err != nil {
 		return nil, err
