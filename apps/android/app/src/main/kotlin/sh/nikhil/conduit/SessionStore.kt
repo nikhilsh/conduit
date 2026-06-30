@@ -5358,6 +5358,17 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.FIRST_REPLY_RECEIVED,
                     mapOf("session" to sessionId, "chars" to event.content.length.toString()))
             }
+            // Reconcile: a reply proves the broker received the sent message(s).
+            // Drain `sent=true` pending entries so their bubbles go solid now
+            // without waiting for the explicit chat_ack (which may race or lag).
+            val (drained, localIds) = _pendingChats.value.drainSentNormal(sessionId)
+            if (localIds.isNotEmpty()) {
+                _pendingChats.value = drained
+                prefs?.edit()?.putString(KEY_PENDING_CHATS, PendingChatQueue.encode(drained))?.apply()
+                for (localId in localIds) setEchoStatus(sessionId, localId, "done")
+                Telemetry.breadcrumb("chat", "reconciled sent on reply",
+                    mapOf("session" to sessionId, "count" to localIds.size.toString()))
+            }
         }
         _chatLog.value = _chatLog.value.toMutableMap().also { m ->
             m[sessionId] = (m[sessionId] ?: emptyList()) + event

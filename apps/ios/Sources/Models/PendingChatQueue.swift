@@ -156,6 +156,19 @@ struct PendingChatQueue: Equatable {
         bySession[sessionID] = list
     }
 
+    /// Called when an assistant reply arrives for a session, proving the broker
+    /// received the user's prior message(s). Removes all `sent=true, kind==.normal`
+    /// entries and returns their localIDs so the shell can flip each echo to `done`.
+    /// A `chat_ack` arriving later no-ops (entry already gone). `.queuedTurn` and
+    /// steer entries are NOT touched — they may not have been delivered yet.
+    mutating func drainSentNormal(sessionID: String) -> [String] {
+        guard var list = bySession[sessionID] else { return [] }
+        let drained = list.filter { $0.sent && $0.kind == .normal }.map { $0.localID }
+        list.removeAll { $0.sent && $0.kind == .normal }
+        if list.isEmpty { bySession[sessionID] = nil } else { bySession[sessionID] = list }
+        return drained
+    }
+
     /// The BROKER acked receipt of `localID` (chat_ack) -- drop it from the
     /// queue. The shell flips the transcript echo to `done` (solid bubble).
     /// This is the ONLY durable-delivery signal; a bare WS-write success goes
