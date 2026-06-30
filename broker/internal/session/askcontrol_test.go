@@ -426,6 +426,11 @@ func TestChatConversationOnDisk(t *testing.T) {
 // shutdown Closes every live session; the old RemoveAll(agentHomeDir)
 // destroyed every conversation on every redeploy).
 func TestCleanupAgentHomeKeepsConversations(t *testing.T) {
+	// cleanupAgentHomeCredentials is a flag-OFF concern: under
+	// CONDUIT_SHARED_AGENT_CREDS credentials never live in the per-session
+	// HOME so there is nothing to clean. Force flag OFF so the test exercises
+	// the credential-removal path regardless of the ambient environment.
+	t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "")
 	home := t.TempDir()
 	conv := filepath.Join(home, ".claude", "projects", "-root-x", "abc.jsonl")
 	cred := filepath.Join(home, ".claude", ".credentials.json")

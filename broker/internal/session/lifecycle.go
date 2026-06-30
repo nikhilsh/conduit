@@ -100,6 +100,16 @@ func (s *Session) commandEnv(extra map[string]string) []string {
 			if v == "" && (k == "ANTHROPIC_API_KEY" || k == "OPENAI_API_KEY") {
 				continue
 			}
+			// Strip CLI config-dir relocation vars (CLAUDE_CONFIG_DIR /
+			// CODEX_HOME) unconditionally: they are re-injected below via
+			// pairs exactly as the flag-on or flag-off path requires. A
+			// stale value from a previous broker deployment (e.g. a systemd
+			// unit that has CLAUDE_CONFIG_DIR= in its EnvironmentFile) would
+			// otherwise leak into sessions that use the per-session HOME path,
+			// routing the agent at the wrong credential directory.
+			if k == "CLAUDE_CONFIG_DIR" || k == "CODEX_HOME" {
+				continue
+			}
 		}
 		env = append(env, kv)
 	}

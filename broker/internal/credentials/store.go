@@ -346,6 +346,46 @@ func (s *Store) Materialize(provider, ephemeralHome string) error {
 	return atomicWrite(filepath.Join(subdir, filename), blob, 0o600)
 }
 
+// MaterializeCanonical decrypts the stored credential for `provider` and
+// writes it directly into `canonicalDir` at the provider-native filename:
+//
+//   - openai    → <canonicalDir>/auth.json
+//   - anthropic → <canonicalDir>/.credentials.json
+//
+// Unlike Materialize, `canonicalDir` IS the provider-native config dir (e.g.
+// ~/.claude or <conduitRoot>/agent-cred/.claude), not a parent "HOME". The
+// directory is created with mode 0700 if absent; the file lands with mode 0600.
+// Atomic write (temp+rename in the same dir). Used by the shared-credential
+// lineage fix (CONDUIT_SHARED_AGENT_CREDS) to seed the one canonical file that
+// every session reads through CLAUDE_CONFIG_DIR / CODEX_HOME.
+//
+// Returns os.ErrNotExist when no credential is stored for `provider`.
+func (s *Store) MaterializeCanonical(provider, canonicalDir string) error {
+	if !ValidProvider(provider) {
+		return fmt.Errorf("credentials: unknown provider %q", provider)
+	}
+	if strings.TrimSpace(canonicalDir) == "" {
+		return errors.New("credentials: empty canonicalDir")
+	}
+	blob, err := s.Get(provider)
+	if err != nil {
+		return err
+	}
+	var filename string
+	switch provider {
+	case ProviderOpenAI:
+		filename = "auth.json"
+	case ProviderAnthropic:
+		filename = ".credentials.json"
+	default:
+		return fmt.Errorf("credentials: unknown provider %q", provider)
+	}
+	if err := os.MkdirAll(canonicalDir, 0o700); err != nil {
+		return fmt.Errorf("credentials: mkdir %s: %w", canonicalDir, err)
+	}
+	return atomicWrite(filepath.Join(canonicalDir, filename), blob, 0o600)
+}
+
 // seal encrypts `plain` with AES-256-GCM under the keyfile primary key.
 // Layout:
 //
