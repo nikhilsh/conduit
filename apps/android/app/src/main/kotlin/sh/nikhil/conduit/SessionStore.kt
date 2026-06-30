@@ -3353,8 +3353,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _sessions.value = _sessions.value.filterNot { it.id == sessionId }
         updateLifecycle { it - sessionId }
         if (_selectedId.value == sessionId) _selectedId.value = null
-        // Clear sticky hydration base so a reused id can't show stale history.
-        _hydratedChat.remove(sessionId)
+        // Free all in-memory chat/state data. Transcript is safe on broker disk;
+        // History re-fetches via HTTP on first open.
+        val convCount = _conversationLog.value[sessionId]?.size ?: 0
+        val chatCount = _chatLog.value[sessionId]?.size ?: 0
+        clearSessionState(sessionId)
+        Telemetry.breadcrumb("memory", "session_state_freed",
+            mapOf("session" to sessionId, "conv" to convCount.toString(),
+                  "chat" to chatCount.toString(), "reason" to "archive"))
         // Suppress this id in refreshSessions for a short window so the broker's
         // lingering tmux (#199) doesn't make the row flicker back immediately.
         _recentlyArchivedAt[sessionId] = System.currentTimeMillis()
@@ -3418,8 +3424,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _sessions.value = _sessions.value.filterNot { it.id == sessionId }
         updateLifecycle { it - sessionId }
         if (_selectedId.value == sessionId) _selectedId.value = null
-        // Clear sticky hydration base so a reused id can't show stale history.
-        _hydratedChat.remove(sessionId)
+        // Free all in-memory chat/state data for this session.
+        val convCount = _conversationLog.value[sessionId]?.size ?: 0
+        val chatCount = _chatLog.value[sessionId]?.size ?: 0
+        clearSessionState(sessionId)
+        Telemetry.breadcrumb("memory", "session_state_freed",
+            mapOf("session" to sessionId, "conv" to convCount.toString(),
+                  "chat" to chatCount.toString(), "reason" to "delete"))
         viewModelScope.launch {
             client?.let { c -> runCatching { withContext(Dispatchers.IO) { c.exitSession(sessionId) } } }
             runCatching { deleteSession(sessionId) }.onFailure { t ->
@@ -3432,6 +3443,28 @@ class SessionStore : ViewModel(), ConduitDelegate {
             }
             refreshSessions()
         }
+    }
+
+    /**
+     * Free all per-session in-memory state after archive or permanent delete.
+     * The broker preserves the transcript on disk; History re-fetches via HTTP
+     * on first open. Call immediately after the Rust core forgets the session.
+     */
+    private fun clearSessionState(sessionId: String) {
+        _chatLog.value = _chatLog.value - sessionId
+        _conversationLog.value = _conversationLog.value - sessionId
+        _hydratedChat.remove(sessionId)
+        _statusBySession.value = _statusBySession.value - sessionId
+        _terminalBuffer.value = _terminalBuffer.value - sessionId
+        _quickReplies.value = _quickReplies.value - sessionId
+        _credentialSource.value = _credentialSource.value - sessionId
+        _agentAuthFailure.value = _agentAuthFailure.value - sessionId
+        _previews.value = _previews.value - sessionId
+        _connectionHealth.value = _connectionHealth.value - sessionId
+        _modelBySession.value = _modelBySession.value - sessionId
+        _pinnedContexts.value = _pinnedContexts.value - sessionId
+        _subagentRoster.value = _subagentRoster.value - sessionId
+        _sessionBox.value = _sessionBox.value - sessionId
     }
 
     /**
@@ -5372,6 +5405,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
         }
         _chatLog.value = _chatLog.value.toMutableMap().also { m ->
             m[sessionId] = (m[sessionId] ?: emptyList()) + event
+        }
+        // Memory telemetry: breadcrumb at milestones so Sentry has context
+        // before a crash/hang caused by a large in-memory conversation store.
+        val chatCount = _chatLog.value[sessionId]?.size ?: 0
+        if (chatCount == 100 || chatCount == 500 || chatCount == 1000 || (chatCount > 1000 && chatCount % 2500 == 0)) {
+            val convCount = _conversationLog.value[sessionId]?.size ?: 0
+            Telemetry.breadcrumb("memory", "chat_log_milestone",
+                mapOf("session" to sessionId, "chat" to chatCount.toString(), "conv" to convCount.toString()))
         }
         // Section D: best-effort recover from an agent auth 401 surfaced as
         // assistant text (string-match fallback; typed view_event deferred).

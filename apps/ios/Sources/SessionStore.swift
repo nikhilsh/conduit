@@ -3514,6 +3514,30 @@ final class SessionStore {
     /// History — now no longer live, so `isReadOnly` is true and it opens
     /// read-only (#223); the broker preserves `conversation.jsonl`, so
     /// `fetchConversation` still serves the transcript.
+    /// Free all per-session in-memory state after archive or permanent delete.
+    /// The broker preserves the transcript on disk; History re-fetches it via
+    /// HTTP on first open (guarded by `hydratedChat[id] == nil` in
+    /// `seedExitedConversation`). Called immediately after `rustStore.forgetSession`.
+    private func clearSessionState(_ sessionID: String) {
+        chatLog[sessionID] = nil
+        conversationLog[sessionID] = nil
+        hydratedChat[sessionID] = nil
+        terminalBuffer[sessionID] = nil
+        terminalSnapshot[sessionID] = nil
+        statusBySession[sessionID] = nil
+        quickReplies[sessionID] = nil
+        credentialSource[sessionID] = nil
+        answeredPendingBySession[sessionID] = nil
+        subagentRosters[sessionID] = nil
+        pinnedContexts[sessionID] = nil
+        preview[sessionID] = nil
+        connectionHealthBySession[sessionID] = nil
+        agentAuthFailure[sessionID] = nil
+        hasMoreHistoryBySession[sessionID] = nil
+        oldestLoadedTsBySession[sessionID] = nil
+        isLoadingOlderBySession[sessionID] = nil
+    }
+
     func archive(sessionID: String) {
         // Optimistic removal so the row disappears immediately. Previously
         // we cleared local state only *after* the async `exitSession` +
@@ -3525,6 +3549,13 @@ final class SessionStore {
         sessionLifecycle[sessionID] = nil
         if selectedSessionID == sessionID { selectedSessionID = nil }
         if useRustStore { rustStore.forgetSession(sessionId: sessionID) }
+        // Free all in-memory chat/state data for this session.
+        let convCount = conversationLog[sessionID]?.count ?? 0
+        let chatCount = chatLog[sessionID]?.count ?? 0
+        clearSessionState(sessionID)
+        Telemetry.breadcrumb("memory", "session_state_freed",
+            data: ["session": sessionID, "conv": "\(convCount)",
+                   "chat": "\(chatCount)", "reason": "archive"])
         // End any Live Activity for this session immediately. The bridge
         // only drives `.end` when it sees an "exited..." phase in a future
         // frame, but archive removes the session from the live list, so the
@@ -3561,6 +3592,13 @@ final class SessionStore {
         if selectedSessionID == sessionID { selectedSessionID = nil }
         pendingChats.clear(sessionID: sessionID)
         if useRustStore { rustStore.forgetSession(sessionId: sessionID) }
+        // Free all in-memory chat/state data for this session.
+        let convCount = conversationLog[sessionID]?.count ?? 0
+        let chatCount = chatLog[sessionID]?.count ?? 0
+        clearSessionState(sessionID)
+        Telemetry.breadcrumb("memory", "session_state_freed",
+            data: ["session": sessionID, "conv": "\(convCount)",
+                   "chat": "\(chatCount)", "reason": "delete"])
         // End any Live Activity for this session immediately — same
         // reasoning as archive(sessionID:) above.
         TurnLiveActivityController.shared.sessionExited(sessionID: sessionID)
@@ -4861,6 +4899,14 @@ final class SessionStore {
             }
         }
         chatLog[sessionID, default: []].append(event)
+        // Memory telemetry: breadcrumb at milestones so Sentry has context
+        // before a crash/hang caused by a large in-memory conversation store.
+        let chatCount = chatLog[sessionID]?.count ?? 0
+        if chatCount == 100 || chatCount == 500 || chatCount == 1000 || (chatCount > 1000 && chatCount % 2500 == 0) {
+            let convCount = conversationLog[sessionID]?.count ?? 0
+            Telemetry.breadcrumb("memory", "chat_log_milestone",
+                data: ["session": sessionID, "chat": "\(chatCount)", "conv": "\(convCount)"])
+        }
         // §D 401 handling (string-match fallback): the claude/codex auth
         // failure currently arrives as plain assistant/result chat text with
         // no typed signal (broker claudechat.go; the typed
