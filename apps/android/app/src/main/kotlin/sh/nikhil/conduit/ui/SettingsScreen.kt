@@ -21,14 +21,11 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Coffee
-import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.ImportExport
-import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Palette
@@ -97,8 +94,6 @@ import sh.nikhil.conduit.SavedServerStatus
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.SshLoginPrefill
 import sh.nikhil.conduit.Endpoint
-import sh.nikhil.conduit.push.PushSettingsSection
-import sh.nikhil.conduit.push.PushStore
 import uniffi.conduit_core.ProjectSession
 import uniffi.conduit_core.SessionStatus
 
@@ -137,7 +132,6 @@ private const val SUPPORT_DONATION_URL = "https://buymeacoffee.com/conduitapp"
 @Composable
 fun SettingsScreen(
     store: SessionStore,
-    pushStore: PushStore? = null,
     onDismiss: () -> Unit,
     onOpenLicenses: () -> Unit = {},
     // When true, render inline as a tablet section pane (no bottom-sheet
@@ -159,7 +153,6 @@ fun SettingsScreen(
     val themeMode by appearance.themeMode.collectAsState()
     val collapseTurns by appearance.collapseTurns.collectAsState()
     val replyHaptics by appearance.replyHaptics.collectAsState()
-    val showCommandDetail by appearance.showCommandDetail.collectAsState()
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
     val terminalTheme by appearance.terminalTheme.collectAsState()
     val terminalFont by appearance.terminalFont.collectAsState()
@@ -423,20 +416,6 @@ fun SettingsScreen(
                 NeonThemePreviewChip(appearance)
             }
 
-            // Notifications (WS-P.3) — push settings section. Placed after
-            // Appearance to match iOS section order (Connection → Usage →
-            // Appearance → Notifications → Conversation → ...). Shown when a
-            // PushStore is provided (i.e. MainActivity wired it up). The
-            // endpoint is the currently-active broker endpoint; features is
-            // lazily probed by the BoxHealthScreen flow.
-            pushStore?.let { ps ->
-                PushSettingsSection(
-                    pushStore = ps,
-                    endpoint = endpoint,
-                    features = null, // Probed lazily; null = show registration UI
-                )
-            }
-
             // Conversation.
             SettingsSection("Conversation") {
                 ToggleRow(
@@ -452,13 +431,6 @@ fun SettingsScreen(
                     subtitle = "Tap when a reply starts and finishes",
                     isOn = replyHaptics,
                     onChange = { appearance.setReplyHaptics(it) },
-                )
-                ToggleRow(
-                    icon = Icons.Filled.Code,
-                    title = "Show command detail",
-                    subtitle = "Show each command the agent runs (off shows a compact summary)",
-                    isOn = showCommandDetail,
-                    onChange = { appearance.setShowCommandDetail(it) },
                 )
             }
 
@@ -1629,7 +1601,7 @@ private fun AgentEnableRow(
     val tint = neonAgentColor(agent, neon)
     ListItem(
         leadingContent = {
-            Icon(agentEnableGlyph(agent), contentDescription = null, tint = tint)
+            AgentAvatar(assistant = agent, size = 28.dp)
         },
         headlineContent = { Text(title, color = neon.text, fontFamily = neon.sans) },
         trailingContent = {
@@ -1640,8 +1612,6 @@ private fun AgentEnableRow(
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = neon.accentText,
                     checkedTrackColor = tint,
-                    // Keep the last-enabled (locked-on) agent reading as ON,
-                    // not greyed-off.
                     disabledCheckedThumbColor = neon.accentText,
                     disabledCheckedTrackColor = tint.copy(alpha = 0.55f),
                 ),
@@ -1649,19 +1619,6 @@ private fun AgentEnableRow(
         },
         colors = transparentListItemColors(),
     )
-}
-
-/**
- * Per-agent glyph for the Agents rows — four DISTINCT glyphs matching the iOS
- * SF Symbol intent: claude=cpu (Memory), codex=curly-braces (DataObject),
- * gemini=sparkle (AutoAwesome), opencode=code-brackets (Code).
- */
-private fun agentEnableGlyph(agent: String): ImageVector = when (agent.lowercase()) {
-    "claude"   -> Icons.Filled.Memory
-    "codex"    -> Icons.Filled.DataObject
-    "gemini"   -> Icons.Filled.AutoAwesome
-    "opencode" -> Icons.Filled.Code
-    else       -> Icons.Filled.AutoAwesome
 }
 
 @Composable
