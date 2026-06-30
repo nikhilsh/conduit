@@ -11,19 +11,26 @@ release, the section for that version is the device-test punch list.
 
 ## v0.0.204
 
-**Chat streaming overlay + turn_phase indicators (iOS + Android). PR #771.**
+**Sequential agent pipeline — broker. PR #774.**
 
-- **Streaming chat overlay** — partial assistant content appears live as tokens arrive via `chat_streaming` view_events; a streaming overlay row renders in the chat list and is cleared when the final assistant reply lands. [iOS + Android, needs-device-verify; **depends on broker PR #770**]
-- **turn_phase typing indicator** — TypingIndicatorRow/ConduitTypingIndicator shows distinct animated states: single pulsing dot for "working"/"thinking", staggered three-dot bounce for "writing"/default. Typing dots suppressed while streaming overlay text is visible. [iOS + Android, needs-device-verify]
+- **Pipeline REST API** — `POST /api/pipeline` (create), `GET /api/pipeline/{id}` (status), `POST /api/pipeline/{id}/continue` (gate), `DELETE /api/pipeline/{id}` (cancel), `GET /api/pipelines` (list). Full state machine: queued → running → awaiting-gate → done/failed. Each step runs in its own session worktree; handoff via HANDOFF-OUT. `Pipeline: true` in capabilities. [broker, **redeploy required**]
 
----
+**Chat streaming + turn_phase — broker. PR #770.**
+
+- **`chat_streaming` view_event** — broker streams per-token content chunks to connected clients as the agent writes; each event carries a `content` string delta and the session `id`. [broker, **redeploy required**]
+- **`turn_phase` view_event** — broker emits `writing` / `working` / `thinking` phase transitions; clients use this to drive the typing indicator. [broker, **redeploy required**]
 
 **FanOut compare + Pipeline Builder/Monitor (iOS + Android). PRs #776 + #777.**
 
-- **FanOut compare view (iOS + Android)** — `ConduitFanOutCompareView` / `FanOutCompareScreen` shows per-run diff stats (`N files · +X −Y`), expandable `diff_stat` mono block, `agent_summary` (1–2 lines), and **Open** / **Commit & PR** action buttons. Failed runs render greyed with error reason. `onCompare` wired in host via tracked session IDs derived from live session store. [iOS + Android, needs-device-verify; **broker `POST /api/fanout/compare` required (deployed in #773)**]
-- **Pipeline Builder (iOS + Android)** — `ConduitPipelineBuilderView` / `PipelineBuilderScreen`: create a multi-step pipeline (title, task, ordered steps with agent type / role / prompt template / gate toggle). "Start pipeline" calls `POST /api/pipeline`. [iOS + Android, needs-device-verify; **broker pipeline endpoints merged in #774 — broker redeploy required**]
+- **FanOut compare view (iOS + Android)** — `ConduitFanOutCompareView` / `FanOutCompareScreen` shows per-run diff stats (`N files · +X −Y`), expandable `diff_stat` mono block, `agent_summary` (1–2 lines), and **Open** / **Commit & PR** action buttons. Failed runs render greyed with error reason. `onCompare` wired in host via tracked session IDs derived from live session store. [iOS + Android, needs-device-verify; broker `POST /api/fanout/compare` required]
+- **Pipeline Builder (iOS + Android)** — `ConduitPipelineBuilderView` / `PipelineBuilderScreen`: create a multi-step pipeline (title, task, ordered steps with agent type / role / prompt template / gate toggle). "Start pipeline" calls `POST /api/pipeline`. [iOS + Android, needs-device-verify; broker pipeline endpoints in #774 — redeploy required]
 - **Pipeline Monitor (iOS + Android)** — `ConduitPipelineMonitorView` / `PipelineMonitorScreen`: vertical stepper showing each step's live state (queued / running / awaiting-gate / done / failed); polls `GET /api/pipeline/{id}`; **Continue** button on gate; **Open session** on failure. [iOS + Android, needs-device-verify]
-- **Gap A named-branch sessions (iOS + Android)** — FanOut now tracks launched session IDs by branch name; `onCompare` receives populated run list for the compare endpoint. [iOS + Android, needs-device-verify]
+- **Gap A named-branch sessions (iOS + Android)** — FanOut tracks launched session IDs by branch name; `onCompare` receives populated run list for the compare endpoint. [iOS + Android, needs-device-verify]
+
+**Chat streaming overlay + turn_phase indicators (iOS + Android). PR #771.**
+
+- **Streaming chat overlay** — partial assistant content appears live as tokens arrive via `chat_streaming` view_events; a streaming overlay row renders in the chat list and is cleared when the final assistant reply lands. [iOS + Android, needs-device-verify; broker `chat_streaming` support merged in #770 — redeploy required]
+- **turn_phase typing indicator** — TypingIndicatorRow/ConduitTypingIndicator shows distinct animated states: single pulsing dot for "working"/"thinking", staggered three-dot bounce for "writing"/default. Typing dots suppressed while streaming overlay text is visible. [iOS + Android, needs-device-verify]
 
 ---
 

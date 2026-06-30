@@ -7,10 +7,7 @@ Items currently being built. On merge, move each to
 
 ## Active
 
-- **Chat streaming — broker** (PR #770, branch `feat/chat-streaming`). Adds
-  `chat_streaming` view_event for per-token content delivery and `turn_phase`
-  view_event for writing/working/thinking indicator. CI re-triggered after
-  lint fix.
+*(none — all in-flight PRs merged)*
 
 ## Deferred (not active)
 
