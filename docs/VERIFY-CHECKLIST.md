@@ -17,6 +17,11 @@ release, the section for that version is the device-test punch list.
 - **Slim down Conversation settings** — "Show command detail" and "Command-run Mono block" toggles removed; only Collapse Turns + Reply Haptics remain. [iOS + Android, needs-device-verify]
 - **Agent icons use AgentAvatar** — Settings > Agents now shows proper logo circles (Claude/Codex marks, monogram fallback) instead of generic SF Symbols / Material icons. [iOS + Android, needs-device-verify]
 
+**Memory leak fix — free per-session state on archive/delete + Sentry memory checks (iOS + Android).** PR #775.
+
+- `archive()` and `permanentlyDelete()` now call `clearSessionState`, freeing `chatLog`, `conversationLog`, `hydratedChat`, terminal buffers, and 13 other per-session dicts immediately. History re-fetches transcript via HTTP on first open. Verify: archive sessions with long chats → memory drops; re-opening archived session still shows transcript. [iOS + Android, needs-device-verify]
+- Sentry breadcrumbs at chat-count milestones (100/500/1000) and memory-warning captures (`applicationDidReceiveMemoryWarning` / `onTrimMemory`). Verify in Sentry after a long session. [needs-device-verify]
+
 **Pending chat reconciliation — dotted bubble clears when reply arrives (iOS + Android).** PR #769.
 
 - When the broker starts streaming an assistant reply, any `sent=true` pending-chat entries for that session are immediately cleared (bubbles go solid) without waiting for the `chat_ack`. Verify: send a message → while the reply streams in, the user message bubble should go solid, not stay dotted. [iOS + Android, needs-device-verify]
