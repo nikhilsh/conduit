@@ -948,7 +948,7 @@ fun ChatPage(
                 // trailing spacer) so when pinned to the bottom it's
                 // followed by autoscroll like any new content.
                 if (showTyping) {
-                    item { TypingIndicatorRow(session.assistant, agentAccent) }
+                    item { TypingIndicatorRow(session.assistant, agentAccent, statusBySession[session.id]?.turnPhase) }
                 }
                 item { Spacer(Modifier.height(1.dp)) }
             }
@@ -2520,7 +2520,11 @@ private fun SendStatusFooter(ev: ConversationItem) {
  * out of phase via an infinite transition.
  */
 @Composable
-private fun TypingIndicatorRow(assistant: String, @Suppress("UNUSED_PARAMETER") accent: Color) {
+private fun TypingIndicatorRow(
+    assistant: String,
+    @Suppress("UNUSED_PARAMETER") accent: Color,
+    phase: String? = null,
+) {
     val neon = LocalNeonTheme.current
     val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "typing")
     Row(
@@ -2534,30 +2538,56 @@ private fun TypingIndicatorRow(assistant: String, @Suppress("UNUSED_PARAMETER") 
             tint = neon.accent2,
             modifier = Modifier.size(14.dp),
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            repeat(3) { i ->
-                val dotAlpha by transition.animateFloat(
-                    initialValue = 0.3f,
-                    targetValue = 1f,
-                    animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-                        animation = androidx.compose.animation.core.tween(
-                            durationMillis = 600,
-                            delayMillis = i * 160,
+        val label = when (phase) {
+            "working" -> "working..."
+            "thinking" -> "thinking..."
+            else -> "$assistant is typing..."
+        }
+        if (phase == "working" || phase == "thinking") {
+            // Single pulsing dot for working/thinking states
+            val dotAlpha by transition.animateFloat(
+                initialValue = 0.3f,
+                targetValue = 1f,
+                animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                    animation = androidx.compose.animation.core.tween(durationMillis = 600),
+                    repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
+                ),
+                label = "pulseDot",
+            )
+            val dotColor = if (phase == "thinking") neon.textDim else neon.accent2
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .graphicsLayer { alpha = dotAlpha }
+                    .background(dotColor, CircleShape),
+            )
+        } else {
+            // Three staggered bouncing dots for writing/default state
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                repeat(3) { i ->
+                    val dotAlpha by transition.animateFloat(
+                        initialValue = 0.3f,
+                        targetValue = 1f,
+                        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                            animation = androidx.compose.animation.core.tween(
+                                durationMillis = 600,
+                                delayMillis = i * 160,
+                            ),
+                            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
                         ),
-                        repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
-                    ),
-                    label = "dot$i",
-                )
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .graphicsLayer { alpha = dotAlpha }
-                        .background(neon.accent2, CircleShape),
-                )
+                        label = "dot$i",
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .graphicsLayer { alpha = dotAlpha }
+                            .background(neon.accent2, CircleShape),
+                    )
+                }
             }
         }
         Text(
-            "$assistant is typing…",
+            label,
             style = MaterialTheme.typography.labelSmall,
             fontFamily = neon.sans,
             color = neon.textDim,

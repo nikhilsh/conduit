@@ -232,6 +232,10 @@ type Session struct {
 	// respawned agent --resumes the conversation instead of starting
 	// amnesiac. Guarded by mu.
 	chatSessionID string
+	// turnPhase is the sub-state of the current in-flight agent turn:
+	// "writing" | "working" | "thinking" | "" (none/idle).
+	// Set by the onTurnPhase closure in backend_streamjson.go; guarded by mu.
+	turnPhase string
 	// codexThreadID is codex's equivalent (thread.started id), persisted
 	// so recovery seeds `exec resume <id>`. Guarded by mu.
 	codexThreadID string
@@ -1146,6 +1150,18 @@ func (s *Session) structuredTurnActive() (active, present bool) {
 func (s *Session) TurnActive() bool {
 	active, _ := s.structuredTurnActive()
 	return active
+}
+
+// structuredTurnPhase returns the current turn phase and whether this
+// session has a structured chat backend (present=false for TUI-scrape).
+// When present is true, phase is "writing" | "working" | "thinking" | "".
+func (s *Session) structuredTurnPhase() (phase string, present bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.chat == nil {
+		return "", false
+	}
+	return s.turnPhase, true
 }
 
 // SendChat routes a composer message to the structured chat channel when

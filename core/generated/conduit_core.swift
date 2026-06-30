@@ -586,9 +586,13 @@ public protocol ConduitClientProtocol : AnyObject {
     
     func notifyNetworkChange() 
     
+    func pauseSession(sessionId: String) throws 
+    
     func refreshAccountUsage(sessionId: String) async throws 
     
     func resize(sessionId: String, rows: UInt16, cols: UInt16) async throws 
+    
+    func resumeSession(sessionId: String) throws 
     
     func sendChat(sessionId: String, msg: String, clientMsgId: String) async throws 
     
@@ -802,6 +806,13 @@ open func notifyNetworkChange() {try! rustCall() {
 }
 }
     
+open func pauseSession(sessionId: String)throws  {try rustCallWithError(FfiConverterTypeConduitError.lift) {
+    uniffi_conduit_core_fn_method_conduitclient_pause_session(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),$0
+    )
+}
+}
+    
 open func refreshAccountUsage(sessionId: String)async throws  {
     return
         try  await uniffiRustCallAsync(
@@ -834,6 +845,13 @@ open func resize(sessionId: String, rows: UInt16, cols: UInt16)async throws  {
             liftFunc: { $0 },
             errorHandler: FfiConverterTypeConduitError.lift
         )
+}
+    
+open func resumeSession(sessionId: String)throws  {try rustCallWithError(FfiConverterTypeConduitError.lift) {
+    uniffi_conduit_core_fn_method_conduitclient_resume_session(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),$0
+    )
+}
 }
     
 open func sendChat(sessionId: String, msg: String, clientMsgId: String)async throws  {
@@ -2363,6 +2381,7 @@ public struct SessionStatus {
     public var sessionName: String?
     public var viewers: UInt32?
     public var turnActive: Bool?
+    public var turnPhase: String?
     public var reasoningEffort: String?
     public var cwd: String?
     public var startedAt: String?
@@ -2393,7 +2412,7 @@ public struct SessionStatus {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(session: String, assistant: String, phase: String, health: String, rows: UInt16, cols: UInt16, yolo: Bool, preview: PreviewInfo?, sessionName: String?, viewers: UInt32?, turnActive: Bool? = nil, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?, totalInputTokens: UInt64? = nil, totalOutputTokens: UInt64? = nil, totalCachedTokens: UInt64? = nil, totalCostUsd: Double? = nil, contextUsedTokens: UInt64? = nil, contextWindowTokens: UInt64? = nil, linesAdded: UInt32? = nil, linesRemoved: UInt32? = nil, commits: UInt32? = nil, prNumber: UInt32? = nil, prState: String? = nil, prUrl: String? = nil, prProvider: String? = nil, account5hPct: Double? = nil, account5hResetsAt: String? = nil, account7dPct: Double? = nil, account7dResetsAt: String? = nil, gitBranch: String? = nil, gitDirty: UInt32? = nil, gitAhead: UInt32? = nil, gitBehind: UInt32? = nil, worktreeName: String? = nil) {
+    public init(session: String, assistant: String, phase: String, health: String, rows: UInt16, cols: UInt16, yolo: Bool, preview: PreviewInfo?, sessionName: String?, viewers: UInt32?, turnActive: Bool? = nil, turnPhase: String? = nil, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?, totalInputTokens: UInt64? = nil, totalOutputTokens: UInt64? = nil, totalCachedTokens: UInt64? = nil, totalCostUsd: Double? = nil, contextUsedTokens: UInt64? = nil, contextWindowTokens: UInt64? = nil, linesAdded: UInt32? = nil, linesRemoved: UInt32? = nil, commits: UInt32? = nil, prNumber: UInt32? = nil, prState: String? = nil, prUrl: String? = nil, prProvider: String? = nil, account5hPct: Double? = nil, account5hResetsAt: String? = nil, account7dPct: Double? = nil, account7dResetsAt: String? = nil, gitBranch: String? = nil, gitDirty: UInt32? = nil, gitAhead: UInt32? = nil, gitBehind: UInt32? = nil, worktreeName: String? = nil) {
         self.session = session
         self.assistant = assistant
         self.phase = phase
@@ -2405,6 +2424,7 @@ public struct SessionStatus {
         self.sessionName = sessionName
         self.viewers = viewers
         self.turnActive = turnActive
+        self.turnPhase = turnPhase
         self.reasoningEffort = reasoningEffort
         self.cwd = cwd
         self.startedAt = startedAt
@@ -2470,6 +2490,9 @@ extension SessionStatus: Equatable, Hashable {
             return false
         }
         if lhs.turnActive != rhs.turnActive {
+            return false
+        }
+        if lhs.turnPhase != rhs.turnPhase {
             return false
         }
         if lhs.reasoningEffort != rhs.reasoningEffort {
@@ -2568,6 +2591,7 @@ extension SessionStatus: Equatable, Hashable {
         hasher.combine(sessionName)
         hasher.combine(viewers)
         hasher.combine(turnActive)
+        hasher.combine(turnPhase)
         hasher.combine(reasoningEffort)
         hasher.combine(cwd)
         hasher.combine(startedAt)
@@ -2617,6 +2641,7 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
                 sessionName: FfiConverterOptionString.read(from: &buf), 
                 viewers: FfiConverterOptionUInt32.read(from: &buf), 
                 turnActive: FfiConverterOptionBool.read(from: &buf), 
+                turnPhase: FfiConverterOptionString.read(from: &buf), 
                 reasoningEffort: FfiConverterOptionString.read(from: &buf), 
                 cwd: FfiConverterOptionString.read(from: &buf), 
                 startedAt: FfiConverterOptionString.read(from: &buf), 
@@ -2659,6 +2684,7 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.sessionName, into: &buf)
         FfiConverterOptionUInt32.write(value.viewers, into: &buf)
         FfiConverterOptionBool.write(value.turnActive, into: &buf)
+        FfiConverterOptionString.write(value.turnPhase, into: &buf)
         FfiConverterOptionString.write(value.reasoningEffort, into: &buf)
         FfiConverterOptionString.write(value.cwd, into: &buf)
         FfiConverterOptionString.write(value.startedAt, into: &buf)
@@ -4709,10 +4735,16 @@ private var initializationResult: InitializationResult = {
     if (uniffi_conduit_core_checksum_method_conduitclient_notify_network_change() != 14476) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_conduit_core_checksum_method_conduitclient_pause_session() != 63807) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_conduit_core_checksum_method_conduitclient_refresh_account_usage() != 21233) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_conduit_core_checksum_method_conduitclient_resize() != 29584) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_conduit_core_checksum_method_conduitclient_resume_session() != 8111) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_conduit_core_checksum_method_conduitclient_send_chat() != 8352) {

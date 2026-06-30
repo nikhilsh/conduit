@@ -56,6 +56,9 @@ func (s *Session) StatusPayload() map[string]any {
 	if active, present := s.structuredTurnActive(); present {
 		payload["turn_active"] = active
 	}
+	if tp, present := s.structuredTurnPhase(); present && tp != "" {
+		payload["turn_phase"] = tp
+	}
 	if cwd := s.WorkspaceDir(); cwd != "" {
 		payload["cwd"] = cwd
 	}
