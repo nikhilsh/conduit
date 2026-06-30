@@ -4848,6 +4848,17 @@ final class SessionStore {
                     data: ["session": sessionID,
                            "chars": "\(event.content.count)"])
             }
+            // Reconcile: a reply proves the broker received the sent message(s).
+            // Drain `sent=true` pending entries so their bubbles go solid now
+            // without waiting for the explicit chat_ack (which may race or lag).
+            let drained = pendingChats.drainSentNormal(sessionID: sessionID)
+            for localID in drained {
+                setEchoStatus(sessionID: sessionID, localID: localID, status: "done")
+            }
+            if !drained.isEmpty {
+                Telemetry.breadcrumb("chat", "reconciled sent on reply",
+                    data: ["session": sessionID, "count": "\(drained.count)"])
+            }
         }
         chatLog[sessionID, default: []].append(event)
         // §D 401 handling (string-match fallback): the claude/codex auth

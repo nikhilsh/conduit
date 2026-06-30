@@ -212,6 +212,21 @@ data class PendingChatQueue(
     }
 
     /**
+     * Called when an assistant reply arrives for a session, proving the broker received
+     * the user's prior message(s). Removes all `sent=true, kind==normal` entries and
+     * returns their localIds so the shell can flip each echo to `done`. A `chat_ack`
+     * arriving later no-ops (entry already gone). Queued-turn and steer entries are
+     * NOT touched — they may not have been delivered yet.
+     */
+    fun drainSentNormal(sessionId: String): Pair<PendingChatQueue, List<String>> {
+        val list = bySession[sessionId] ?: return Pair(this, emptyList())
+        val drained = list.filter { it.sent && it.kind == PendingChatKind.normal }.map { it.localId }
+        val remaining = list.filterNot { it.sent && it.kind == PendingChatKind.normal }
+        val next = if (remaining.isEmpty()) bySession - sessionId else bySession + (sessionId to remaining)
+        return Pair(copy(bySession = next), drained)
+    }
+
+    /**
      * The BROKER acked receipt of [localId] (chat_ack) — drop it from the
      * queue. The shell flips the transcript echo to `done` (solid bubble).
      * This is the ONLY durable-delivery signal; a bare WS-write success goes
