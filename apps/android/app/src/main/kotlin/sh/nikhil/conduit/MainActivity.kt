@@ -1,6 +1,7 @@
 package sh.nikhil.conduit
 
 import android.Manifest
+import android.content.ComponentCallbacks2
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -116,6 +117,25 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            val convTotal = store.conversationLog.value.values.sumOf { it.size }
+            val chatTotal = store.chatLog.value.values.sumOf { it.size }
+            Telemetry.capture(
+                error = RuntimeException("memory pressure: level=$level"),
+                message = "Android onTrimMemory — conversation store sizes",
+                tags = mapOf("surface" to "android", "phase" to "memory_pressure"),
+                extras = mapOf(
+                    "level" to level.toString(),
+                    "conv_total" to convTotal.toString(),
+                    "chat_total" to chatTotal.toString(),
+                    "sessions" to store.conversationLog.value.size.toString(),
+                ),
+            )
         }
     }
 

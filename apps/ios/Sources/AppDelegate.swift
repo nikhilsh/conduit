@@ -39,6 +39,24 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     // MARK: UIApplicationDelegate
 
+    func applicationDidReceiveMemoryWarning(_ application: UIApplication) {
+        guard let store = sessionStore else { return }
+        let convTotal = store.conversationLog.values.map { $0.count }.reduce(0, +)
+        let chatTotal = store.chatLog.values.map { $0.count }.reduce(0, +)
+        let sessionCount = store.conversationLog.count
+        Telemetry.capture(
+            error: NSError(domain: "ios.memory", code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "iOS memory warning"]),
+            message: "iOS memory warning — conversation store sizes",
+            tags: ["surface": "ios", "phase": "memory_warning"],
+            extras: [
+                "conv_total": "\(convTotal)",
+                "chat_total": "\(chatTotal)",
+                "sessions": "\(sessionCount)",
+            ]
+        )
+    }
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
