@@ -61,6 +61,9 @@ extension ConduitUI {
         /// (`ConduitUI.FanOutView`). Default no-op so the sheet compiles
         /// standalone.
         var onFanOut: () -> Void = {}
+        /// "New pipeline" action — caller presents PipelineBuilderView.
+        /// Default no-op so the sheet compiles standalone.
+        var onNewPipeline: () -> Void = {}
 
         @State private var query: String = ""
         @FocusState private var fieldFocused: Bool
@@ -173,6 +176,8 @@ extension ConduitUI {
                               shortcut: nil, run: onPairBox),
                 PaletteAction(id: "fanout", title: "Fan out a task", systemImage: "square.grid.2x2",
                               shortcut: nil, run: onFanOut),
+                PaletteAction(id: "pipeline", title: "New pipeline", systemImage: "arrow.triangle.merge",
+                              shortcut: nil, run: onNewPipeline),
             ]
         }
 

@@ -20,7 +20,7 @@ import SwiftUI
 //                                         initialPrompt: task)
 //                 }
 //             },
-//             onCompare: { /* no backend yet — see below */ }
+//             onCompare: { runs in /* present ConduitFanOutCompareView */ }
 //         )
 //         .environment(store)
 //     }
@@ -37,9 +37,8 @@ import SwiftUI
 //   branch (running → cyan, exited(0) → done/green, exited(≠0) → failed/
 //   red). Before launch we show the configured branches in a neutral
 //   "queued" state — never a fake in-progress bar.
-// • COMPARE & KEEP BEST is a STUB: there is no backend to diff/rank the N
-//   runs and keep the winner. The button just invokes the host-supplied
-//   `onCompare` closure (defaulted no-op). Wire it when a backend exists.
+// • COMPARE — calls POST /api/fanout/compare with the session IDs of the
+//   launched runs, then presents ConduitFanOutCompareView with the result.
 //
 // This view does NOT call `createSession` itself and does NOT mutate the
 // store — it only reflects status the store already holds. Launch wiring
@@ -104,8 +103,9 @@ extension ConduitUI {
         /// the chosen branches; the host fans out into `createSession`
         /// per branch. No-op by default (presentation-only).
         var onLaunch: (String, [String]) -> Void = { _, _ in }
-        /// "Compare & keep best" — STUB. No backend to diff/rank runs yet;
-        /// host may wire later. No-op by default.
+        /// "Compare & keep best" — calls POST /api/fanout/compare with the
+        /// launched session IDs and presents ConduitFanOutCompareView on
+        /// success. No-op by default so the view compiles standalone.
         var onCompare: () -> Void = {}
 
         /// Optional pre-configured runs (e.g. the host already launched and
@@ -121,6 +121,12 @@ extension ConduitUI {
         /// Runs already launched (seeded from `runs`; status comes live
         /// from the store, NOT stored here).
         @State private var launched: [ConduitUI.FanOutRun]
+
+        // MARK: Compare state
+        @State private var isComparing = false
+        @State private var compareResults: [ConduitUI.FanOutCompareRun]? = nil
+        @State private var showCompareSheet = false
+        @State private var compareErrorAlert: String? = nil
 
         init(
             onLaunch: @escaping (String, [String]) -> Void = { _, _ in },
@@ -181,6 +187,20 @@ extension ConduitUI {
                     }
                 }
                 .tint(neon.accent)
+                .sheet(isPresented: $showCompareSheet) {
+                    if let results = compareResults {
+                        ConduitUI.FanOutCompareView(runs: results)
+                            .environment(store)
+                    }
+                }
+                .alert("Compare failed", isPresented: Binding(
+                    get: { compareErrorAlert != nil },
+                    set: { if !$0 { compareErrorAlert = nil } }
+                )) {
+                    Button("OK") { compareErrorAlert = nil }
+                } message: {
+                    if let msg = compareErrorAlert { Text(msg) }
+                }
             }
             .appearanceColorScheme()
         }
@@ -411,11 +431,20 @@ extension ConduitUI {
         }
 
         private var compareBar: some View {
-            Button(action: onCompare) {
+            Button {
+                postCompare()
+            } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 13, weight: .bold))
-                    Text("Compare & keep best")
+                    if isComparing {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(neon.accentText)
+                            .scaleEffect(0.7)
+                    } else {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 13, weight: .bold))
+                    }
+                    Text(isComparing ? "Comparing..." : "Compare & keep best")
                         .font(neon.sans(15).weight(.bold))
                 }
                 .foregroundStyle(neon.accentText)
@@ -428,8 +457,101 @@ extension ConduitUI {
                 .neonGlowBox(neon.glow ? neon.glowBox : nil)
             }
             .buttonStyle(.plain)
+            .disabled(isComparing)
+            .opacity(isComparing ? 0.7 : 1)
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
+        }
+
+        // MARK: - Compare API call
+
+        /// POST /api/fanout/compare  {"base":"main","runs":[{"session_id":"...","label":"..."}]}
+        private func postCompare() {
+            let endpoint = store.endpoint
+            guard endpoint.isComplete, let base = endpoint.httpBaseURL else {
+                compareErrorAlert = "No active endpoint"
+                return
+            }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/fanout/compare"
+            guard let url = components?.url else {
+                compareErrorAlert = "Bad URL"
+                return
+            }
+
+            struct FanOutCompareRequestRun: Encodable {
+                let session_id: String
+                let label: String
+            }
+            struct FanOutCompareRequest: Encodable {
+                let base: String
+                let runs: [FanOutCompareRequestRun]
+            }
+
+            let sessionRuns = launched.compactMap { run -> FanOutCompareRequestRun? in
+                guard let sid = run.sessionID else { return nil }
+                return FanOutCompareRequestRun(session_id: sid, label: run.branch)
+            }
+            guard !sessionRuns.isEmpty else {
+                compareErrorAlert = "No launched sessions to compare"
+                return
+            }
+
+            isComparing = true
+            Telemetry.breadcrumb("fanout", "compare start",
+                data: ["run_count": "\(sessionRuns.count)", "host": endpoint.displayHost])
+
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 60
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            guard let body = try? JSONEncoder().encode(FanOutCompareRequest(base: "main", runs: sessionRuns)) else {
+                isComparing = false
+                compareErrorAlert = "Encoding error"
+                return
+            }
+            req.httpBody = body
+
+            Task { @MainActor in
+                defer { isComparing = false }
+                do {
+                    let (data, resp) = try await URLSession.shared.data(for: req)
+                    guard let http = resp as? HTTPURLResponse else {
+                        compareErrorAlert = "Invalid response"
+                        return
+                    }
+                    struct FanOutCompareResponse: Decodable {
+                        let base: String
+                        let runs: [ConduitUI.FanOutCompareRun]
+                    }
+                    if http.statusCode >= 200 && http.statusCode < 300,
+                       let parsed = try? JSONDecoder().decode(FanOutCompareResponse.self, from: data) {
+                        Telemetry.breadcrumb("fanout", "compare ok",
+                            data: ["run_count": "\(parsed.runs.count)"])
+                        compareResults = parsed.runs
+                        showCompareSheet = true
+                    } else {
+                        let detail = "HTTP \(http.statusCode)"
+                        Telemetry.capture(
+                            error: NSError(domain: "ios.fanout", code: 1,
+                                userInfo: [NSLocalizedDescriptionKey: "compare failed"]),
+                            message: "fanout compare failed",
+                            tags: ["surface": "ios", "phase": "fanout"],
+                            extras: ["status": "\(http.statusCode)"]
+                        )
+                        compareErrorAlert = detail
+                    }
+                } catch {
+                    Telemetry.capture(
+                        error: error,
+                        message: "fanout compare network error",
+                        tags: ["surface": "ios", "phase": "fanout"],
+                        extras: ["host": endpoint.displayHost]
+                    )
+                    compareErrorAlert = error.localizedDescription
+                }
+            }
         }
     }
 }
