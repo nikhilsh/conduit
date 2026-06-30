@@ -5563,6 +5563,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
     fun ingestTurnPhase(sessionId: String, payload: Map<String, String>) {
         val phase = payload["turn_phase"] ?: ""
         _turnPhaseBySession.update { it + (sessionId to phase) }
+        Telemetry.breadcrumb("turn_phase", phase.ifEmpty { "cleared" },
+            mapOf("session" to sessionId))
     }
 
     /**
