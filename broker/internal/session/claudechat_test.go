@@ -186,12 +186,6 @@ func TestProcessClaudeStreamOutputAskUserQuestion(t *testing.T) {
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[{"question":"Proceed with the merge?","header":"Merge","options":[{"label":"Merge now"},{"label":"Hold off"}]}]}}]}}`,
 	}, "\n")
 
-	type chatEv struct {
-		Event struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"event"`
-	}
 	type chatEvAsk struct {
 		Event struct {
 			Role    string `json:"role"`
