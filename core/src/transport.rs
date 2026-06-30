@@ -811,6 +811,8 @@ async fn handle_text(
         #[serde(default)]
         turn_active: Option<bool>,
         #[serde(default)]
+        turn_phase: Option<String>,
+        #[serde(default)]
         reasoning_effort: Option<String>,
         #[serde(default)]
         cwd: Option<String>,
@@ -902,6 +904,7 @@ async fn handle_text(
                 session_name: env.session_name,
                 viewers: env.viewers,
                 turn_active: env.turn_active,
+                turn_phase: env.turn_phase,
                 reasoning_effort: env.reasoning_effort,
                 cwd: env.cwd,
                 started_at: env.started_at,
