@@ -131,6 +131,10 @@ type capabilitiesResponse struct {
 		// FanoutCompare: POST /api/fanout/compare is available. Apps gate
 		// the Compare button on this flag so old brokers degrade gracefully.
 		FanoutCompare bool `json:"fanout_compare"`
+		// Pipeline: POST /api/pipeline + GET /api/pipeline/{id} + POST
+		// /api/pipeline/{id}/continue + DELETE /api/pipeline/{id} +
+		// GET /api/pipelines are available (sequential agent pipeline subsystem).
+		Pipeline bool `json:"pipeline"`
 	} `json:"features"`
 	// Models is the per-assistant model+effort catalog discovered live from
 	// the agent CLIs (claude control-protocol initialize, codex app-server
@@ -186,6 +190,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.SessionFork = true   // real worktree fork with --fork-session (this PR)
 	resp.Features.SessionWatch = true  // since_ts incremental transcript polling
 	resp.Features.FanoutCompare = true // POST /api/fanout/compare diff-stat endpoint
+	resp.Features.Pipeline = true      // sequential agent pipeline subsystem
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
 	// Pass the pushed-credential store as a nil INTERFACE when unset:
