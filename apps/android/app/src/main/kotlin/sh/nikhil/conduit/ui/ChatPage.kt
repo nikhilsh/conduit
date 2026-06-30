@@ -42,6 +42,7 @@ import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Visibility
@@ -399,6 +400,14 @@ fun ChatPage(
     // Live per-session status (carries the broker's authoritative
     // `turn_active` for the typing indicator's reconnect fix).
     val statusBySession by store.statusBySession.collectAsState()
+    // Streaming overlay: partial assistant content from chat_streaming
+    // view_events, shown before the final on_chat_event commits the message.
+    val streamingMessageMap by store.streamingMessage.collectAsState()
+    val streamingOverlayContent: String? = streamingMessageMap[session.id]
+        ?.takeIf { it.isNotEmpty() }
+    // Current turn phase ("writing", "working", "") — drives distinct indicator states.
+    val turnPhaseMap by store.turnPhaseBySession.collectAsState()
+    val turnPhase: String? = turnPhaseMap[session.id]
     // "Queued Next" panel: observe the pending queue + agent descriptors.
     val pendingChatsQueue by store.pendingChats.collectAsState()
     val agentDescriptorsMap by store.agentDescriptors.collectAsState()
@@ -520,8 +529,13 @@ fun ChatPage(
     // Follow the stream + new messages. The last event's content length
     // changes on every streamed token (broker appends to the same item);
     // `events.size` changes on a new turn. Either, while not scrolled up,
-    // re-pins the bottom.
-    val streamingSignature = events.size to (events.lastOrNull()?.content?.length ?: 0)
+    // re-pins the bottom. Also include streaming overlay length so the
+    // overlay growth triggers auto-scroll follow.
+    val streamingSignature = Triple(
+        events.size,
+        events.lastOrNull()?.content?.length ?: 0,
+        streamingOverlayContent?.length ?: 0,
+    )
 
     // Bug 3: "agent is typing…" indicator. Drive a content-growth state
     // machine off the same streaming signature the follow uses. A timer
@@ -944,11 +958,25 @@ fun ChatPage(
                         }
                     }
                 }
+                // Streaming overlay: shows in-progress assistant content
+                // from chat_streaming view_events before the final
+                // on_chat_event commits the message to the store.
+                // Old brokers never send chat_streaming so this is nil.
+                if (!readOnly && streamingOverlayContent != null) {
+                    item(key = "streaming-overlay") {
+                        StreamingOverlayRow(
+                            content = streamingOverlayContent,
+                            agentAccent = agentAccent,
+                        )
+                    }
+                }
                 // "Agent is typing…" — last content row (before the
                 // trailing spacer) so when pinned to the bottom it's
                 // followed by autoscroll like any new content.
-                if (showTyping) {
-                    item { TypingIndicatorRow(session.assistant, agentAccent, statusBySession[session.id]?.turnPhase) }
+                // Show indicator only when there is no streaming overlay
+                // content (i.e. the pre-first-token thinking phase).
+                if (showTyping && streamingOverlayContent == null) {
+                    item { TypingIndicatorRow(session.assistant, agentAccent, turnPhase) }
                 }
                 item { Spacer(Modifier.height(1.dp)) }
             }
@@ -2514,16 +2542,19 @@ private fun SendStatusFooter(ev: ConversationItem) {
 }
 
 /**
- * Lightweight "agent is typing…" row: an animated three-dot pulse plus
- * the agent name. Shown at the bottom of the message list while the
- * agent streams (Bug 3 / iOS `isStreaming` parity). Three dots pulse
- * out of phase via an infinite transition.
+ * Lightweight "agent is working" row shown at the bottom of the message list
+ * while the agent is busy (Bug 3 / iOS `isAgentWorking` parity).
+ *
+ * [turnPhase] drives distinct visual states:
+ *   "working" = tool executing (gear icon + "Working...")
+ *   "writing" or null = pre-first-token thinking (three animated dots)
+ *   ""        = thinking/waiting (three animated dots)
  */
 @Composable
 private fun TypingIndicatorRow(
     assistant: String,
     @Suppress("UNUSED_PARAMETER") accent: Color,
-    phase: String? = null,
+    turnPhase: String? = null,
 ) {
     val neon = LocalNeonTheme.current
     val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "typing")
@@ -2538,12 +2569,12 @@ private fun TypingIndicatorRow(
             tint = neon.accent2,
             modifier = Modifier.size(14.dp),
         )
-        val label = when (phase) {
+        val label = when (turnPhase) {
             "working" -> "working..."
             "thinking" -> "thinking..."
             else -> "$assistant is typing..."
         }
-        if (phase == "working" || phase == "thinking") {
+        if (turnPhase == "working" || turnPhase == "thinking") {
             // Single pulsing dot for working/thinking states
             val dotAlpha by transition.animateFloat(
                 initialValue = 0.3f,
@@ -2554,7 +2585,7 @@ private fun TypingIndicatorRow(
                 ),
                 label = "pulseDot",
             )
-            val dotColor = if (phase == "thinking") neon.textDim else neon.accent2
+            val dotColor = if (turnPhase == "thinking") neon.textDim else neon.accent2
             Box(
                 modifier = Modifier
                     .size(6.dp)
@@ -2592,6 +2623,55 @@ private fun TypingIndicatorRow(
             fontFamily = neon.sans,
             color = neon.textDim,
         )
+    }
+}
+
+/**
+ * Streaming overlay row: shows in-progress partial assistant content streamed
+ * via chat_streaming view_events before the final on_chat_event commits the
+ * message to the Rust store. Styled like a plain assistant text row with a
+ * blinking cursor suffix. Mirror of iOS ConduitStreamingOverlay.
+ */
+@Composable
+private fun StreamingOverlayRow(content: String, agentAccent: Color) {
+    val neon = LocalNeonTheme.current
+    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "cursor")
+    val cursorAlpha by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(durationMillis = 500),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
+        ),
+        label = "cursorAlpha",
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+    ) {
+        Text(
+            "assistant",
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = neon.mono,
+            color = neon.textDim,
+        )
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                content,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = neon.sans,
+                color = neon.text,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Text(
+                "_",
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = neon.mono,
+                color = agentAccent,
+                modifier = Modifier.graphicsLayer { alpha = cursorAlpha },
+            )
+        }
     }
 }
 

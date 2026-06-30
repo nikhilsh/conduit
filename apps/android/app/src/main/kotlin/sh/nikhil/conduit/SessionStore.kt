@@ -639,6 +639,23 @@ class SessionStore : ViewModel(), ConduitDelegate {
     val conversationLog: StateFlow<Map<String, List<ConversationItem>>> = _conversationLog.asStateFlow()
 
     /**
+     * In-memory streaming overlay: partial assistant content streamed via
+     * chat_streaming view_events, keyed by sessionId. Cleared when the final
+     * onChatEvent arrives (the permanent message is then in the Rust store).
+     * Old brokers never send chat_streaming so this stays empty.
+     */
+    private val _streamingMessage = MutableStateFlow<Map<String, String>>(emptyMap())
+    val streamingMessage: StateFlow<Map<String, String>> = _streamingMessage.asStateFlow()
+
+    /**
+     * Current turn phase per session, sourced from the broker's turn_phase
+     * view_event. Values: "writing" (streaming text), "working" (tool calls),
+     * "" (thinking/waiting). Absent = no phase info from broker yet (old broker).
+     */
+    private val _turnPhaseBySession = MutableStateFlow<Map<String, String>>(emptyMap())
+    val turnPhaseBySession: StateFlow<Map<String, String>> = _turnPhaseBySession.asStateFlow()
+
+    /**
      * Sticky HTTP-fetched history base per session. Seeded once by
      * [hydrateChatConversation] (idempotent) and never overwritten by the
      * live [refreshConversation] path. On cold restart the Rust core's
@@ -5402,6 +5419,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 Telemetry.breadcrumb("chat", "reconciled sent on reply",
                     mapOf("session" to sessionId, "count" to localIds.size.toString()))
             }
+            // Final assistant message arrived — clear the in-memory streaming
+            // overlay. The permanent message is now in the Rust store / chatLog
+            // and will appear via the normal conversationLog path.
+            _streamingMessage.update { it - sessionId }
+            _turnPhaseBySession.update { it - sessionId }
         }
         _chatLog.value = _chatLog.value.toMutableMap().also { m ->
             m[sessionId] = (m[sessionId] ?: emptyList()) + event
@@ -5509,8 +5531,37 @@ class SessionStore : ViewModel(), ConduitDelegate {
             "session_title" -> ingestSessionTitle(sessionId, payload)
             "agents" -> ingestSubagents(sessionId, payload)
             "credential_source" -> ingestCredentialSource(sessionId, payload)
+            "chat_streaming" -> ingestChatStreaming(sessionId, payload)
+            "turn_phase" -> ingestTurnPhase(sessionId, payload)
             else -> routeAgentLoginViewEvent(kind, payload)
         }
+    }
+
+    /**
+     * Handle a chat_streaming view_event: store partial assistant content
+     * as the in-memory streaming overlay. No-op if the payload is missing
+     * required fields (old broker path).
+     * Mirror of iOS SessionStore.ingestChatStreaming.
+     */
+    fun ingestChatStreaming(sessionId: String, payload: Map<String, String>) {
+        val content = payload["content"] ?: return
+        val turnTs = payload["turn_ts"] ?: return
+        _streamingMessage.update { it + (sessionId to content) }
+        Telemetry.breadcrumb(
+            "streaming", "partial arrived",
+            mapOf("turn_ts" to turnTs, "len" to content.length.toString(), "session" to sessionId),
+        )
+    }
+
+    /**
+     * Handle a turn_phase view_event: record the broker-reported turn phase
+     * ("writing", "working", or "") for the given session. Used by the typing
+     * indicator to show distinct states.
+     * Mirror of iOS SessionStore.ingestTurnPhase.
+     */
+    fun ingestTurnPhase(sessionId: String, payload: Map<String, String>) {
+        val phase = payload["turn_phase"] ?: ""
+        _turnPhaseBySession.update { it + (sessionId to phase) }
     }
 
     /**
