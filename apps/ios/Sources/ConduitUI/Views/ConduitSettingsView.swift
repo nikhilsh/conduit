@@ -64,13 +64,6 @@ extension ConduitUI {
         // users straight to Done).
         @State private var onboardingEntry: OnboardingEntry?
 
-        // WS-P.3: push notification settings state — observed from the
-        // shared PushNotificationManager so the row updates live when the
-        // token arrives or the user changes system settings.
-        @State private var pushManager = PushNotificationManager.shared
-        /// Feedback string shown after a "Send test notification" tap.
-        @State private var testPushResult: String?
-        @State private var testPushInFlight = false
         /// Staff-unlock tap counter on the About version row. Reaching 7 taps
         /// reveals a NavigationLink to the Debug menu (hidden from regular users).
         @State private var aboutVersionTapCount = 0
@@ -88,7 +81,6 @@ extension ConduitUI {
                             connectionSection
                             usageLimitsSection
                             appearanceSection
-                            notificationsSection
                             conversationSection
                             agentsSection
                             supportSection
@@ -731,139 +723,6 @@ extension ConduitUI {
             )
         }
 
-        // MARK: Notifications (WS-P.3)
-
-        /// Push notification settings: honest-state row showing
-        ///   · "box doesn't support push" — old broker, no relay wired
-        ///   · "disabled in Settings" — system permission denied
-        ///   · "authorized · registered with box" — all good
-        ///   · "authorized · not registered" — token pending or reg failed
-        ///   · "not set up" — not yet determined
-        /// Plus a "Send test notification" button to end-to-end verify.
-        private var notificationsSection: some View {
-            sectionCard(title: "Notifications") {
-                VStack(spacing: 0) {
-                    pushStateRow
-                    if pushManager.settingsState.auth == .authorized
-                        && pushManager.settingsState.brokerSupported {
-                        Divider()
-                            .background(neon.border)
-                            .padding(.leading, 46)
-                        testPushRow
-                    }
-                }
-                .onAppear {
-                    // Refresh both auth and capabilities when this section
-                    // appears (e.g. user returns from iOS Settings).
-                    pushManager.refreshAuthStatus()
-                    let ep = store.endpoint
-                    Task { await PushNotificationManager.shared.probeCapabilities(endpoint: ep) }
-                }
-            }
-        }
-
-        private var pushStateRow: some View {
-            let state = pushManager.settingsState
-            let (icon, iconTint, subtitle): (String, Color, String) = {
-                if !state.brokerSupported {
-                    return ("bell.slash", neon.textFaint, "box doesn't support push")
-                }
-                switch state.auth {
-                case .notDetermined:
-                    return ("bell", neon.textDim, "not set up")
-                case .denied:
-                    return ("bell.slash.fill", neon.yellow, "disabled in iOS Settings")
-                case .pending:
-                    return ("bell.badge", neon.accent, "waiting for system token…")
-                case .authorized:
-                    return state.registered
-                        ? ("bell.badge.fill", neon.green, "authorized · registered with box")
-                        : ("bell.badge", neon.accent, "authorized · not registered")
-                }
-            }()
-            return ConduitUI.ListRow(
-                icon: icon,
-                title: "Push notifications",
-                subtitle: subtitle,
-                iconTint: iconTint
-            ) {
-                // Broker supports push but permission has not been asked yet.
-                // Users who already had sessions at launch never saw the 0->1
-                // prompt, so give them an explicit affordance here.
-                if state.brokerSupported && state.auth == .notDetermined {
-                    Button("Enable") {
-                        Telemetry.breadcrumb("push", "settings notDetermined enable tapped")
-                        PushNotificationManager.shared.requestAuthorizationIfNeeded()
-                    }
-                    .font(neon.sans(13).weight(.semibold))
-                    .foregroundStyle(neon.accent)
-                }
-                // If permission is denied, offer a shortcut to Settings.
-                if state.auth == .denied {
-                    Button("Open Settings") {
-                        if let url = URL(string: UIApplication.openSettingsURLString) {
-                            UIApplication.shared.open(url)
-                        }
-                    }
-                    .font(neon.sans(13).weight(.semibold))
-                    .foregroundStyle(neon.accent)
-                }
-            }
-        }
-
-        private var testPushRow: some View {
-            HStack(spacing: 12) {
-                Image(systemName: "arrow.up.message")
-                    .font(.body)
-                    .frame(width: 20)
-                    .foregroundStyle(neon.accent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Send test notification")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(neon.text)
-                    if let result = testPushResult {
-                        Text(result)
-                            .font(neon.mono(11.5))
-                            .foregroundStyle(result.hasPrefix("Sent") ? neon.green : neon.yellow)
-                    }
-                }
-                Spacer(minLength: 8)
-                if testPushInFlight {
-                    ProgressView()
-                        .tint(neon.accent)
-                        .scaleEffect(0.8)
-                } else {
-                    Button("Send") {
-                        sendTestPush()
-                    }
-                    .font(neon.sans(13).weight(.semibold))
-                    .foregroundStyle(neon.accent)
-                    .disabled(testPushInFlight)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .contentShape(Rectangle())
-        }
-
-        private func sendTestPush() {
-            testPushInFlight = true
-            testPushResult = nil
-            let ep = store.endpoint
-            Task {
-                let err = await PushNotificationManager.shared.sendTestPush(
-                    endpoint: ep,
-                    title: "Conduit test",
-                    body: "Push notifications are working"
-                )
-                testPushInFlight = false
-                testPushResult = err == nil ? "Sent — check your device" : "Error: \(err!)"
-                // Clear the result after a few seconds
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                testPushResult = nil
-            }
-        }
-
         // MARK: Conversation
 
         private var conversationSection: some View {
@@ -886,24 +745,6 @@ extension ConduitUI {
                         subtitle: "Tap when a reply starts and finishes",
                         isOn: $flags.replyHaptics
                     )
-                    Divider()
-                        .background(neon.border)
-                        .padding(.leading, 46)
-                    ConduitUI.toggleRow(
-                        icon: "chevron.left.forwardslash.chevron.right",
-                        title: "Show command detail",
-                        subtitle: "Show each command the agent runs (off shows a compact summary)",
-                        isOn: $flags.showCommandDetail
-                    )
-                    Divider()
-                        .background(neon.border)
-                        .padding(.leading, 46)
-                    ConduitUI.toggleRow(
-                        icon: "terminal",
-                        title: "Command-run Mono block",
-                        subtitle: "Render command runs as a flat code surface with collapse at scale (Labs)",
-                        isOn: $flags.commandRunBlock
-                    )
                 }
             }
         }
@@ -917,11 +758,11 @@ extension ConduitUI {
         /// least one choice.
         private var agentsSection: some View {
             @Bindable var flags = flags
-            let knownAgents: [(id: String, label: String, icon: String)] = [
-                ("claude",   "Claude",   "cpu"),
-                ("codex",    "Codex",    "curlybraces"),
-                ("gemini",   "Gemini",   "sparkle"),
-                ("opencode", "Opencode", "chevron.left.forwardslash.chevron.right"),
+            let knownAgents: [(id: String, label: String)] = [
+                ("claude",   "Claude"),
+                ("codex",    "Codex"),
+                ("gemini",   "Gemini"),
+                ("opencode", "Opencode"),
             ]
             return sectionCard(title: "Agents") {
                 VStack(spacing: 0) {
@@ -929,12 +770,12 @@ extension ConduitUI {
                         let enabled = flags.enabledAgents.contains(agent.id)
                         let isLast = flags.enabledAgents.count == 1 && enabled
                         let tint = neon.agentTint(forAgent: agent.id)
-                        ConduitUI.ListRow(
-                            icon: agent.icon,
-                            title: agent.label,
-                            subtitle: nil,
-                            iconTint: tint
-                        ) {
+                        HStack(spacing: 12) {
+                            AgentAvatar(assistant: agent.id, size: 28)
+                            Text(agent.label)
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(neon.text)
+                            Spacer(minLength: 6)
                             Toggle("", isOn: Binding(
                                 get: { enabled },
                                 set: { on in
@@ -953,6 +794,9 @@ extension ConduitUI {
                             .tint(tint)
                             .disabled(isLast)
                         }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .contentShape(Rectangle())
                         if idx < knownAgents.count - 1 {
                             Divider()
                                 .background(neon.border)
