@@ -440,7 +440,7 @@ private struct TrailingClock: View {
                 .font(.system(.footnote, design: .monospaced).weight(.semibold))
                 .monospacedDigit()
                 .foregroundStyle(card == .runningStale ? Color.secondary : tint)
-                .frame(maxWidth: 60, alignment: .trailing)
+                .frame(minWidth: 50, alignment: .trailing)
         }
     }
 }
@@ -517,16 +517,11 @@ private struct ActionButtons: View {
                 action: "refresh"
             )
         case .choice:
-            VStack(spacing: 4) {
-                ctaLink(
-                    "Open to choose", icon: "eye",
-                    fill: ConduitBrand.cyan, foreground: .black,
-                    action: "choose"
-                )
-                Text("opens Conduit to the picker")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
+            ctaLink(
+                "Open to choose", icon: "eye",
+                fill: ConduitBrand.cyan, foreground: .black,
+                action: "choose"
+            )
         case .permission:
             VStack(spacing: 4) {
                 HStack(spacing: 8) {
