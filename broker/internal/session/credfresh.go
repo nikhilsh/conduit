@@ -193,6 +193,19 @@ func (s *Session) refreshStaleAgentCredentials() {
 				return
 			}
 			log.Printf("session %s: watchdog materialized app %s credential into session that spawned without one", s.ID, provider)
+			// The running agent started without credentials and has them
+			// only in-memory (absent). Close it so the next SendChat
+			// self-heal respawn reads the freshly-written credential file.
+			// The process was already responding "not logged in" — there is
+			// no useful in-flight work to preserve.
+			s.mu.Lock()
+			chat := s.chat
+			s.mu.Unlock()
+			if chat != nil {
+				_ = chat.Close()
+				log.Printf("session %s: closed chat backend after credential materialization; next message will respawn with credentials", s.ID)
+				publishChatSystem(s.PublishText, "✓ Signed in — please resend your last message.")
+			}
 		}
 		return
 	}
