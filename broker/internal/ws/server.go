@@ -365,6 +365,12 @@ func (s *Server) Handler() http.Handler {
 	// Returns per-run git diff counts + last agent summary. Always 200;
 	// per-run errors are flagged in the response rather than failing the call.
 	mux.HandleFunc("/api/fanout/compare", s.serveFanoutCompare)
+	// Sequential Agent Pipeline endpoints (PLAN-AGENT-PIPELINE.md).
+	// /api/pipelines (list) must be registered BEFORE /api/pipeline/ (prefix)
+	// so ServeMux longest-prefix wins correctly.
+	mux.HandleFunc("/api/pipelines", s.servePipelineRouter)
+	mux.HandleFunc("/api/pipeline", s.servePipelineRouter)
+	mux.HandleFunc("/api/pipeline/", s.servePipelineRouter)
 	return mux
 }
 
