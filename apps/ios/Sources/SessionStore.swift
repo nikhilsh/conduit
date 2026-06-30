@@ -1002,6 +1002,17 @@ final class SessionStore {
     /// The chat view shows a subtle inline banner for "app_forwarded".
     var credentialSource: [String: String] = [:]
 
+    // In-memory streaming overlay: partial assistant content being streamed
+    // for the current turn, keyed by sessionID. Cleared when the final
+    // on_chat_event arrives (the permanent message is then in the Rust store).
+    // Old brokers never send chat_streaming events so this stays empty.
+    var streamingMessage: [String: String] = [:]
+
+    // Current turn phase per session, sourced from the broker's turn_phase
+    // view_event. Values: "writing" (streaming text), "working" (tool calls),
+    // "" (thinking/waiting). Nil = no phase info from broker yet.
+    var turnPhaseBySession: [String: String] = [:]
+
     /// IDs of `pending_input` conversation items that have been resolved via
     /// an out-of-band path (ConduitApprovalsView, lock-screen intent) and
     /// should render as ANSWERED in the inline chat card immediately —
@@ -4876,6 +4887,27 @@ final class SessionStore {
         setEchoStatus(sessionID: sessionID, localID: clientMsgId, status: "done")
     }
 
+    /// Handle a `chat_streaming` view_event: store partial assistant content
+    /// as the in-memory streaming overlay and feed the StreamingRendererCoordinator.
+    /// No-op if the payload is missing required fields (old broker path).
+    func ingestChatStreaming(_ sessionID: String, payload: [String: String]) {
+        guard let content = payload["content"], let turnTs = payload["turn_ts"] else { return }
+        streamingMessage[sessionID] = content
+        Telemetry.breadcrumb("streaming", "partial arrived",
+            data: ["turn_ts": turnTs, "len": "\(content.count)", "session": sessionID])
+        if let coordinator = streamingCoordinator {
+            coordinator.update(itemID: "streaming-\(turnTs)", content: content, isComplete: false)
+        }
+    }
+
+    /// Handle a `turn_phase` view_event: record the current broker-reported
+    /// turn phase ("writing", "working", or ""). Used by the typing indicator
+    /// to show distinct states instead of a generic "typing" animation.
+    func ingestTurnPhase(_ sessionID: String, payload: [String: String]) {
+        let phase = payload["turn_phase"] ?? ""
+        turnPhaseBySession[sessionID] = phase
+    }
+
     func ingestChat(_ sessionID: String, _ event: ChatEvent) {
         // Funnel: first assistant reply on the very first session.
         // Guard: no prior assistant items in the chat log for this session.
@@ -4897,6 +4929,11 @@ final class SessionStore {
                 Telemetry.breadcrumb("chat", "reconciled sent on reply",
                     data: ["session": sessionID, "count": "\(drained.count)"])
             }
+            // Final assistant message arrived — clear the in-memory streaming
+            // overlay. The permanent message is now in the Rust store / chatLog
+            // and will appear via the normal conversationLog path.
+            streamingMessage[sessionID] = nil
+            turnPhaseBySession[sessionID] = nil
         }
         chatLog[sessionID, default: []].append(event)
         // Memory telemetry: breadcrumb at milestones so Sentry has context
@@ -7046,6 +7083,10 @@ final class StoreDelegate: ConduitDelegate {
                 s.ingestAgents(sessionId, payload: payload)
             } else if kind == "credential_source" {
                 s.ingestCredentialSource(sessionId, payload: payload)
+            } else if kind == "chat_streaming" {
+                s.ingestChatStreaming(sessionId, payload: payload)
+            } else if kind == "turn_phase" {
+                s.ingestTurnPhase(sessionId, payload: payload)
             } else {
                 s.routeAgentLoginViewEvent(kind: kind, payload: payload)
             }

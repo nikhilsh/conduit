@@ -405,18 +405,23 @@ extension ConduitUI {
         /// Total length of all currently-streaming buffers. Changes on
         /// every token while the agent streams, so observing it drives
         /// "follow the stream" without re-reading the whole event list.
+        /// Includes the streaming overlay content so overlay growth also
+        /// triggers auto-scroll follow.
         private var streamingContentLength: Int {
-            events.reduce(0) { acc, event in
+            let coordLen = events.reduce(0) { acc, event in
                 if case .streaming(let buffer) = coordinator.renderState(for: event.id) {
                     return acc + buffer.count
                 }
                 return acc
             }
+            return coordLen + (streamingOverlayContent?.count ?? 0)
         }
 
-        /// `true` while at least one event is mid-stream.
+        /// `true` while at least one event is mid-stream (either via the
+        /// StreamingRendererCoordinator or the streaming overlay).
         private var isStreaming: Bool {
-            events.contains { event in
+            if streamingOverlayContent?.isEmpty == false { return true }
+            return events.contains { event in
                 if case .streaming = coordinator.renderState(for: event.id) { return true }
                 return false
             }
@@ -445,6 +450,20 @@ extension ConduitUI {
                 // model falls back to log-role inference.
                 serverTurnActive: store.statusBySession[session.id]?.turnActive
             )
+        }
+
+        /// Broker-reported turn phase for this session. "writing" = streaming
+        /// text, "working" = tool calls, "" = thinking/waiting. nil = broker
+        /// has not sent a turn_phase event yet (old broker).
+        private var turnPhase: String? {
+            store.turnPhaseBySession[session.id]
+        }
+
+        /// In-progress partial assistant content streamed before the final
+        /// on_chat_event commits it to the Rust store. nil when no stream
+        /// is active (old broker or between turns).
+        private var streamingOverlayContent: String? {
+            store.streamingMessage[session.id]
         }
 
         /// Stable id for an invisible spacer pinned at the very end of
@@ -703,11 +722,24 @@ extension ConduitUI {
                                 }
                             }
                         }
+                        // Streaming overlay: shows in-progress assistant content
+                        // before the final on_chat_event commits it to the store.
+                        // Old brokers never emit chat_streaming so this stays nil.
+                        if let content = streamingOverlayContent, !content.isEmpty, !isReadOnly {
+                            ConduitStreamingOverlay(content: content)
+                                .padding(.horizontal, 16)
+                                .transition(.opacity)
+                                .id("streaming-overlay")
+                        }
                         // BUG 3: "agent is typing" indicator lives inside
                         // the scroll content so it follows autoscroll like
                         // any new content while the user is at the bottom.
-                        if isAgentWorking && !isReadOnly {
-                            ConduitTypingIndicator(phase: store.statusBySession[session.id]?.turnPhase)
+                        // When streaming overlay is active, only show the
+                        // indicator if there is no overlay content yet
+                        // (pre-first-token thinking phase).
+                        if isAgentWorking && !isReadOnly
+                            && (streamingOverlayContent?.isEmpty ?? true) {
+                            ConduitTypingIndicator(turnPhase: turnPhase)
                                 .padding(.horizontal, 16)
                                 .transition(.opacity)
                         }
@@ -2389,13 +2421,15 @@ private struct ConduitStructuredMarkdownView: View {
 // BUG 3: a lightweight "agent is working" affordance shown at the bottom
 // of the message list while any turn is streaming. Shows distinct states:
 // three bouncing dots for "writing", a single pulsing dot for "working"
-// or "thinking". Falls back to three dots when phase is nil (unknown).
+// or "thinking". Falls back to three dots when turnPhase is nil (unknown).
 private struct ConduitTypingIndicator: View {
-    var phase: String? // "writing" | "working" | "thinking" | nil
-    @State private var animPhase = 0
+    var turnPhase: String? // "writing" | "working" | "thinking" | nil
+    @State private var phase = 0
     @Environment(\.neonTheme) private var neon
 
     private let timer = Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()
+
+    private var isWorking: Bool { turnPhase == "working" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -2408,12 +2442,12 @@ private struct ConduitTypingIndicator: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityLabel(accessibilityLabel)
         .onReceive(timer) { _ in
-            animPhase = (animPhase + 1) % 3
+            phase = (phase + 1) % 3
         }
     }
 
     private var labelText: String {
-        switch phase {
+        switch turnPhase {
         case "working": return "working..."
         case "thinking": return "thinking..."
         default: return "assistant"
@@ -2421,7 +2455,7 @@ private struct ConduitTypingIndicator: View {
     }
 
     private var accessibilityLabel: String {
-        switch phase {
+        switch turnPhase {
         case "working": return "Agent is working"
         case "thinking": return "Agent is thinking"
         default: return "Assistant is typing"
@@ -2430,16 +2464,16 @@ private struct ConduitTypingIndicator: View {
 
     @ViewBuilder
     private var indicatorDots: some View {
-        switch phase {
+        switch turnPhase {
         case "working", "thinking":
             // Single pulsing dot for non-writing states
-            let isPulsePhase = animPhase == 0
+            let isPulsePhase = phase == 0
             Circle()
-                .fill(phase == "thinking" ? neon.textDim : neon.accent)
+                .fill(turnPhase == "thinking" ? neon.textDim : neon.accent)
                 .frame(width: 7, height: 7)
                 .scaleEffect(isPulsePhase ? 1.0 : 0.6)
                 .opacity(isPulsePhase ? 1.0 : 0.4)
-                .animation(.easeInOut(duration: 0.6), value: animPhase)
+                .animation(.easeInOut(duration: 0.6), value: phase)
         default:
             // Three bouncing dots for writing (current behavior)
             HStack(spacing: 5) {
@@ -2447,13 +2481,47 @@ private struct ConduitTypingIndicator: View {
                     Circle()
                         .fill(neon.accent)
                         .frame(width: 7, height: 7)
-                        .scaleEffect(animPhase == i ? 1.0 : 0.6)
-                        .opacity(animPhase == i ? 1.0 : 0.4)
-                        .neonGlowBox(animPhase == i ? neon.glowBox?.tinted(neon.accent) : nil)
-                        .animation(.easeInOut(duration: 0.3), value: animPhase)
+                        .scaleEffect(phase == i ? 1.0 : 0.6)
+                        .opacity(phase == i ? 1.0 : 0.4)
+                        .neonGlowBox(phase == i ? neon.glowBox?.tinted(neon.accent) : nil)
+                        .animation(.easeInOut(duration: 0.3), value: phase)
                 }
             }
         }
+    }
+}
+
+// MARK: - Streaming overlay
+//
+// Renders in-progress assistant content streamed via chat_streaming view_events
+// before the final on_chat_event commits the message to the Rust store.
+// Shown as a plain text bubble with the assistant role header so it reads
+// visually like the incoming message. Dismissed automatically when the
+// permanent ConversationItem arrives (SessionStore clears streamingMessage).
+private struct ConduitStreamingOverlay: View {
+    let content: String
+    @Environment(\.neonTheme) private var neon
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("assistant")
+                .font(neon.mono(11).weight(.bold))
+                .foregroundStyle(neon.textDim)
+                .textCase(.uppercase)
+            Text(content)
+                .font(neon.sans(14))
+                .foregroundStyle(neon.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // Streaming cursor: a blinking underscore appended inline.
+                .overlay(alignment: .bottomTrailing) {
+                    Text("_")
+                        .font(neon.mono(14))
+                        .foregroundStyle(neon.accent)
+                        .opacity(0.8)
+                }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("Assistant is writing: \(content)")
     }
 }
 
