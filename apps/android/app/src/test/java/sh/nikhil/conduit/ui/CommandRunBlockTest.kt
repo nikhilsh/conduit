@@ -167,6 +167,23 @@ class CommandRunBlockTest {
         assertFalse(clusterAnyRunning(emptyList()))
     }
 
+    // ── collapse threshold ───────────────────────────────────────────────
+
+    @Test fun collapseThreshold_value() {
+        // The threshold must be 9: counts 1-9 stay inline, counts >= 10 collapse.
+        assertEquals(9, MONO_COLLAPSE_THRESHOLD)
+    }
+
+    @Test fun collapseThreshold_nineStaysInline() {
+        // 9 items: count <= 9 -> inline (no collapse).
+        assertTrue(9 <= MONO_COLLAPSE_THRESHOLD)
+    }
+
+    @Test fun collapseThreshold_tenCollapses() {
+        // 10 items: count > 9 -> collapse ledger.
+        assertTrue(10 > MONO_COLLAPSE_THRESHOLD)
+    }
+
     // ── groupChatUnits with monoBlock=true ───────────────────────────────
 
     @Test fun groupChatUnits_monoBlock_loneTool_collapses() {

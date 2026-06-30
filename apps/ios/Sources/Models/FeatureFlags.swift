@@ -263,7 +263,7 @@ final class FeatureFlags {
 
         self.replyHaptics = defaults.object(forKey: Keys.replyHaptics) as? Bool ?? true
         self.showCommandDetail = defaults.object(forKey: Keys.showCommandDetail) as? Bool ?? false
-        self.commandRunBlock = defaults.object(forKey: Keys.commandRunBlock) as? Bool ?? true
+        self.commandRunBlock = defaults.object(forKey: Keys.commandRunBlock) as? Bool ?? false
         self.sshTunnelTransport = defaults.object(forKey: Keys.sshTunnelTransport) as? Bool ?? true
         self.showSubagentPanel = defaults.object(forKey: Keys.showSubagentPanel) as? Bool ?? false
         self.concurrentMultiBox = defaults.object(forKey: Keys.concurrentMultiBox) as? Bool ?? false

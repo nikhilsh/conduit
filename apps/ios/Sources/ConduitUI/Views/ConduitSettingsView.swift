@@ -745,6 +745,15 @@ extension ConduitUI {
                         subtitle: "Tap when a reply starts and finishes",
                         isOn: $flags.replyHaptics
                     )
+                    Divider()
+                        .background(neon.border)
+                        .padding(.leading, 46)
+                    ConduitUI.toggleRow(
+                        icon: "terminal",
+                        title: "Mono Command Block",
+                        subtitle: "Render command runs as a flat code surface (Labs)",
+                        isOn: $flags.commandRunBlock
+                    )
                 }
             }
         }

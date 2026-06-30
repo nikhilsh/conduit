@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -153,6 +154,7 @@ fun SettingsScreen(
     val themeMode by appearance.themeMode.collectAsState()
     val collapseTurns by appearance.collapseTurns.collectAsState()
     val replyHaptics by appearance.replyHaptics.collectAsState()
+    val commandRunBlock by appearance.commandRunBlock.collectAsState()
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
     val terminalTheme by appearance.terminalTheme.collectAsState()
     val terminalFont by appearance.terminalFont.collectAsState()
@@ -431,6 +433,13 @@ fun SettingsScreen(
                     subtitle = "Tap when a reply starts and finishes",
                     isOn = replyHaptics,
                     onChange = { appearance.setReplyHaptics(it) },
+                )
+                ToggleRow(
+                    icon = Icons.Filled.Code,
+                    title = "Mono Command Block",
+                    subtitle = "Render command runs as a flat code surface (Labs)",
+                    isOn = commandRunBlock,
+                    onChange = { appearance.setCommandRunBlock(it) },
                 )
             }
 

@@ -90,11 +90,32 @@ struct CommandRunBlockLogicTests {
         #expect(abs(f - 41.0 / 73.0) < 1e-9)
     }
 
+    // MARK: - Collapse threshold
+
+    @Test func nineCommandsNoCollapse() {
+        // 1-9 commands -> inline (no collapse).
+        #expect(CommandRunBlockLogic.shouldCollapse(count: 9) == false)
+    }
+
+    @Test func tenCommandsCollapses() {
+        // >= 10 commands -> collapse ledger (§10b).
+        #expect(CommandRunBlockLogic.shouldCollapse(count: 10) == true)
+    }
+
+    @Test func singleCommandNoCollapse() {
+        #expect(CommandRunBlockLogic.shouldCollapse(count: 1) == false)
+    }
+
+    @Test func largeRunCollapses() {
+        #expect(CommandRunBlockLogic.shouldCollapse(count: 73) == true)
+    }
+
     // MARK: - Feature-flag persistence
 
-    @Test func commandRunBlockDefaultsOn() {
+    @Test func commandRunBlockDefaultsOff() {
+        // §10 spec: default OFF so existing renders are unchanged.
         let flags = FeatureFlags(defaults: freshDefaults())
-        #expect(flags.commandRunBlock == true)
+        #expect(flags.commandRunBlock == false)
     }
 
     @Test func commandRunBlockPersists() {

@@ -3264,6 +3264,17 @@ private fun MonoCommandBlockInline(items: List<ConversationItem>) {
     val failCount = remember(items) { clusterFailCount(items) }
     val ok = failCount == 0
     val shape = RoundedCornerShape(neon.radiusDp.dp)
+    LaunchedEffect(items.size, failCount) {
+        Telemetry.breadcrumb(
+            "chat",
+            "command_run_block_render",
+            mapOf(
+                "count" to items.size.toString(),
+                "failCount" to failCount.toString(),
+                "collapsed" to "false",
+            ),
+        )
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -3295,7 +3306,7 @@ private fun MonoCommandBlockInline(items: List<ConversationItem>) {
             )
             Spacer(Modifier.weight(1f))
             Text(
-                if (ok) "exit 0" else "$failCount failed",
+                if (ok) "✓" else "$failCount failed",
                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                 fontFamily = neon.mono,
                 color = if (ok) neon.textFaint else neon.red,
@@ -3564,8 +3575,8 @@ private fun MonoCommandBlockCollapsible(items: List<ConversationItem>) {
 
 // ── Top-level §10 / §10b dispatcher ─────────────────────────────────────────
 
-/** Small runs use the always-expanded inline block; large runs collapse. */
-private const val MONO_COLLAPSE_THRESHOLD = 1
+/** Small runs (1-9 commands) use the always-expanded inline block; runs of >= 10 collapse. */
+internal const val MONO_COLLAPSE_THRESHOLD = 9
 
 /**
  * Dispatcher for the §10/§10b Mono block. Routes to:
