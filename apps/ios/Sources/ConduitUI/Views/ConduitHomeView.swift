@@ -34,6 +34,8 @@ extension ConduitUI {
         @State private var showCommandPalette = false
         /// Fan-out surface, launched from the command palette.
         @State private var showFanOut = false
+        /// Pipeline builder, launched from the command palette.
+        @State private var showPipelineBuilder = false
         /// Approvals inbox, opened from the needs-you banner's Review.
         @State private var showApprovals = false
         /// Box selected from the Boxes list → Box health detail sheet.
@@ -159,7 +161,8 @@ extension ConduitUI {
                                 showAddServer = true
                             }
                         },
-                        onFanOut: { showFanOut = true }
+                        onFanOut: { showFanOut = true },
+                        onNewPipeline: { showPipelineBuilder = true }
                     )
                     .environment(store)
                     .presentationDetents([.medium, .large])
@@ -176,6 +179,13 @@ extension ConduitUI {
                     )
                     .environment(store)
                     .presentationDetents([.medium, .large])
+                }
+                .sheet(isPresented: $showPipelineBuilder) {
+                    // Multi-step pipeline builder. Navigates internally to
+                    // PipelineMonitorView on success.
+                    ConduitUI.PipelineBuilderView()
+                        .environment(store)
+                        .presentationDetents([.large])
                 }
                 .sheet(isPresented: $showApprovals) {
                     // Approvals inbox — every action opens the session's chat
