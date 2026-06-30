@@ -82,6 +82,12 @@ func TestMirrorHostCredentials_NoSourceFiles(t *testing.T) {
 // Mutating one session's copy must NOT mutate the others — that is the
 // invariant the OAuth refresh-token race depended on violating.
 func TestConcurrentSessionsGetIsolatedHomes(t *testing.T) {
+	// This test covers the flag-OFF (per-session-copy) credential path.
+	// Unset the flag so CONDUIT_SHARED_AGENT_CREDS=1 in the process env
+	// (set by the systemd unit) doesn't redirect credentials to the shared
+	// canonical dir, which would make the per-session copy assertions fail.
+	t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "")
+
 	root := testRoot(t)
 
 	hostHome := t.TempDir()
