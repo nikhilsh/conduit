@@ -2769,6 +2769,14 @@ extension NeonTheme {
 /// reaches them from ConduitTests.
 enum CommandRunBlockLogic {
 
+    /// Runs of this size or fewer render as the always-expanded inline block.
+    /// Runs of (threshold + 1) or more collapse into the ledger block (§10b).
+    /// 1-9 -> inline; >= 10 -> collapse.
+    static let collapseThreshold = 9
+
+    /// True when the run is large enough to use the collapse ledger (§10b).
+    static func shouldCollapse(count: Int) -> Bool { count > collapseThreshold }
+
     /// The failed items from a run (status == fail or exitCode != 0).
     static func failedItems(from items: [ConversationItem]) -> [ConversationItem] {
         items.filter { NeonCardState(status: $0.status, exitCode: $0.exitCode) == .fail }
@@ -3129,13 +3137,11 @@ private struct ConduitToolBundleCard: View {
     /// While running -> Option-C inline ticker.
     /// Small settled runs (≤ threshold) -> always-expanded inline block (§10 B).
     /// Large settled runs (> threshold) -> collapsible ledger block (§10b).
-    private static let monoCollapseThreshold = 1
-
     @ViewBuilder
     private var monoBlockBody: some View {
         if anyRunning {
             MonoRunningTicker(items: items)
-        } else if items.count <= Self.monoCollapseThreshold {
+        } else if !CommandRunBlockLogic.shouldCollapse(count: items.count) {
             MonoInlineBlock(items: items, failCount: failCount)
         } else {
             MonoCollapseBlock(items: items, displayItems: displayItems, failCount: failCount)
@@ -3266,7 +3272,7 @@ private struct MonoInlineBlock: View {
                         .font(.system(size: 10, weight: .semibold).monospaced())
                         .foregroundStyle(neon.red)
                 } else {
-                    Text("exit 0")
+                    Text("\u{2713}")
                         .font(.system(size: 10).monospaced())
                         .foregroundStyle(neon.textFaint)
                 }
@@ -3294,6 +3300,13 @@ private struct MonoInlineBlock: View {
                         .stroke(neon.border, lineWidth: 0.5)
                 )
         )
+        .onAppear {
+            Telemetry.breadcrumb("chat", "mono-block render", data: [
+                "count": "\(items.count)",
+                "failCount": "\(failCount)",
+                "collapsed": "false",
+            ])
+        }
     }
 }
 
