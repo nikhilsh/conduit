@@ -41,6 +41,9 @@ func isGitRepo(dir string) bool {
 // maybeRemapToWorktree returns a per-session worktree path for baseDir when the
 // feature is enabled and baseDir is a git repo; otherwise it returns baseDir
 // unchanged. Idempotent across recovery: an already-created worktree is reused.
+//
+// When s.requestedBranch is non-empty it is used as the worktree branch name;
+// otherwise the default "conduit/session-<id>" is used.
 func (s *Session) maybeRemapToWorktree(baseDir string) string {
 	if !sessionWorktreeEnabled() || baseDir == "" || !isGitRepo(baseDir) {
 		return baseDir
@@ -53,6 +56,9 @@ func (s *Session) maybeRemapToWorktree(baseDir string) string {
 		return baseDir
 	}
 	branch := sessionWorktreeBranchPrefix + s.ID
+	if s.requestedBranch != "" {
+		branch = s.requestedBranch
+	}
 	// -B creates-or-resets the per-session branch at the repo's current HEAD;
 	// a linked worktree can't share a branch with another worktree, so each
 	// session owns its own. CombinedOutput so a failure is fully swallowed.

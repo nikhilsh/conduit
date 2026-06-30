@@ -361,6 +361,10 @@ func (s *Server) Handler() http.Handler {
 	// app is alive in the foreground so push notifications are suppressed even
 	// when the session WS is closed (background-throttle path, PR #746).
 	mux.HandleFunc("/api/device/presence", s.serveDevicePresence)
+	// POST /api/fanout/compare — diff-stat comparison of fan-out run sessions.
+	// Returns per-run git diff counts + last agent summary. Always 200;
+	// per-run errors are flagged in the response rather than failing the call.
+	mux.HandleFunc("/api/fanout/compare", s.serveFanoutCompare)
 	return mux
 }
 

@@ -74,6 +74,7 @@ type Session struct {
 	handoffTimeout  time.Duration
 	workspaceDir    string
 	requestedCWD    string
+	requestedBranch string // optional caller-supplied worktree branch name
 	// previewPort is the per-session dev-server port (3000–3019) exported to
 	// the agent as $PORT and reverse-proxied to the app via `/preview/<id>/`.
 	// 0 when the pool was exhausted at create time (the session simply has no
@@ -379,24 +380,25 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	}
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "PS1=$ ")
 	s := &Session{
-		ID:           id,
-		Assistant:    adapter.Name,
-		termgrid:     opts.termgrid,
-		adapter:      adapter,
-		override:     opts.override,
-		rows:         40,
-		cols:         120,
-		closed:       make(chan struct{}),
-		ring:         make([]byte, ringSize),
-		subs:         make(map[chan []byte]struct{}),
-		textSubs:     make(map[chan []byte]struct{}),
-		repoRoot:     opts.repoRoot,
-		conduitRoot:  opts.conduitRoot,
-		previewPort:  opts.previewPort,
-		modelCatalog: opts.modelCatalog,
-		codexBinary:  opts.codexBinary,
-		claudeBinary: opts.claudeBinary,
-		requestedCWD: strings.TrimSpace(opts.requestedCWD),
+		ID:              id,
+		Assistant:       adapter.Name,
+		termgrid:        opts.termgrid,
+		adapter:         adapter,
+		override:        opts.override,
+		rows:            40,
+		cols:            120,
+		closed:          make(chan struct{}),
+		ring:            make([]byte, ringSize),
+		subs:            make(map[chan []byte]struct{}),
+		textSubs:        make(map[chan []byte]struct{}),
+		repoRoot:        opts.repoRoot,
+		conduitRoot:     opts.conduitRoot,
+		previewPort:     opts.previewPort,
+		modelCatalog:    opts.modelCatalog,
+		codexBinary:     opts.codexBinary,
+		claudeBinary:    opts.claudeBinary,
+		requestedCWD:    strings.TrimSpace(opts.requestedCWD),
+		requestedBranch: strings.TrimSpace(opts.requestedBranch),
 		checkpointEvery: durationFromEnv(
 			"CONDUIT_SESSION_CHECKPOINT_INTERVAL_MS",
 			60*time.Second,
@@ -2006,6 +2008,11 @@ type CreateOptions struct {
 	// paired devices. Empty for sessions created by old clients or without
 	// a device_id param — those fall back to broadcast (no regression).
 	OwnerDeviceID string
+	// Branch is an optional worktree branch name for this session. When
+	// CONDUIT_SESSION_WORKTREE is enabled and the session's cwd is a git
+	// repo, the worktree is created on this branch instead of the default
+	// "conduit/session-<id>". Ignored when worktree mode is off.
+	Branch string
 }
 
 func NewManager(registry *agents.Registry) *Manager {
@@ -2385,6 +2392,7 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		forkChatSessionID:   forkChatID,
 		externalResume:      opts.ExternalResume,
 		externalFork:        opts.ExternalFork,
+		requestedBranch:     strings.TrimSpace(opts.Branch),
 	})
 	if err != nil {
 		return nil, false, err
@@ -2574,6 +2582,10 @@ type sessionOptions struct {
 	// transcript is staged so --resume --fork-session finds it in the
 	// isolated agent-home. Zero value = no staging.
 	externalFork ExternalForkOptions
+	// requestedBranch is an optional caller-supplied branch name for the
+	// per-session worktree. When non-empty and worktree mode is on,
+	// maybeRemapToWorktree uses this instead of "conduit/session-<id>".
+	requestedBranch string
 }
 
 type sessionMetadata struct {

@@ -128,6 +128,9 @@ type capabilitiesResponse struct {
 		// SessionWatch: GET /api/sessions/discovered/transcript supports since_ts
 		// for incremental polling. True from this version forward.
 		SessionWatch bool `json:"session_watch"`
+		// FanoutCompare: POST /api/fanout/compare is available. Apps gate
+		// the Compare button on this flag so old brokers degrade gracefully.
+		FanoutCompare bool `json:"fanout_compare"`
 	} `json:"features"`
 	// Models is the per-assistant model+effort catalog discovered live from
 	// the agent CLIs (claude control-protocol initialize, codex app-server
@@ -180,8 +183,9 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.PushRelayConfigured = s.PushRelayConfigured
 	resp.Features.NtfyURL = s.NtfyURL
 	resp.Features.SessionDiscovery = true
-	resp.Features.SessionFork = true  // real worktree fork with --fork-session (this PR)
-	resp.Features.SessionWatch = true // since_ts incremental transcript polling
+	resp.Features.SessionFork = true   // real worktree fork with --fork-session (this PR)
+	resp.Features.SessionWatch = true  // since_ts incremental transcript polling
+	resp.Features.FanoutCompare = true // POST /api/fanout/compare diff-stat endpoint
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
 	// Pass the pushed-credential store as a nil INTERFACE when unset:
@@ -227,6 +231,11 @@ type startSessionRequest struct {
 	// unchanged; true/false ride to the adapter's --settings arg. Non-claude
 	// adapters ignore it. See override.go.
 	FastMode *bool `json:"fast_mode,omitempty"`
+	// Branch is an optional worktree branch name for this session. When
+	// CONDUIT_SESSION_WORKTREE is enabled and the session's cwd is a git
+	// repo, the worktree is created on this branch name instead of the
+	// default "conduit/session-<id>". Ignored when worktree mode is off.
+	Branch string `json:"branch,omitempty"`
 }
 
 type startSessionResponse struct {
@@ -273,7 +282,11 @@ func (s *Server) serveSessionStart(w http.ResponseWriter, r *http.Request) {
 		PermissionMode:  strings.TrimSpace(req.PermissionMode),
 		FastMode:        req.FastMode,
 	}
-	sess, created, err := s.Sessions.GetOrCreateWithOptions(id, assistant, session.CreateOptions{CWD: cwd, Override: override})
+	sess, created, err := s.Sessions.GetOrCreateWithOptions(id, assistant, session.CreateOptions{
+		CWD:      cwd,
+		Override: override,
+		Branch:   strings.TrimSpace(req.Branch),
+	})
 	if err != nil {
 		msg := err.Error()
 		switch {
