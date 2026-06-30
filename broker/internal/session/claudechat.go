@@ -189,7 +189,7 @@ func encodeClaudeUserMessage(text string) ([]byte, error) {
 // generator (task: ai-session-titles) which mints/refines the session
 // name from the conversation. gen / titleGen may be nil (feature disabled
 // / non-claude), in which case turn-end is a no-op for that one.
-func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta), onControl func(controlRequest, string), onInit func(string), onTurnEnd func(), onSubagent *subagentRegistryHandle, onTurnPhase func(string)) error {
+func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta), onControl func(controlRequest, string), onInit func(string), onTurnEnd func(), onSubagent *subagentRegistryHandle, onPhaseChange func(string)) error {
 	sc := bufio.NewScanner(r)
 	// Assistant turns can be large; raise the line cap well past bufio's
 	// 64KB default.
@@ -209,6 +209,39 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 	// every API call in the turn, so it overcounts context badly on
 	// tool-heavy turns; the last call's prompt size is the real occupancy.
 	var lastContextTokens uint64
+	// turnTS is latched on the first assistant text event of a turn and
+	// held stable for the duration. All chat_streaming frames in one turn
+	// share the same turn_ts so clients can group/replace them. The final
+	// view:"chat" at turn end uses this same ts as its event ts so the
+	// Rust conversation store deduplicates correctly on reconnect.
+	var turnTS string
+	// lastPhase tracks the most recently announced phase so emitPhase only
+	// fires on transitions (not on every token). This avoids flooding the
+	// subscriber with redundant view:"turn_phase" events on every text chunk.
+	var lastPhase string
+	// emitPhase announces a phase change via both the onPhaseChange callback
+	// (updates the in-process status frame) and a view:"turn_phase" event
+	// (routes through Rust on_view_event so the apps receive it). No-op when
+	// the phase has not changed since the last call.
+	emitPhase := func(phase string) {
+		if phase == lastPhase {
+			return
+		}
+		lastPhase = phase
+		if onPhaseChange != nil {
+			onPhaseChange(phase)
+		}
+		phasePayload, perr := json.Marshal(map[string]any{
+			"type": "view_event",
+			"view": "turn_phase",
+			"event": map[string]any{
+				"turn_phase": phase,
+			},
+		})
+		if perr == nil {
+			publish(phasePayload)
+		}
+	}
 	for sc.Scan() {
 		line := sc.Bytes()
 		// The CLI announces its conversation id on init; latch it so
@@ -255,6 +288,28 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 			}
 			gen.kickoff(lastAssistantText, lastAssistantTS)
 			titleGen.onTurnEnd(lastAssistantText)
+			// Emit the final permanent view:"chat" for the assistant's
+			// accumulated text. During the turn, partial snapshots were
+			// emitted as view:"chat_streaming" (ephemeral, in-memory only
+			// on the client). This is the persistent record that lands in
+			// the Rust conversation store.
+			if lastAssistantText != "" {
+				finalPayload, finalErr := json.Marshal(map[string]any{
+					"type": "view_event",
+					"view": "chat",
+					"event": map[string]any{
+						"role":    "assistant",
+						"content": lastAssistantText,
+						"ts":      lastAssistantTS,
+						"files":   []any{},
+					},
+				})
+				if finalErr == nil {
+					publish(finalPayload)
+				}
+			}
+			emitPhase("")
+			turnTS = ""
 			lastAssistantText, lastAssistantTS = "", ""
 			lastContextTokens = 0
 			continue
@@ -289,22 +344,38 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 			// Signal turn phase before emitting any chat content so the
 			// status broadcast rides the same event loop tick.
 			if e.IsThinking {
-				if onTurnPhase != nil {
-					onTurnPhase("thinking")
-				}
+				emitPhase("thinking")
 				continue
-			}
-			if onTurnPhase != nil {
-				if e.Text != "" {
-					onTurnPhase("writing")
-				} else if e.ToolName != "" {
-					onTurnPhase("working")
-				}
 			}
 			var role, content string
 			switch {
 			case e.Text != "":
-				role, content = "assistant", e.Text
+				// Streaming assistant text: latch turnTS on first event so
+				// all partial snapshots in a turn share the same identifier.
+				// Emit view:"chat_streaming" (ephemeral, in-memory only);
+				// the final view:"chat" is emitted at turn end (above).
+				ts := claudeChatNow().UTC().Format(time.RFC3339Nano)
+				if turnTS == "" {
+					turnTS = ts
+				}
+				emitPhase("writing")
+				lastAssistantText = e.Text
+				lastAssistantTS = turnTS
+				streamPayload, serr := json.Marshal(map[string]any{
+					"type": "view_event",
+					"view": "chat_streaming",
+					"event": map[string]any{
+						"role":    "assistant",
+						"content": e.Text,
+						"ts":      ts,
+						"turn_ts": turnTS,
+						"files":   []any{},
+					},
+				})
+				if serr == nil {
+					publish(streamPayload)
+				}
+				continue
 			case e.ToolName == "AskUserQuestion":
 				// Interactive question tool: render the question + a
 				// numbered option menu so the client classifier
@@ -321,6 +392,7 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 				}
 				role, content = "assistant", q
 			case e.ToolName != "":
+				emitPhase("working")
 				role, content = "tool", toolCardContent(e.ToolName, e.ToolInput)
 			default:
 				continue

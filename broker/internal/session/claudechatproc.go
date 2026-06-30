@@ -31,6 +31,10 @@ type chatProcess struct {
 	// doesn't have to guess "is the agent working" from the trailing log
 	// role. Guarded by mu.
 	turnActive bool
+	// turnPhase is the current sub-state of the in-flight turn:
+	// "writing" (streaming text), "working" (tool executing), "thinking"
+	// (extended reasoning). Empty when idle. Guarded by mu.
+	turnPhase string
 	// onTurnIdle, when non-nil, fires after each turn ends (after
 	// markTurnActive(false)). Used by the session to fire push notifications
 	// when no client is attached. Set once at wiring time.
@@ -117,9 +121,10 @@ func startChatProcess(
 				if idle != nil {
 					idle()
 				}
-			}, onSubagent, onTurnPhase)
+			}, onSubagent, cp.markTurnPhase)
 		// EOF / agent exit: whatever turn was in flight is over.
 		cp.markTurnActive(false)
+		cp.markTurnPhase("")
 		werr := cmd.Wait()
 		// Surface an *unexpected* exit in the Chat tab so a dead
 		// stream-json agent isn't just silence (the original #6
@@ -197,6 +202,22 @@ func (c *chatProcess) TurnActive() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.turnActive
+}
+
+// markTurnPhase sets the current turn sub-phase under c.mu. Called from the
+// stream pump via the onPhaseChange callback (mirrors markTurnActive).
+func (c *chatProcess) markTurnPhase(phase string) {
+	c.mu.Lock()
+	c.turnPhase = phase
+	c.mu.Unlock()
+}
+
+// TurnPhase returns the current turn sub-phase ("writing", "working", etc.).
+// Implements turnPhaser. Returns "" when idle or unknown.
+func (c *chatProcess) TurnPhase() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.turnPhase
 }
 
 // SendRaw writes one pre-encoded stream-json line (a control_response)

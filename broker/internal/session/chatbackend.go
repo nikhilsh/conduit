@@ -38,6 +38,16 @@ type approvalAnswerer interface {
 	AnswerApproval(msg string) bool
 }
 
+// turnPhaser is an OPTIONAL chatBackend capability: a backend that can
+// report the sub-state of the current in-flight turn. Not all backends
+// implement this; callers type-assert before using.
+type turnPhaser interface {
+	// TurnPhase returns the current sub-phase: "writing" (streaming text),
+	// "working" (tool executing), "thinking" (extended reasoning).
+	// Returns "" when idle or unknown.
+	TurnPhase() string
+}
+
 // Backend selection is now protocol-keyed via the registry in backend.go:
 // adapter.Protocol ("stream-json", "codex-app-server", "codex-exec") resolves
 // to a registered AgentBackend. An empty protocol (or one with no registered

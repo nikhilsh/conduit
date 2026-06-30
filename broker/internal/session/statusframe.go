@@ -56,6 +56,10 @@ func (s *Session) StatusPayload() map[string]any {
 	if active, present := s.structuredTurnActive(); present {
 		payload["turn_active"] = active
 	}
+	// turn_phase is the sub-state of the current in-flight turn: "writing"
+	// (streaming text), "working" (tool executing), "thinking" (extended
+	// reasoning). Omitted when no turn is active or no structured backend.
+	// Lets clients show distinct indicators instead of a single "typing" dot.
 	if tp, present := s.structuredTurnPhase(); present && tp != "" {
 		payload["turn_phase"] = tp
 	}
