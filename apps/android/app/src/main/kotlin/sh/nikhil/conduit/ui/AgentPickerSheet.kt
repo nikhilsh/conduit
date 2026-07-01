@@ -21,11 +21,9 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -52,6 +50,8 @@ import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.descriptorFor
 import sh.nikhil.conduit.readinessCheckItems
+import sh.nikhil.conduit.ui.components.ConduitChip
+import sh.nikhil.conduit.ui.components.ConduitRow
 
 /**
  * Ordered agent list for the picker cards row. Known agents (claude, codex)
@@ -629,10 +629,10 @@ private fun DirectoryStep(
                         SectionLabel("Reasoning effort")
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             effortOptions.forEach { level ->
-                                FilterChip(
+                                ConduitChip(
+                                    label = effortLabel(level),
                                     selected = effort == level,
-                                    onClick = { effort = level },
-                                    label = { Text(effortLabel(level)) },
+                                    modifier = Modifier.clickable { effort = level },
                                 )
                             }
                         }
@@ -643,15 +643,15 @@ private fun DirectoryStep(
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     SectionLabel("Mode")
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        FilterChip(
+                        ConduitChip(
+                            label = "Auto",
                             selected = permissionMode == "",
-                            onClick = { permissionMode = "" },
-                            label = { Text("Auto") },
+                            modifier = Modifier.clickable { permissionMode = "" },
                         )
-                        FilterChip(
+                        ConduitChip(
+                            label = "Plan",
                             selected = permissionMode == "plan",
-                            onClick = { permissionMode = "plan" },
-                            label = { Text("Plan") },
+                            modifier = Modifier.clickable { permissionMode = "plan" },
                         )
                     }
                     Text(
@@ -897,10 +897,11 @@ private fun ModelPicker(
         SectionLabel("Model")
         // Trigger row — Conduit-styled, opens the model sheet (round-3: the
         // system DropdownMenu read as off-brand and clipped the captions).
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = neon.surface,
-            modifier = Modifier.fillMaxWidth().clickable { showSheet = true },
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface)
+                .clickable { showSheet = true },
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp).fillMaxWidth(),
@@ -1050,16 +1051,10 @@ private fun ModelRow(
                     color = neon.text,
                 )
                 if (recommended) {
-                    Text(
-                        "RECOMMENDED",
-                        fontFamily = neon.mono,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = tint,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(99.dp))
-                            .background(tint.copy(alpha = 0.14f))
-                            .padding(horizontal = 7.dp, vertical = 2.dp),
+                    ConduitChip(
+                        label = "RECOMMENDED",
+                        tint = tint,
+                        selected = true,
                     )
                 }
             }
@@ -1129,37 +1124,15 @@ private fun Breadcrumb(
 private fun RecentRow(path: String, onTap: () -> Unit) {
     val neon = LocalNeonTheme.current
     val shape = RoundedCornerShape(14.dp)
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface)
-            .clickable(onClick = onTap),
+    ConduitRow(
+        icon = Icons.Filled.History,
+        title = displayName(path),
+        subtitle = path,
+        last = true,
+        onClick = onTap,
+        modifier = Modifier.neonCardSurface(neon = neon, shape = shape, fill = neon.surface),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Filled.History, null, modifier = Modifier.size(20.dp), tint = neon.accent)
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    displayName(path),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontFamily = neon.sans,
-                    fontWeight = FontWeight.SemiBold,
-                    color = neon.text,
-                )
-                Text(
-                    path,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = neon.mono,
-                    color = neon.textDim,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Icon(Icons.Filled.ArrowOutward, null, modifier = Modifier.size(16.dp), tint = neon.textDim)
-        }
+        Icon(Icons.Filled.ArrowOutward, null, modifier = Modifier.size(16.dp), tint = neon.textDim)
     }
 }
 
@@ -1167,21 +1140,14 @@ private fun RecentRow(path: String, onTap: () -> Unit) {
 private fun FolderRow(name: String, onTap: () -> Unit) {
     val neon = LocalNeonTheme.current
     val shape = RoundedCornerShape(14.dp)
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface)
-            .clickable(onClick = onTap),
+    ConduitRow(
+        icon = Icons.Filled.Folder,
+        title = name,
+        last = true,
+        onClick = onTap,
+        modifier = Modifier.neonCardSurface(neon = neon, shape = shape, fill = neon.surface),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Filled.Folder, null, modifier = Modifier.size(20.dp), tint = neon.accent)
-            Spacer(Modifier.width(12.dp))
-            Text(name, style = MaterialTheme.typography.titleSmall, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, color = neon.text, modifier = Modifier.weight(1f))
-            Icon(Icons.Filled.ChevronRight, null, tint = neon.textDim)
-        }
+        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = neon.textDim, modifier = Modifier.size(18.dp))
     }
 }
 
