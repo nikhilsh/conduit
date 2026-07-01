@@ -20,7 +20,17 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
-_(nothing yet)_
+**Android onboarding parity — welcome + top bar aligned to iOS. PR #818.**
+
+- Five welcome/top-bar spots where Android had drifted from the iOS source of
+  truth (`ConduitOnboardingView.swift`), fixed in `OnboardingScreen.kt`:
+  primary-button trailing `›` chevron; `✕` close gated to Settings-launched
+  replay/addMachine entries (hidden on first-run, matching iOS); `ConduitMark`
+  wrapped in the 96dp rounded tile; two-tone `>conduit` wordmark (`>` in codex);
+  two-tone "Enter a code" row (question faint, CTA codex). Found and
+  screenshot-verified via the appetize.yml pipeline. [Android, **needs
+  on-device verify**: first-run onboarding welcome matches iOS — trailing
+  chevron, no ×, logo tile, teal `>`, and teal "Enter a code"]
 
 ---
 
