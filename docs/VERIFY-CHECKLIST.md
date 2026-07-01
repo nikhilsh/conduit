@@ -20,6 +20,10 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Tighten handoff classifier to first line only — core. PR #801.**
+
+- **core**: `looks_like_handoff` was scanning the full message body, so any long assistant reply that *discussed* handoffs mid-text (e.g. a technical analysis quoting "Handing off to app-engineer: …") was misclassified as `kind == "handoff"`, producing a false "Now → conversation" agent-avatar card. Fix: only check the first non-empty line — real handoff declarations always lead the message. HTML briefs (`data-section="handoff"`) still match unconditionally. Regression test added. [no device verify needed — pure logic fix with unit test coverage]
+
 **Drop multi-question AskUserQuestion echo bubbles — iOS + Android. PR #789.**
 
 - **iOS + Android**: When a user answers a multi-question `AskUserQuestion`, the app joins per-question answers with `\n`. `dropPendingInputEchoes` previously only matched single-option echoes (`c in pendingOptionSet`), so the newline-joined answer slipped through as a plain user bubble alongside the collapsed chip. Fix: split by `\n` and drop if every non-empty line is in `pendingOptionSet`. Unit tests added on both platforms. [iOS + Android, **needs on-device verify**: trigger a multi-question AskUserQuestion, answer it — confirm no duplicate plain bubble appears next to the chip]
