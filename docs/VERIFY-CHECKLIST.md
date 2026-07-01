@@ -20,7 +20,15 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
-_(nothing yet)_
+**Appetize screenshots now capture the connected UI via demo mode — CI tooling. PR #823.**
+
+- `tools/appetize-screenshots/tests/tour.spec.ts` drives the App Store **demo
+  mode** (`activateDemo()` — a simulated box + agent replies, no broker): boot →
+  onboarding → tap "Explore without a server" → **demo home** (session list) →
+  tap "Build a to-do app" → **demo chat** (agent replies + tool cards). Captures
+  6 PNGs (onboarding/home/chat × iOS/Android). Already verified end-to-end on
+  branch run 28534284733 (all taps landed, both platforms). This unblocks
+  screenshotting the real chat/home UI that previously needed a live broker.
 
 ---
 
