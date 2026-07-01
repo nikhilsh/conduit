@@ -20,6 +20,61 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Shared component library — rule + iOS/Android primitives + Android screen migrations. PRs #792, #797, #795, #793, #794, #802, #800, #803, #804, #805, #807.**
+
+The design system ("SWE Kitty" project) is now enforced in-repo: a `CLAUDE.md`
+rule plus a real component library on both platforms, with the Android screens
+migrated to compose from it. iOS is the source of truth; Android mirrors it
+value-for-value.
+
+- **CLAUDE.md rule (PRs #792, #797)** — new `Compose, Don't Hand-Roll` principle
+  row + `## Design: compose from the component library` section (verbatim from
+  the handoff's `LANDING-IN-GITHUB.md`): every screen composes from the library,
+  never a raw color/radius literal; extend the library, don't fork inline; iOS
+  source of truth, Android + design project mirror in lockstep. [docs — no device aspect]
+- **Android `ui/components` package (PR #795)** — new
+  `sh.nikhil.conduit.ui.components` mirroring iOS `ConduitUI/Components/`:
+  `ConduitCard`, `ConduitRow` + `nav/value/toggle` factories, `ConduitChip`,
+  `ConduitStatTile`, `ConduitButton`. Extended `glassRoundedRect` with an
+  optional `tint`. Pure-logic tests. [Android — needs on-device verify]
+- **Card radius 20/22 → 14 (PR #793)** — Android had TWO stale card-radius
+  tokens (`NeonTheme.RADIUS_DP` 20f, `ConduitTheme.cardCornerRadiusDp` 22f) both
+  claiming to match iOS; both dropped to 14 to match iOS `ConduitUI.Card`.
+  [Android — needs on-device verify: cards render 14dp corners]
+- **iOS `StatTile` + `ActionButton` (PR #794)** — extracted the recap metric
+  tile + full-width text button into `ConduitUI/Components/`; refactored
+  `ConduitSessionRecapView` onto them. NOTE: the button shipped as
+  `ConduitUI.ActionButton`, NOT `Button` — a `ConduitUI.Button` shadowed
+  `SwiftUI.Button` module-wide (the namespace is a nested `enum`) and broke the
+  build; CI caught it. [iOS — needs on-device verify: Recap tiles + Export/Share
+  pills render unchanged]
+- **`ActionPill` + Chip leading-icon (PR #802)** — new `ConduitActionPill`
+  (`.soft` status badge / `.solid` filled CTA) on both platforms — the small
+  tappable/status pill that was hand-rolled on BOTH iOS (`ConduitHomeView`
+  `.background(Capsule().fill(...))`) and Android; plus a `leadingIcon` slot on
+  Android `ConduitChip` (iOS `Chip` already had `systemImage`). [iOS + Android —
+  needs on-device verify]
+- **Android screen migrations** — replaced hand-rolled cards/rows/chips/pills
+  with the library, diffed against each iOS reference. Stateful cards left on
+  the sanctioned `neonCardSurface` token modifier (iOS does the same).
+  - **HomeScreen (PRs #800, #803)** — box-name badge → `ConduitChip(leadingIcon)`;
+    "ACTIVE / Open guide / Connect / Review" pills → `ConduitActionPill`. [Android
+    — needs on-device verify; note: "Connect" was a translucent accent fill, now
+    `.solid` — confirm against iOS]
+  - **AgentPickerSheet (PR #804)** — effort/mode/RECOMMENDED chips → `ConduitChip`;
+    Recent/Folder rows → `ConduitRow`; dropped M3 `FilterChip`/`Surface`. [Android
+    — needs on-device verify]
+  - **FoundSessionsSheet (PR #805)** — Resume/Branch/View/Watch actions → `ConduitActionPill`;
+    full-width CTAs → `ConduitButton`; read-only chip → `ConduitChip`. Disabled/loading
+    buttons kept on M3 (`ConduitButton` has no `enabled=false`). [Android — needs
+    on-device verify: Resume/Branch behavior unchanged]
+  - **ChatPage (PR #807)** — assessed 4826 lines; correctly left bespoke (animated
+    bubbles/tool-cards/streaming/typing UI don't map to generic components); only
+    3 dead imports removed. [Android — no meaningful device aspect]
+
+_Follow-up (not in this batch): mirror `ActionPill` + Chip-icon into the design
+project's `conduit-primitives.jsx` to keep the three in lockstep._
+
 **Chat transcript fixes: answered-chip ordering + first-message ack — iOS + Android. PRs #799, #798.**
 
 - **Answered AskUserQuestion chip sorts in place (PR #799)** — a live `pending_input` card is created with an empty `ts`, which `sortedByConversationTs` deliberately sorts NEWEST (empty/unparseable ts → `.greatestFiniteMagnitude` / `Long.MAX_VALUE`). That's correct while the card is unanswered, but on answer it collapses to the `✓` chip and its `ts` was never backfilled — so once later assistant turns arrived the chip stayed pinned to the bottom ("my answer is below your response"). Fix: `resolvePendingInput` backfills the card `ts` to an anchored epoch (max known parseable epoch + ε) when empty/unparseable; extracted a shared `anchorEpoch` helper reused by `answerPendingInput`. Unit tests both platforms (Android seeds via a new `internal seedConversationLogForTest` seam). [iOS + Android, **needs on-device verify**: trigger an AskUserQuestion, answer it, keep chatting — the ✓ chip must stay in chronological place, not jump to the bottom]
