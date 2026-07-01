@@ -329,6 +329,62 @@ class PendingChatQueueTest {
         assertEquals(PendingChatKind.retrying, entries[1].kind)
     }
 
+    // --- drainSentNormal: race-fix (first-message stuck unacked) ---
+
+    /**
+     * An assistant reply drains a normal entry that has NOT yet been marked sent
+     * (i.e. markSent hasn't completed yet). This is the first-message race fix:
+     * the broker can reply before the local WS-write-success callback fires.
+     */
+    @Test
+    fun drainSentNormalDrainsUnsent() {
+        val q = PendingChatQueue().enqueue("s1", "local-1", "hello", "t0")
+        // Do NOT call markSent -- simulate the race where the broker replied first.
+        assertFalse(q.entries("s1").first().sent)
+        val (q2, drained) = q.drainSentNormal("s1")
+        assertEquals(listOf("local-1"), drained)
+        assertFalse(q2.isPending("local-1", "s1"))
+        assertTrue(q2.bySession.isEmpty())
+    }
+
+    /**
+     * A failed normal entry is NOT drained -- the user must explicitly retry it.
+     */
+    @Test
+    fun drainSentNormalPreservesFailedEntry() {
+        var q = PendingChatQueue().enqueue("s1", "local-fail", "oops", "t0")
+        repeat(PendingChatQueue.MAX_ATTEMPTS) { q = q.markAttemptFailed("s1", "local-fail") }
+        assertTrue(q.isFailed("local-fail", "s1"))
+        val (q2, drained) = q.drainSentNormal("s1")
+        assertTrue(drained.isEmpty())
+        assertTrue(q2.isPending("local-fail", "s1"))
+    }
+
+    /**
+     * A queuedTurn entry is NOT drained -- it may genuinely be undelivered.
+     */
+    @Test
+    fun drainSentNormalPreservesQueuedTurnEntry() {
+        val q = PendingChatQueue().enqueueQueued("s1", "local-qt", "queued", "t0")
+        val (q2, drained) = q.drainSentNormal("s1")
+        assertTrue(drained.isEmpty())
+        assertTrue(q2.isPending("local-qt", "s1"))
+    }
+
+    /**
+     * drainSentNormal drains both sent and unsent normal entries in one call.
+     */
+    @Test
+    fun drainSentNormalDrainsMixedSentAndUnsent() {
+        val q = PendingChatQueue()
+            .enqueue("s1", "local-sent", "a", "t0")
+            .enqueue("s1", "local-unsent", "b", "t1")
+            .markSent("s1", "local-sent")
+        val (q2, drained) = q.drainSentNormal("s1")
+        assertEquals(setOf("local-sent", "local-unsent"), drained.toSet())
+        assertTrue(q2.bySession.isEmpty())
+    }
+
     /**
      * Capability decode: supportsSteer is true for codex (static descriptor)
      * and false for claude. Exercises descriptorFor() + staticAgentDescriptors.

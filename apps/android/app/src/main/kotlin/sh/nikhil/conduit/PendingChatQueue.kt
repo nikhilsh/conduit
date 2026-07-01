@@ -213,15 +213,26 @@ data class PendingChatQueue(
 
     /**
      * Called when an assistant reply arrives for a session, proving the broker received
-     * the user's prior message(s). Removes all `sent=true, kind==normal` entries and
-     * returns their localIds so the shell can flip each echo to `done`. A `chat_ack`
-     * arriving later no-ops (entry already gone). Queued-turn and steer entries are
-     * NOT touched — they may not have been delivered yet.
+     * the user's prior message(s). Removes all non-failed [PendingChatKind.normal]
+     * entries and returns their localIds so the shell can flip each echo to `done`. A
+     * `chat_ack` arriving later no-ops (entry already gone). Queued-turn and steer
+     * entries are NOT touched -- they may not have been delivered yet.
+     *
+     * WHY we no longer require [PendingChat.sent]: [markSent] runs async after the WS
+     * write succeeds. On the first message of a session the broker can reply (firing an
+     * AskUserQuestion turn) before [markSent] completes, leaving the entry still
+     * `sent=false`. Requiring `sent` would skip that entry and leave the bubble faded
+     * forever -- no later reply arrives to retry. An assistant reply is itself proof the
+     * broker received the prior user message(s); we do not need the local WS-write flag
+     * to confirm it. The broker dedups any resend by client_msg_id, so clearing without
+     * `sent` cannot cause a double-send. [PendingChat.failed] entries are preserved
+     * (user must explicitly retry); queued-turn/steering/retrying entries are preserved
+     * (they may be genuinely undelivered).
      */
     fun drainSentNormal(sessionId: String): Pair<PendingChatQueue, List<String>> {
         val list = bySession[sessionId] ?: return Pair(this, emptyList())
-        val drained = list.filter { it.sent && it.kind == PendingChatKind.normal }.map { it.localId }
-        val remaining = list.filterNot { it.sent && it.kind == PendingChatKind.normal }
+        val drained = list.filter { !it.failed && it.kind == PendingChatKind.normal }.map { it.localId }
+        val remaining = list.filterNot { !it.failed && it.kind == PendingChatKind.normal }
         val next = if (remaining.isEmpty()) bySession - sessionId else bySession + (sessionId to remaining)
         return Pair(copy(bySession = next), drained)
     }

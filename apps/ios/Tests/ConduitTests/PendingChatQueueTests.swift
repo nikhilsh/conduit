@@ -254,4 +254,55 @@ final class PendingChatQueueTests: XCTestCase {
         // queuedTurnEntries only returns queued.
         XCTAssertEqual(q.queuedTurnEntries(for: "s1").map { $0.localID }, ["local-q1"])
     }
+
+    // MARK: - drainSentNormal: race-fix (first-message stuck unacked)
+
+    /// An assistant reply drains a normal entry that has NOT yet been marked sent
+    /// (i.e. markSent hasn't completed yet). This is the first-message race fix:
+    /// the broker can reply before the local WS-write-success callback fires.
+    func testDrainSentNormalDrainsUnsent() {
+        var q = PendingChatQueue()
+        q.enqueue(sessionID: "s1", localID: "local-1", message: "hello", ts: "t0")
+        // Do NOT call markSent -- simulate the race where the broker replied first.
+        XCTAssertEqual(q.entries(for: "s1").first?.sent, false)
+        let drained = q.drainSentNormal(sessionID: "s1")
+        XCTAssertEqual(drained, ["local-1"], "unsent normal entry must be drained on assistant reply")
+        XCTAssertFalse(q.isPending("local-1", in: "s1"), "entry must be removed after drain")
+        XCTAssertTrue(q.bySession.isEmpty, "empty session must prune its key")
+    }
+
+    /// A failed normal entry is NOT drained -- the user must explicitly retry it.
+    func testDrainSentNormalPreservesFailedEntry() {
+        var q = PendingChatQueue()
+        q.enqueue(sessionID: "s1", localID: "local-fail", message: "oops", ts: "t0")
+        for _ in 0..<PendingChatQueue.maxAttempts {
+            q.markAttemptFailed(sessionID: "s1", localID: "local-fail")
+        }
+        XCTAssertTrue(q.isFailed("local-fail", in: "s1"))
+        let drained = q.drainSentNormal(sessionID: "s1")
+        XCTAssertTrue(drained.isEmpty, "failed entry must not be drained")
+        XCTAssertTrue(q.isPending("local-fail", in: "s1"), "failed entry must remain in queue")
+    }
+
+    /// A queuedTurn entry is NOT drained -- it may genuinely be undelivered.
+    func testDrainSentNormalPreservesQueuedTurnEntry() {
+        var q = PendingChatQueue()
+        q.enqueueForActiveTurn(sessionID: "s1", localID: "local-qt", message: "queued", ts: "t0")
+        let drained = q.drainSentNormal(sessionID: "s1")
+        XCTAssertTrue(drained.isEmpty, "queuedTurn entry must not be drained by drainSentNormal")
+        XCTAssertTrue(q.isPending("local-qt", in: "s1"), "queuedTurn entry must remain in queue")
+    }
+
+    /// drainSentNormal drains both sent and unsent normal entries in one call.
+    func testDrainSentNormalDrainsMixedSentAndUnsent() {
+        var q = PendingChatQueue()
+        q.enqueue(sessionID: "s1", localID: "local-sent", message: "a", ts: "t0")
+        q.enqueue(sessionID: "s1", localID: "local-unsent", message: "b", ts: "t1")
+        q.markSent(sessionID: "s1", localID: "local-sent")
+        // local-unsent has sent=false; local-sent has sent=true.
+        let drained = q.drainSentNormal(sessionID: "s1")
+        XCTAssertEqual(Set(drained), Set(["local-sent", "local-unsent"]),
+            "both sent and unsent normal entries must be drained")
+        XCTAssertTrue(q.bySession.isEmpty)
+    }
 }
