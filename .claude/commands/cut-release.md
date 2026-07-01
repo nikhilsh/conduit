@@ -34,8 +34,13 @@ and /broker-redeploy skill now also inject the ldflag via
 `-ldflags "-X main.version=$(git -C $TMP describe --tags --always)"` so
 /api/capabilities reports the real tag (or short SHA) instead of "dev".
 
-After: update pipeline docs (VERIFY-CHECKLIST.md gets a new version section for
-items in this release; memory updated); confirm the About screen shows the
+After: update pipeline docs. In VERIFY-CHECKLIST.md, this is where the version
+is finally stamped: rename the single **Next release (pending)** heading to `$1`
+(everything accumulated under it is exactly what ships in this tag) and add a
+fresh empty **Next release (pending)** section above it for the next round. Do
+NOT create version headings anywhere else — merges only ever land under the
+pending section (that phantom-version drift, v0.0.205–211 with only 204 live, is
+what this prevents). Update memory; confirm the About screen shows the
 expected git SHA (catches a stale ship). Any worktrees whose PRs shipped in
 this release should be cleaned up now if not already:
 `git worktree remove --force <path>`, `git branch -D <branch>`,
