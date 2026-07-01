@@ -37,6 +37,28 @@ extension EnvironmentValues {
     }
 }
 
+// MARK: - Foreground-restart helper
+
+extension View {
+    /// Run `restart` whenever the app returns to the foreground via
+    /// `UIApplication.didBecomeActiveNotification`. Used to re-kick
+    /// `withAnimation(.repeatForever)` sites that Core Animation suspends
+    /// when the app is backgrounded: they freeze and never resume because
+    /// the view stays mounted and `.onAppear` does not re-fire.
+    ///
+    /// Pattern: reset the animated state variable to its initial value
+    /// inside `restart`, then immediately start the repeatForever animation
+    /// toward the target value. The momentary reset is invisible (the view
+    /// was not animating anyway).
+    func restartAnimationOnForeground(restart: @escaping () -> Void) -> some View {
+        self.onReceive(
+            NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+        ) { _ in
+            restart()
+        }
+    }
+}
+
 // MARK: - ConduitChatView
 //
 // Conduit-faithful chat surface. Mirrors upstream's ConversationView:
@@ -2447,11 +2469,39 @@ private struct ConduitTypingIndicator: View {
             phase = (phase + 1) % 3
         }
         .onAppear {
-            guard !reduceMotion else { return }
-            guard turnPhase == "working" || turnPhase == "thinking" else { return }
-            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
-                pulse = true
+            startPulseIfNeeded()
+        }
+        .onChange(of: turnPhase) { _, newPhase in
+            // Restart pulse when phase transitions to working/thinking
+            // (e.g. writing -> working). Reset first so the animation
+            // re-triggers cleanly.
+            pulse = false
+            if newPhase == "working" || newPhase == "thinking" {
+                startPulseIfNeeded()
             }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+        ) { _ in
+            // Core Animation suspends repeatForever animations when the
+            // app is backgrounded; they never resume on their own when the
+            // view stays mounted. Re-kick the pulse whenever the app
+            // returns to the foreground.
+            guard turnPhase == "working" || turnPhase == "thinking" else { return }
+            guard !reduceMotion else { return }
+            pulse = false
+            startPulseIfNeeded()
+        }
+    }
+
+    /// Start the pulse animation when in working/thinking phase and
+    /// motion is not reduced. Extracted so onAppear, onChange, and the
+    /// foreground-restart all share one path.
+    private func startPulseIfNeeded() {
+        guard !reduceMotion else { return }
+        guard turnPhase == "working" || turnPhase == "thinking" else { return }
+        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+            pulse = true
         }
     }
 
@@ -3614,6 +3664,13 @@ private struct MonoRunningTicker: View {
                 }
             }
         }
+        .restartAnimationOnForeground {
+            guard !reduceMotion else { return }
+            sheen = false
+            withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+                sheen = true
+            }
+        }
         .onDisappear {
             timerTask?.cancel()
             timerTask = nil
@@ -4125,6 +4182,11 @@ private struct ConduitNeonCommandCard: View {
             if state == .running {
                 withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { blink = true }
             }
+        }
+        .restartAnimationOnForeground {
+            guard state == .running else { return }
+            blink = false
+            withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { blink = true }
         }
     }
 

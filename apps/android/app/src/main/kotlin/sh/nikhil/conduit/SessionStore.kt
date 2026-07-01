@@ -658,6 +658,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
     val turnPhaseBySession: StateFlow<Map<String, String>> = _turnPhaseBySession.asStateFlow()
 
     /**
+     * The `turn_ts` of the actively-streaming turn per sessionId. Set by
+     * [ingestChatStreaming] and used by [onChatEvent] to distinguish the
+     * final current-turn message from broker-replayed older transcript entries.
+     * On WS reconnect the broker replays the last 200 settled messages; each
+     * replayed assistant event must NOT evict live streaming state. Cleared
+     * alongside [_streamingMessage]. Mirror of iOS [SessionStore.streamingTurnTs].
+     */
+    private val _streamingTurnTs = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /**
      * Sticky HTTP-fetched history base per session. Seeded once by
      * [hydrateChatConversation] (idempotent) and never overwritten by the
      * live [refreshConversation] path. On cold restart the Rust core's
@@ -5503,10 +5513,38 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     mapOf("session" to sessionId, "count" to localIds.size.toString()))
             }
             // Final assistant message arrived — clear the in-memory streaming
-            // overlay. The permanent message is now in the Rust store / chatLog
-            // and will appear via the normal conversationLog path.
-            _streamingMessage.update { it - sessionId }
-            _turnPhaseBySession.update { it - sessionId }
+            // overlay. Guard: only clear when this event belongs to the
+            // current-or-newer turn, not an older broker-replayed transcript
+            // message. On WS reconnect the broker replays the last 200 settled
+            // messages; each replayed assistant event must NOT evict the live
+            // streaming state for an in-flight turn still producing tokens.
+            val activeTurnTs = _streamingTurnTs.value[sessionId]
+            val shouldClearStreaming: Boolean = if (activeTurnTs == null) {
+                // No active streaming turn recorded: safe to clear.
+                true
+            } else {
+                val activeTurnMs = tsEpochMillis(activeTurnTs)
+                val eventMs = tsEpochMillis(event.ts)
+                if (activeTurnMs <= 0L || eventMs <= 0L) {
+                    // Timestamps not comparable (unparseable); fall back to
+                    // checking whether the broker says the turn is still active.
+                    _statusBySession.value[sessionId]?.turnActive != true
+                } else {
+                    // Clear only when this event is the current turn or newer.
+                    eventMs >= activeTurnMs
+                }
+            }
+            if (shouldClearStreaming) {
+                _streamingMessage.update { it - sessionId }
+                _turnPhaseBySession.update { it - sessionId }
+                _streamingTurnTs.update { it - sessionId }
+            } else {
+                Telemetry.breadcrumb(
+                    "streaming", "replay skipped clear",
+                    mapOf("session" to sessionId, "event_ts" to event.ts,
+                        "turn_ts" to (activeTurnTs ?: "")),
+                )
+            }
         }
         _chatLog.value = _chatLog.value.toMutableMap().also { m ->
             m[sessionId] = (m[sessionId] ?: emptyList()) + event
@@ -5630,6 +5668,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val content = payload["content"] ?: return
         val turnTs = payload["turn_ts"] ?: return
         _streamingMessage.update { it + (sessionId to content) }
+        // Record the turn timestamp so onChatEvent can skip clearing streaming
+        // state for replayed older transcript messages during an active turn.
+        _streamingTurnTs.update { it + (sessionId to turnTs) }
         Telemetry.breadcrumb(
             "streaming", "partial arrived",
             mapOf("turn_ts" to turnTs, "len" to content.length.toString(), "session" to sessionId),
@@ -5800,6 +5841,18 @@ class SessionStore : ViewModel(), ConduitDelegate {
             _lastTurnActive[status.session] = nowActive
             if (wasActive == true && !nowActive) {
                 flushOnTurnComplete(status.session)
+                // Safety net: when turnActive transitions false, clear any
+                // lingering streaming state. Covers cancelled turns and
+                // clock-skew where no final onChatEvent arrives with a
+                // matching ts to trigger the normal clear path. Mirror of
+                // iOS ingestStatus safety net.
+                _streamingMessage.update { it - status.session }
+                _turnPhaseBySession.update { it - status.session }
+                _streamingTurnTs.update { it - status.session }
+                Telemetry.breadcrumb(
+                    "streaming", "cleared on turn-complete status",
+                    mapOf("session" to status.session),
+                )
             }
         }
     }

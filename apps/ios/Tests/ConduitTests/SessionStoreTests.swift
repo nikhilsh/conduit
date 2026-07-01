@@ -404,6 +404,121 @@ struct SessionStoreTests {
         let queuedTurn = store.pendingChats.queuedTurnEntries(for: sessionID)
         #expect(queuedTurn.isEmpty, "elicitation answer must NOT go into the queuedTurn panel")
     }
+
+    // MARK: - Bug B: streaming state survives broker replay on reconnect
+
+    /// A replayed OLD assistant event (ts < active streamingTurnTs) must NOT
+    /// clear streamingMessage or turnPhaseBySession. This is the root-cause
+    /// scenario: on WS reconnect the broker replays the last 200 settled
+    /// messages; each replayed assistant event previously cleared the live
+    /// streaming state, making the chat look dead mid-turn.
+    @Test func oldReplayedAssistantEventDoesNotClearStreamingState() {
+        let store = SessionStore()
+        let sessionID = "test-replay-\(UUID().uuidString)"
+
+        // Simulate an active streaming turn: a chat_streaming payload
+        // arrives with a known turn_ts.
+        let turnTs = "2026-07-01T12:00:01.000Z"
+        store.ingestChatStreaming(sessionID, payload: [
+            "content": "Partial response so far...",
+            "turn_ts": turnTs,
+        ])
+        store.turnPhaseBySession[sessionID] = "writing"
+
+        // Broker replays an OLDER settled assistant message (ts < turnTs).
+        let olderReplay = ChatEvent(
+            role: "assistant",
+            content: "This is a prior completed reply.",
+            ts: "2026-07-01T12:00:00.000Z", // older than turnTs
+            files: []
+        )
+        store.ingestChat(sessionID, olderReplay)
+
+        // The live streaming state must be intact.
+        #expect(store.streamingMessage[sessionID] == "Partial response so far...",
+            "old replay must not clear in-flight streamingMessage")
+        #expect(store.turnPhaseBySession[sessionID] == "writing",
+            "old replay must not clear in-flight turnPhaseBySession")
+        #expect(store.streamingTurnTs[sessionID] == turnTs,
+            "old replay must not clear streamingTurnTs")
+    }
+
+    /// The current-turn final assistant event (ts >= streamingTurnTs) DOES
+    /// clear streaming state — this is the normal turn-complete path.
+    @Test func currentTurnAssistantEventClearsStreamingState() {
+        let store = SessionStore()
+        let sessionID = "test-current-turn-\(UUID().uuidString)"
+
+        let turnTs = "2026-07-01T12:00:01.000Z"
+        store.ingestChatStreaming(sessionID, payload: [
+            "content": "Streaming...",
+            "turn_ts": turnTs,
+        ])
+        store.turnPhaseBySession[sessionID] = "writing"
+
+        // The final message arrives with the SAME ts as the streaming turn.
+        let finalMsg = ChatEvent(
+            role: "assistant",
+            content: "Final completed reply.",
+            ts: turnTs, // same ts as the streaming turn
+            files: []
+        )
+        store.ingestChat(sessionID, finalMsg)
+
+        // Streaming state must be cleared now that the turn is complete.
+        #expect(store.streamingMessage[sessionID] == nil,
+            "final turn message must clear streamingMessage")
+        #expect(store.turnPhaseBySession[sessionID] == nil,
+            "final turn message must clear turnPhaseBySession")
+        #expect(store.streamingTurnTs[sessionID] == nil,
+            "final turn message must clear streamingTurnTs")
+    }
+
+    /// A status frame with turnActive=false clears streaming state
+    /// (safety net for cancelled turns / clock skew).
+    @Test func statusTurnActiveFalseClearsStreamingState() {
+        let store = SessionStore()
+        let sessionID = "test-turn-done-\(UUID().uuidString)"
+
+        // Seed active streaming state.
+        store.ingestChatStreaming(sessionID, payload: [
+            "content": "In progress...",
+            "turn_ts": "2026-07-01T12:00:01.000Z",
+        ])
+        store.turnPhaseBySession[sessionID] = "working"
+
+        // Mark the turn active first so the transition is detected.
+        let activeStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "running",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: true,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(activeStatus)
+
+        // Now turn transitions to idle.
+        let idleStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "idle",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: false,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(idleStatus)
+
+        // Safety net must have cleared the streaming state.
+        #expect(store.streamingMessage[sessionID] == nil,
+            "turnActive=false status must clear streamingMessage")
+        #expect(store.turnPhaseBySession[sessionID] == nil,
+            "turnActive=false status must clear turnPhaseBySession")
+        #expect(store.streamingTurnTs[sessionID] == nil,
+            "turnActive=false status must clear streamingTurnTs")
+    }
 }
 
 /// `restore-chat-on-reattach` — pins the conversation merge that splices a
