@@ -2433,7 +2433,10 @@ private struct ConduitStructuredMarkdownView: View {
 private struct ConduitTypingIndicator: View {
     var turnPhase: String? // "writing" | "working" | "thinking" | nil
     @State private var phase = 0
+    // Dedicated smooth pulse for the single working/thinking dot.
+    @State private var pulse = false
     @Environment(\.neonTheme) private var neon
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let timer = Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()
 
@@ -2451,6 +2454,13 @@ private struct ConduitTypingIndicator: View {
         .accessibilityLabel(accessibilityLabel)
         .onReceive(timer) { _ in
             phase = (phase + 1) % 3
+        }
+        .onAppear {
+            guard !reduceMotion else { return }
+            guard turnPhase == "working" || turnPhase == "thinking" else { return }
+            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                pulse = true
+            }
         }
     }
 
@@ -2474,14 +2484,13 @@ private struct ConduitTypingIndicator: View {
     private var indicatorDots: some View {
         switch turnPhase {
         case "working", "thinking":
-            // Single pulsing dot for non-writing states
-            let isPulsePhase = phase == 0
+            // Single pulsing dot: smooth continuous pulse independent of the 3-phase timer.
+            // Under reduceMotion: static dot, no animation.
             Circle()
                 .fill(turnPhase == "thinking" ? neon.textDim : neon.accent)
                 .frame(width: 7, height: 7)
-                .scaleEffect(isPulsePhase ? 1.0 : 0.6)
-                .opacity(isPulsePhase ? 1.0 : 0.4)
-                .animation(.easeInOut(duration: 0.6), value: phase)
+                .scaleEffect(pulse ? 1.0 : 0.55)
+                .opacity(pulse ? 1.0 : 0.4)
         default:
             // Three bouncing dots for writing (current behavior)
             HStack(spacing: 5) {
