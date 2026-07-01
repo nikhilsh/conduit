@@ -9,6 +9,15 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.209
+
+**Credential source subtitle in box readiness checklist — iOS + Android + broker. PR #788.**
+
+- **Broker**: `AgentReadiness` now includes `credential_source` (`"env"` / `"box"` / `"app"`) in `/api/capabilities`. Old brokers omit the field; clients handle nil gracefully.
+- **iOS + Android**: readiness row shows a small dim subtitle when signed in — `"API key on box"`, `"Signed in on box"`, or `"Via Conduit app"`. [iOS + Android, **needs on-device verify**: open New Session → Box Readiness — each signed-in agent should show the source line below its name]
+
+---
+
 ## v0.0.208
 
 **Long-press user bubble copies whole message — iOS + Android. PR #786.**
