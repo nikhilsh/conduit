@@ -122,6 +122,13 @@ data class NeonTheme(
     val codeBg: Color,
     val codeText: Color,
 
+    // Neutral chrome tokens (streaming-states handoff §4).
+    // ghost    = rgb(160,184,224) @ alpha 0.24 — row numbers, disabled chevrons.
+    // lineSoft = rgb(160,184,224) @ alpha 0.12 — ledger border, footnote border.
+    // Both are mode-independent (identical in dark and light).
+    val ghost: Color,
+    val lineSoft: Color,
+
     // Shape
     val radiusDp: Float,
 
@@ -283,6 +290,13 @@ data class NeonTheme(
                 )
             }
 
+            // Streaming-states handoff §4 neutral chrome tokens.
+            // Mode-independent: identical ARGB in dark and light.
+            // ghost    = rgb(160,184,224) @ alpha 0.24  => ARGB 0x3DA0B8E0
+            // lineSoft = rgb(160,184,224) @ alpha 0.12  => ARGB 0x1EA0B8E0
+            val ghost = Color(red = 160, green = 184, blue = 224, alpha = (0.24f * 255).toInt())
+            val lineSoft = Color(red = 160, green = 184, blue = 224, alpha = (0.12f * 255).toInt())
+
             // Glow descriptors. Glow colour is the bright accent.
             val glowColor = aBright
             val textGlowEnabled = dark && glow
@@ -347,6 +361,8 @@ data class NeonTheme(
                 accentText = accentText,
                 codeBg = codeBg,
                 codeText = codeText,
+                ghost = ghost,
+                lineSoft = lineSoft,
                 radiusDp = RADIUS_DP,
                 appBg = appBg,
                 glowColor = glowColor,

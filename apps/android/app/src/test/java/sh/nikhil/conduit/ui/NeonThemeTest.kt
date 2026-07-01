@@ -132,6 +132,44 @@ class NeonThemeTest {
 
     // endregion
 
+    // region Streaming-states neutral chrome tokens (ghost / lineSoft)
+
+    /**
+     * ghost and lineSoft are mode-independent: identical ARGB in dark and
+     * light (both branches produce the same rgb(160,184,224) base at the
+     * specified alpha). Pins the exact ARGB so both platforms stay in sync.
+     *
+     * Derivation:
+     *   ghost    alpha = round(0.24 * 255) = 61  = 0x3D
+     *   lineSoft alpha = round(0.12 * 255) = 30  = 0x1E
+     *   rgb(160,184,224) = 0xA0B8E0
+     */
+    @Test
+    fun ghostTokenDarkIce() {
+        val t = NeonTheme.resolve(NeonPalette.ICE, dark = true, glow = true)
+        assertEquals(Color(0x3DA0B8E0.toInt()), t.ghost)
+    }
+
+    @Test
+    fun lineSoftTokenDarkIce() {
+        val t = NeonTheme.resolve(NeonPalette.ICE, dark = true, glow = true)
+        assertEquals(Color(0x1EA0B8E0.toInt()), t.lineSoft)
+    }
+
+    @Test
+    fun ghostTokenLightIce() {
+        val t = NeonTheme.resolve(NeonPalette.ICE, dark = false, glow = true)
+        assertEquals(Color(0x3DA0B8E0.toInt()), t.ghost)
+    }
+
+    @Test
+    fun lineSoftTokenLightIce() {
+        val t = NeonTheme.resolve(NeonPalette.ICE, dark = false, glow = true)
+        assertEquals(Color(0x1EA0B8E0.toInt()), t.lineSoft)
+    }
+
+    // endregion
+
     // region Glow descriptors
 
     @Test
