@@ -20,7 +20,21 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
-_(nothing yet)_
+**Appetize build + screenshot pipeline — CI tooling (manual workflow). PRs #811, #814.**
+
+- **`appetize.yml` (manual `workflow_dispatch`)** — uploads the unsigned
+  iOS-Simulator `.app` + Android debug `.apk` to Appetize.io (direct `curl`, no
+  third-party action) so a running build can be poked from a phone. App links
+  print to the run summary; secret `APPETIZE_TOKEN` + repo vars
+  `APPETIZE_IOS/ANDROID_PUBLIC_KEY` pin stable `appetize.io/app/<key>` URLs.
+  Already verified live end-to-end (both apps created, run 28515551636 green).
+  [**verify**: `gh workflow run appetize.yml --ref main` → open the two app
+  links on a phone and confirm each build launches]
+- **`screenshots` job (`@appetize/playwright`)** — after upload, drives each
+  build's onboarding screen and uploads an `onboarding-screenshots` PNG
+  artifact (publicKey-only sessions; device/OS auto-picked for the iOS-26 min
+  target). [**verify**: run the workflow → download the artifact → the two
+  onboarding PNGs render the real UI]
 
 ---
 

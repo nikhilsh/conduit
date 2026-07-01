@@ -9,12 +9,7 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
 
 ## Active
 
-- **Appetize screenshot pipeline** — manual `workflow_dispatch`
-  (`.github/workflows/appetize.yml`) that uploads the iOS sim `.app` + Android
-  debug `.apk` to Appetize.io so builds can be poked from a phone. Branch
-  `feat/appetize-screenshots`, PR #811 (upload jobs). Onboarding
-  auto-screenshots (`@appetize/playwright` → PNG artifacts) land in a
-  fast-follow PR.
+*(none — all in-flight PRs merged)*
 
 ## Deferred (not active)
 
