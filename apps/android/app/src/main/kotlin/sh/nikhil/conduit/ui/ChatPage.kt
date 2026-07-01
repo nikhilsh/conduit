@@ -916,16 +916,11 @@ fun ChatPage(
                     items(renderUnits.size) { unitIndex ->
                         when (val unit = renderUnits[unitIndex]) {
                             is ChatRenderUnit.ToolCluster ->
-                                if (commandRunBlock) {
-                                    NeonMonoCommandCluster(
-                                        items = unit.indices.map { events[it] },
-                                    )
-                                } else {
-                                    ToolClusterCard(
-                                        items = unit.indices.map { events[it] },
-                                        compact = hideCommands,
-                                    )
-                                }
+                                // Arm B: typed-step ToolLedger replaces the legacy
+                                // NeonMonoCommandCluster / ToolClusterCard for all users.
+                                ToolLedger(
+                                    items = unit.indices.map { events[it] },
+                                )
                             is ChatRenderUnit.Single -> {
                                 val index = unit.index
                                 val previousRole = if (index > 0) events[index - 1].role else null
@@ -965,9 +960,8 @@ fun ChatPage(
                 // Old brokers never send chat_streaming so this is nil.
                 if (!readOnly && streamingOverlayContent != null) {
                     item(key = "streaming-overlay") {
-                        StreamingOverlayRow(
+                        StreamingSpineRow(
                             content = streamingOverlayContent,
-                            agentAccent = agentAccent,
                         )
                     }
                 }
@@ -2633,50 +2627,736 @@ private fun TypingIndicatorRow(
     }
 }
 
+// ── Direction C streaming spine ───────────────────────────────────────────────
+
 /**
- * Streaming overlay row: shows in-progress partial assistant content streamed
- * via chat_streaming view_events before the final on_chat_event commits the
- * message to the Rust store. Styled like a plain assistant text row with a
- * blinking cursor suffix. Mirror of iOS ConduitStreamingOverlay.
+ * Streaming assistant turn on the spine (Direction C — "Flowing conduit").
+ *
+ * Replaces the legacy StreamingOverlayRow. Shows the in-progress partial
+ * assistant content on the same conduit spine used by finished turns:
+ *   - 24dp mark head (radius 7, bg rgba(255,255,255,0.03), 1dp border)
+ *     containing ConduitMark at 15dp. While streaming: breathes (glow
+ *     accent<->green, 2.1s). Done: no glow.
+ *   - 2dp rail (radius 2) starting 6dp below the mark, fills turn height.
+ *     While streaming: downward-flowing codex->green->codex->green gradient
+ *     (1.4s, linear). Done: static codex->green at alpha 0.5.
+ *   - Prose in body column (neon.sans, ~15.5sp, line-height 1.62, neon.text).
+ *     While streaming: blinking accent caret (7x1em block, 1s step). Done: no caret.
+ *   - No "assistant" label; text is never full-bleed.
+ *   - All animations stop under reduced-motion (renders done end-state).
+ *
+ * The streaming turn carries no tool steps here — those arrive as settled
+ * ConversationItem clusters via ToolLedger. This composable handles the
+ * prose-streaming phase only.
  */
 @Composable
-private fun StreamingOverlayRow(content: String, agentAccent: Color) {
+private fun StreamingSpineRow(content: String) {
     val neon = LocalNeonTheme.current
-    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "cursor")
-    val cursorAlpha by transition.animateFloat(
-        initialValue = 1f,
-        targetValue = 0f,
-        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-            animation = androidx.compose.animation.core.tween(durationMillis = 500),
-            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
-        ),
-        label = "cursorAlpha",
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val reduceMotion = remember {
+        android.provider.Settings.Global.getFloat(
+            context.contentResolver,
+            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f,
+        ) == 0f
+    }
+
+    Telemetry.breadcrumb(
+        "chat",
+        "streaming_spine_render",
+        mapOf("contentLen" to content.length.toString(), "reduceMotion" to reduceMotion.toString()),
     )
+
+    // Breathe: mark head glow pulsing accent <-> green, 2.1s ease-in-out.
+    val breatheTransition = if (!reduceMotion) {
+        androidx.compose.animation.core.rememberInfiniteTransition(label = "breathe")
+    } else null
+    val breatheAlpha = if (breatheTransition != null) {
+        val a by breatheTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                animation = androidx.compose.animation.core.tween(
+                    durationMillis = 2100,
+                    easing = androidx.compose.animation.core.FastOutSlowInEasing,
+                ),
+                repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
+            ),
+            label = "breatheAlpha",
+        )
+        a
+    } else 0f
+
+    // Flow: rail gradient offset scrolling downward, 1.4s linear.
+    val flowTransition = if (!reduceMotion) {
+        androidx.compose.animation.core.rememberInfiniteTransition(label = "railFlow")
+    } else null
+    val flowOffset = if (flowTransition != null) {
+        val f by flowTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                animation = androidx.compose.animation.core.tween(
+                    durationMillis = 1400,
+                    easing = androidx.compose.animation.core.LinearEasing,
+                ),
+            ),
+            label = "flowOffset",
+        )
+        f
+    } else 0f
+
+    // Blink caret: 1s step, 50% duty.
+    val caretTransition = if (!reduceMotion) {
+        androidx.compose.animation.core.rememberInfiniteTransition(label = "caret")
+    } else null
+    val caretVisible = if (caretTransition != null) {
+        val c by caretTransition.animateFloat(
+            initialValue = 1f,
+            targetValue = 0f,
+            animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                animation = androidx.compose.animation.core.tween(
+                    durationMillis = 500,
+                    easing = androidx.compose.animation.core.LinearEasing,
+                ),
+                repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
+            ),
+            label = "caretAlpha",
+        )
+        c > 0.5f
+    } else false
+
+    // IntrinsicSize.Max lets the left rail column stretch to match the prose column.
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(androidx.compose.foundation.layout.IntrinsicSize.Max)
+            .padding(vertical = 4.dp),
+    ) {
+        // Rail column: fixed 24dp wide, centered. Stretches to full Row height via
+        // fillMaxHeight() which works because the Row uses IntrinsicSize.Max.
+        val glowColor = androidx.compose.ui.graphics.lerp(neon.accent, neon.green, breatheAlpha)
+        Box(
+            modifier = Modifier
+                .width(24.dp)
+                .fillMaxHeight()
+                .drawBehind {
+                    // Soft glow around the mark head area (top ~24dp).
+                    if (!reduceMotion && breatheAlpha > 0f) {
+                        drawCircle(
+                            color = glowColor.copy(alpha = 0.30f * breatheAlpha),
+                            radius = 18.dp.toPx(),
+                            center = Offset(size.width / 2f, 12.dp.toPx()),
+                        )
+                    }
+
+                    // Mark head background (radius 7) and border.
+                    val headSize = 24.dp.toPx()
+                    drawRoundRect(
+                        color = Color.White.copy(alpha = 0.03f),
+                        topLeft = Offset((size.width - headSize) / 2f, 0f),
+                        size = androidx.compose.ui.geometry.Size(headSize, headSize),
+                        cornerRadius = CornerRadius(7.dp.toPx()),
+                    )
+                    drawRoundRect(
+                        color = neon.border,
+                        topLeft = Offset((size.width - headSize) / 2f, 0f),
+                        size = androidx.compose.ui.geometry.Size(headSize, headSize),
+                        cornerRadius = CornerRadius(7.dp.toPx()),
+                        style = Stroke(width = 1.dp.toPx()),
+                    )
+
+                    // Rail: 2dp wide from 6dp below mark top to row bottom.
+                    val railStartY = headSize + 6.dp.toPx()
+                    val railEndY = size.height
+                    if (railEndY > railStartY) {
+                        val railH = railEndY - railStartY
+                        val railBrush = if (!reduceMotion && flowTransition != null) {
+                            // Flowing: codex->green->codex->green animated downward.
+                            val offset = flowOffset * railH
+                            Brush.verticalGradient(
+                                colorStops = arrayOf(
+                                    0f to neon.accent,
+                                    0.33f to neon.green,
+                                    0.66f to neon.accent,
+                                    1f to neon.green,
+                                ),
+                                startY = railStartY - offset * 2f,
+                                endY = railStartY + railH + offset * 2f,
+                            )
+                        } else {
+                            Brush.verticalGradient(
+                                listOf(neon.accent, neon.green),
+                                startY = railStartY,
+                                endY = railEndY,
+                            )
+                        }
+                        val railAlpha = if (reduceMotion) 0.5f else 0.95f
+                        drawRoundRect(
+                            brush = railBrush,
+                            topLeft = Offset((size.width - 2.dp.toPx()) / 2f, railStartY),
+                            size = androidx.compose.ui.geometry.Size(2.dp.toPx(), railH),
+                            cornerRadius = CornerRadius(2.dp.toPx()),
+                            alpha = railAlpha,
+                        )
+                    }
+                },
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            // ConduitMark inside the head area.
+            ConduitMark(size = 15.dp, modifier = Modifier.padding(top = 4.5.dp))
+        }
+
+        Spacer(Modifier.width(13.dp))
+
+        // Body column: prose + caret.
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(bottom = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // Prose: neon.sans, 15.5sp, line-height 1.62, neon.text.
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    content.ifEmpty { "​" },
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 15.5.sp,
+                        lineHeight = (15.5f * 1.62f).sp,
+                    ),
+                    fontFamily = neon.sans,
+                    color = neon.text,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                // Blinking caret: 7x1em accent block.
+                if (!reduceMotion && caretVisible) {
+                    Spacer(Modifier.width(2.dp))
+                    Box(
+                        modifier = Modifier
+                            .width(7.dp)
+                            .height(15.5.sp.value.dp)
+                            .background(neon.accent, RoundedCornerShape(1.dp)),
+                    )
+                // else: reduced-motion or caret hidden — no caret rendered
+            }
+        }
+    }
+}
+
+// ── Typed-step ToolLedger (streaming-states redesign) ─────────────────────────
+
+/**
+ * Classifies a ConversationItem for the ledger display.
+ * Edits (files non-empty or toolName resolves EDIT) show as pencil + filename.
+ * Runs/reads show as $ + command. Returns a triple of (kind, label, files).
+ */
+private fun ledgerStepClassify(ev: ConversationItem): Triple<NeonToolKind, String, List<ViewEventFile>> {
+    val kind = neonToolKind(ev.toolName)
+    val files = ev.files
+    // If there are attached files and no command, treat as edit.
+    return if ((kind == NeonToolKind.EDIT || (files.isNotEmpty() && ev.command.isNullOrBlank()))) {
+        Triple(NeonToolKind.EDIT, files.firstOrNull()?.path.orEmpty(), files)
+    } else {
+        val label = clusterRowLabel(ev)
+        Triple(kind, label, files)
+    }
+}
+
+/**
+ * Returns true when a step is a "navigational noise" cd-only command that
+ * should be coalesced. Consecutive identical cd commands are deduplicated.
+ */
+private fun isNavigationalNoise(label: String): Boolean =
+    label.trim().lowercase().let { it.startsWith("cd ") || it == "cd" }
+
+/**
+ * Coalesce the ledger items: drop consecutive duplicate navigational commands
+ * (repeated cd ...) — keep only the first of each unique run.
+ * Returns the deduplicated list.
+ */
+private fun coalesceSteps(items: List<ConversationItem>): List<ConversationItem> {
+    val result = mutableListOf<ConversationItem>()
+    var lastNavLabel: String? = null
+    for (ev in items) {
+        val (_, label, _) = ledgerStepClassify(ev)
+        if (isNavigationalNoise(label)) {
+            if (label == lastNavLabel) continue // drop duplicate cd
+            lastNavLabel = label
+        } else {
+            lastNavLabel = null
+        }
+        result.add(ev)
+    }
+    return result
+}
+
+/**
+ * Collapsed one-line footnote for a finished tool cluster.
+ * Rounded rect, 1dp lineSoft border, semi-transparent bg, padding 11x14:
+ *   "{n} steps" (mono 12.5, faint) · check(green) passed(faint) — or "{k} failed"(red) — trailing chevron-right.
+ * Tap to expand.
+ */
+@Composable
+private fun LedgerFootnote(
+    totalSteps: Int,
+    failCount: Int,
+    onExpand: () -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, neon.lineSoft, RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.018f))
+            .clickable(onClick = onExpand)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "$totalSteps steps",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+            fontFamily = neon.mono,
+            color = neon.textFaint,
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            "·",
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = neon.mono,
+            color = neon.ghost,
+        )
+        Spacer(Modifier.width(6.dp))
+        if (failCount == 0) {
+            Icon(
+                Icons.Filled.Check,
+                contentDescription = null,
+                tint = neon.green,
+                modifier = Modifier.size(13.dp),
+            )
+            Text(
+                "passed",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                fontFamily = neon.mono,
+                color = neon.textFaint,
+            )
+        } else {
+            Text(
+                "$failCount failed",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                fontFamily = neon.mono,
+                color = neon.red,
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = "Expand steps",
+            tint = neon.ghost,
+            modifier = Modifier.size(14.dp),
+        )
+    }
+}
+
+/**
+ * One row in the typed-step ledger.
+ * Grid: [16dp status | 1f middle | auto trailing], gap 10, pad 8x13.
+ * Hairline above (except first row).
+ * - done: 6dp green dot (steady).
+ * - running: 6dp amber dot (pulse) + row tinted accent ~4%.
+ * - failed: red X icon.
+ * Middle: edit = pencil(accent) + filename mono 12.5; run/read = $ (faint) + command mono 12.5.
+ * Trailing: edit = diff chip if available; running = "running"(amber); failed = "exit N"(red).
+ * In live mode, rows animate in with rowin (fade+4dp rise, 0.28s ease-out, once each).
+ */
+@Composable
+private fun LedgerRow(
+    ev: ConversationItem,
+    isFirst: Boolean,
+    liveMode: Boolean,
+    reduceMotion: Boolean,
+    rowIndex: Int,
+) {
+    val neon = LocalNeonTheme.current
+    val (kind, label, files) = remember(ev) { ledgerStepClassify(ev) }
+    val isRunning = ev.status.equals("running", true) || ev.status.equals("pending", true)
+    val exit = ev.exitCode?.toInt()
+    val isFailed = ev.status.equals("failed", true) || (exit != null && exit != 0)
+    val isEdit = kind == NeonToolKind.EDIT
+
+    // Rowin animation: fade+4dp rise, 0.28s ease-out, once per row in live mode.
+    var appeared by remember(rowIndex) { mutableStateOf(reduceMotion || !liveMode) }
+    val rowAlpha by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (appeared) 1f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = if (reduceMotion) 0 else 280,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing,
+        ),
+        label = "ledgerRowAlpha",
+    )
+    val rowRise by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (appeared) 0f else 4f,
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = if (reduceMotion) 0 else 280,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing,
+        ),
+        label = "ledgerRowRise",
+    )
+    LaunchedEffect(rowIndex) {
+        if (!appeared) appeared = true
+    }
+
+    // Running dot pulse animation (1.25s ease-in-out, infinite).
+    val pulseTransition = if (isRunning && liveMode && !reduceMotion) {
+        androidx.compose.animation.core.rememberInfiniteTransition(label = "dotPulse$rowIndex")
+    } else null
+    val dotAlpha = if (pulseTransition != null) {
+        val a by pulseTransition.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                animation = androidx.compose.animation.core.tween(
+                    durationMillis = 625,
+                    easing = androidx.compose.animation.core.FastOutSlowInEasing,
+                ),
+                repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
+            ),
+            label = "dotAlpha",
+        )
+        a
+    } else 1f
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                alpha = rowAlpha
+                translationY = rowRise.dp.toPx()
+            },
+    ) {
+        // Row tint for running state (~4% accent).
+        if (isRunning && liveMode) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(neon.accent.copy(alpha = 0.04f)),
+            )
+        }
+        Column {
+            if (!isFirst) {
+                HorizontalDivider(color = neon.grid, thickness = 0.5.dp)
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 13.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                // Status column: 16dp wide, centered.
+                Box(
+                    modifier = Modifier.width(16.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    when {
+                        isFailed -> Icon(
+                            Icons.Outlined.Close,
+                            contentDescription = "Failed",
+                            tint = neon.red,
+                            modifier = Modifier.size(12.dp),
+                        )
+                        isRunning -> Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .graphicsLayer { alpha = dotAlpha }
+                                .background(neon.yellow, CircleShape),
+                        )
+                        else -> Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(neon.green, CircleShape),
+                        )
+                    }
+                }
+
+                // Middle column: 1f weight.
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (isEdit) {
+                        Icon(
+                            Icons.Outlined.Create,
+                            contentDescription = null,
+                            tint = neon.accent,
+                            modifier = Modifier.size(13.dp),
+                        )
+                        val filename = remember(label, files) {
+                            // Show just the filename portion of the path.
+                            val f = files.firstOrNull()?.path ?: label
+                            f.substringAfterLast('/').takeIf { it.isNotBlank() } ?: f
+                        }
+                        Text(
+                            filename,
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                            fontFamily = neon.mono,
+                            color = if (isRunning) neon.text else neon.textDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else {
+                        Text(
+                            "$",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                            fontFamily = neon.mono,
+                            color = neon.textFaint,
+                        )
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                            fontFamily = neon.mono,
+                            color = if (isRunning) neon.text else neon.textDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+
+                // Trailing column: auto width.
+                when {
+                    isFailed -> Text(
+                        if (exit != null) "exit $exit" else "failed",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                        fontFamily = neon.mono,
+                        color = neon.red,
+                    )
+                    isRunning -> Text(
+                        "running",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp),
+                        fontFamily = neon.mono,
+                        color = neon.yellow,
+                    )
+                    // Edit diff chip: omitted today (no line-delta in ViewEventFile).
+                    // Will render when core adds add/del counts. See PR body data-gap note.
+                    else -> { /* nothing */ }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Typed-step ToolLedger — the arm-B standard command-block render.
+ *
+ * Replaces NeonMonoCommandCluster / MonoCommandBlockInline /
+ * MonoCommandBlockCollapsible / CommandRunTicker / ToolClusterCard.
+ *
+ * Modes:
+ *   - Live (any item running): spinner + "{done}/{total} steps"; rows animate in.
+ *   - Done-expanded: terminal icon + "{total} steps" + check + "passed"; up-chevron to collapse.
+ *   - Collapsed footnote (default resting): "{n} steps" · check passed, chevron-right to expand.
+ *
+ * Expansion state is remembered per cluster (keyed by first item id).
+ * Consecutive identical cd commands are coalesced before display.
+ */
+@Composable
+private fun ToolLedger(items: List<ConversationItem>) {
+    val neon = LocalNeonTheme.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val reduceMotion = remember {
+        android.provider.Settings.Global.getFloat(
+            context.contentResolver,
+            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f,
+        ) == 0f
+    }
+
+    val clusterId = items.firstOrNull()?.id ?: "empty"
+    val anyRunning = remember(items) { clusterAnyRunning(items) }
+    val liveMode = anyRunning
+    val coalesced = remember(items) { coalesceSteps(items) }
+    val totalSteps = coalesced.size
+    val doneSteps = remember(coalesced) {
+        coalesced.count { ev ->
+            !ev.status.equals("running", true) &&
+            !ev.status.equals("pending", true) &&
+            ev.status.isNotBlank()
+        }
+    }
+    val failCount = remember(coalesced) { clusterFailCount(coalesced) }
+
+    // Expanded state persisted per cluster id. Default: collapsed (footnote).
+    var expanded by remember(clusterId) { mutableStateOf(false) }
+
+    LaunchedEffect(clusterId, liveMode) {
+        Telemetry.breadcrumb(
+            "chat",
+            "tool_ledger_render",
+            mapOf(
+                "total" to totalSteps.toString(),
+                "done" to doneSteps.toString(),
+                "live" to liveMode.toString(),
+                "failCount" to failCount.toString(),
+            ),
+        )
+    }
+
+    // Spinner animation for live mode header (0.9s linear, infinite).
+    val spinTransition = if (liveMode && !reduceMotion) {
+        androidx.compose.animation.core.rememberInfiniteTransition(label = "ledgerSpin")
+    } else null
+    val spinAngle = if (spinTransition != null) {
+        val s by spinTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                animation = androidx.compose.animation.core.tween(
+                    durationMillis = 900,
+                    easing = androidx.compose.animation.core.LinearEasing,
+                ),
+            ),
+            label = "spinAngle",
+        )
+        s
+    } else 0f
+
+    // While live mode: show full expanded ledger (no footnote, no collapse).
+    // When done: show collapsed footnote (default) or expanded ledger.
+    val showFootnote = !liveMode && !expanded
+
+    if (showFootnote) {
+        LedgerFootnote(
+            totalSteps = totalSteps,
+            failCount = failCount,
+            onExpand = {
+                expanded = true
+                Telemetry.breadcrumb(
+                    "chat",
+                    "tool_ledger_expand",
+                    mapOf("via" to "footnote_tap"),
+                )
+            },
+        )
+        return
+    }
+
+    // Expanded or live mode: full ledger container.
+    val shape = RoundedCornerShape(12.dp)
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .clip(shape)
+            .border(1.dp, neon.lineSoft, shape)
+            .background(neon.codeBg),
     ) {
-        Text(
-            "assistant",
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = neon.mono,
-            color = neon.textDim,
-        )
-        Row(verticalAlignment = Alignment.Bottom) {
+        // Header row.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(
+                    if (!liveMode) {
+                        Modifier.clickable {
+                            expanded = false
+                            Telemetry.breadcrumb("chat", "tool_ledger_collapse", mapOf("via" to "header_chevron"))
+                        }
+                    } else Modifier,
+                )
+                .padding(horizontal = 13.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (liveMode) {
+                // Spinning accent ring (12dp).
+                Box(
+                    modifier = Modifier
+                        .size(12.dp)
+                        .graphicsLayer { rotationZ = spinAngle }
+                        .drawBehind {
+                            val stroke = androidx.compose.ui.graphics.drawscope.Stroke(
+                                width = 2.dp.toPx(),
+                                cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                            )
+                            // Ring track.
+                            drawArc(
+                                color = neon.accent.copy(alpha = 0.20f),
+                                startAngle = 0f,
+                                sweepAngle = 360f,
+                                useCenter = false,
+                                style = stroke,
+                            )
+                            // Active arc (~270 degrees).
+                            drawArc(
+                                color = neon.accent,
+                                startAngle = -90f,
+                                sweepAngle = 270f,
+                                useCenter = false,
+                                style = stroke,
+                            )
+                        },
+                )
+            } else {
+                Icon(
+                    Icons.Outlined.Terminal,
+                    contentDescription = null,
+                    tint = neon.textFaint,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+            Spacer(Modifier.width(9.dp))
+            // Step count label.
             Text(
-                content,
-                style = MaterialTheme.typography.bodyMedium,
-                fontFamily = neon.sans,
-                color = neon.text,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            Text(
-                "_",
-                style = MaterialTheme.typography.bodyMedium,
+                if (liveMode) "$doneSteps/$totalSteps steps" else "$totalSteps steps",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                 fontFamily = neon.mono,
-                color = agentAccent,
-                modifier = Modifier.graphicsLayer { alpha = cursorAlpha },
+                color = neon.textDim,
+            )
+            Spacer(Modifier.weight(1f))
+            // Trailing (done mode only).
+            if (!liveMode) {
+                if (failCount > 0) {
+                    Text(
+                        "$failCount failed",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+                        fontFamily = neon.mono,
+                        color = neon.red,
+                    )
+                } else {
+                    Icon(
+                        Icons.Filled.Check,
+                        contentDescription = null,
+                        tint = neon.green,
+                        modifier = Modifier.size(13.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "passed",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+                        fontFamily = neon.mono,
+                        color = neon.textFaint,
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
+                Icon(
+                    Icons.Filled.KeyboardArrowUp,
+                    contentDescription = "Collapse",
+                    tint = neon.ghost,
+                    modifier = Modifier.size(13.dp),
+                )
+            }
+        }
+
+        // Hairline below header.
+        HorizontalDivider(color = neon.grid, thickness = 0.5.dp)
+
+        // Step rows.
+        coalesced.forEachIndexed { idx, ev ->
+            LedgerRow(
+                ev = ev,
+                isFirst = idx == 0,
+                liveMode = liveMode,
+                reduceMotion = reduceMotion,
+                rowIndex = idx,
             )
         }
     }
@@ -3037,755 +3717,20 @@ internal fun clusterTickerFraction(items: List<ConversationItem>): Float {
     return (done.toFloat() / items.size.toFloat()).coerceIn(0f, 1f)
 }
 
-// ── §10b Running ticker (Option C) ──────────────────────────────────────────
+// ── Legacy §10 threshold constant (kept for unit test compatibility) ──────────
 
-/**
- * §10b Option C running ticker. Renders while any command in the cluster is
- * still executing. NO card chrome: two quiet mono lines + a determinate
- * LinearProgressIndicator rule. Respects system reduced-motion (stops the
- * pulse dot animation; bar still shows its static fill).
- */
-@Composable
-private fun CommandRunTicker(items: List<ConversationItem>) {
-    val neon = LocalNeonTheme.current
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val reduceMotion = remember {
-        android.provider.Settings.Global.getFloat(
-            context.contentResolver,
-            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
-            1f,
-        ) == 0f
-    }
-    val done = items.count {
-        !it.status.equals("running", true) && !it.status.equals("pending", true) && it.status.isNotBlank()
-    }
-    val total = items.size
-    val fraction = clusterTickerFraction(items)
-
-    // Live command: the last item that is still running/pending, else the last item.
-    val liveCommand = (items.lastOrNull { it.status.equals("running", true) || it.status.equals("pending", true) }
-        ?: items.lastOrNull())?.let { clusterRowLabel(it) } ?: ""
-
-    // Elapsed timer: seed from the first item's ts so reopening a chat doesn't reset it.
-    val seedSeconds = remember(items) {
-        val earliest = items.mapNotNull {
-            runCatching { java.time.Instant.parse(it.ts) }.getOrNull()
-        }.minOrNull()
-        earliest?.let { maxOf(0L, java.time.Instant.now().epochSecond - it.epochSecond).toInt() } ?: 0
-    }
-    var elapsedSeconds by remember(items) { mutableIntStateOf(seedSeconds) }
-    LaunchedEffect(items) {
-        while (true) {
-            kotlinx.coroutines.delay(1_000)
-            elapsedSeconds++
-        }
-    }
-    val elapsedText = remember(elapsedSeconds) {
-        val m = elapsedSeconds / 60
-        val s = elapsedSeconds % 60
-        String.format("%d:%02d", m, s)
-    }
-
-    Telemetry.breadcrumb(
-        "chat",
-        "command_run_ticker_render",
-        mapOf("total" to total.toString(), "done" to done.toString()),
-    )
-
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        // Line 1: dot RUNNING (left) · elapsed · done/total (right).
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            NeonStatusDot(color = neon.accent2, pulsing = !reduceMotion, size = 7.dp)
-            Spacer(Modifier.width(6.dp))
-            Text(
-                "RUNNING",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = neon.mono,
-                fontWeight = FontWeight.Bold,
-                color = neon.accent2,
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                "$elapsedText   $done / $total",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = neon.mono,
-                color = neon.textDim,
-            )
-        }
-        // Line 2: $ live command (tail-truncated).
-        if (liveCommand.isNotBlank()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "$ ",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = neon.mono,
-                    color = neon.textFaint,
-                )
-                Text(
-                    liveCommand,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = neon.mono,
-                    color = neon.textDim,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-        // Determinate progress rule with sheen sweep. Never indeterminate.
-        // The sheen is a narrow horizontal gradient that slides left-to-right
-        // over the bar every 1.5s. Skipped when animator-duration-scale == 0
-        // (system reduced-motion setting).
-        Box(modifier = Modifier.fillMaxWidth()) {
-            androidx.compose.material3.LinearProgressIndicator(
-                progress = { fraction },
-                modifier = Modifier.fillMaxWidth(),
-                color = neon.accent2,
-                trackColor = neon.border,
-            )
-            if (!reduceMotion) {
-                val sheenTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "sheen")
-                val sheenX by sheenTransition.animateFloat(
-                    initialValue = -0.4f,
-                    targetValue = 1.4f,
-                    animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-                        animation = androidx.compose.animation.core.tween(
-                            durationMillis = 1500,
-                            easing = androidx.compose.animation.core.LinearEasing,
-                        ),
-                    ),
-                    label = "sheenX",
-                )
-                Spacer(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(
-                            Brush.horizontalGradient(
-                                colorStops = arrayOf(
-                                    0.0f to Color.Transparent,
-                                    sheenX.coerceIn(0f, 1f) to neon.accent2.copy(alpha = 0.55f),
-                                    (sheenX + 0.15f).coerceIn(0f, 1f) to Color.Transparent,
-                                ),
-                            ),
-                        ),
-                )
-            }
-        }
-    }
-}
-
-// ── §10 Mono block (settled run, < threshold) ────────────────────────────────
-
-/**
- * One row in the §10 Mono block: fixed grid of `$` + command + trailing
- * status. On failure, the stderr tail renders inline beneath.
- */
-@Composable
-private fun MonoCommandRow(ev: ConversationItem, neon: NeonTheme) {
-    val exit = ev.exitCode?.toInt()
-    val failed = ev.status.equals("failed", true) || (exit != null && exit != 0)
-    val cmd = clusterRowLabel(ev)
-    // Stderr tail for failed rows: gather first Stderr/Text section from toolSections.
-    val stderrTail = if (failed) {
-        remember(ev) {
-            val sections = ConversationRenderer.toolSections(ev)
-            sections.filterIsInstance<ToolSection.Stderr>().firstOrNull()?.text
-                ?: sections.filterIsInstance<ToolSection.Text>().firstOrNull()?.text
-        }
-    } else null
-
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Leading `$` (faint).
-            Text(
-                "$ ",
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = neon.mono,
-                color = neon.textFaint,
-            )
-            // Command text — tail-truncated, never middle.
-            Text(
-                cmd,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = neon.mono,
-                color = neon.textDim,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Spacer(Modifier.width(8.dp))
-            if (failed && exit != null) {
-                // Nonzero exit code in red — ONLY when nonzero.
-                Text(
-                    exit.toString(),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = neon.mono,
-                    fontWeight = FontWeight.Bold,
-                    color = neon.red,
-                )
-            } else if (!failed) {
-                // Success: single muted check.
-                Icon(
-                    Icons.Filled.Check,
-                    contentDescription = null,
-                    tint = neon.textFaint,
-                    modifier = Modifier.size(12.dp),
-                )
-            }
-        }
-        // Failed row: stderr tail inline (auto-expanded, never hidden).
-        if (failed && !stderrTail.isNullOrBlank()) {
-            Text(
-                stderrTail.trim().lines().takeLast(4).joinToString("\n"),
-                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp),
-                fontFamily = neon.mono,
-                color = neon.red,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(neon.codeBg)
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
-            )
-        }
-    }
-}
-
-// ── §10 Inline block (small runs ≤ MONO_COLLAPSE_THRESHOLD) ─────────────────
-
-/**
- * §10 always-expanded flat mono block (B · Mono block). Used for small runs
- * (≤ [MONO_COLLAPSE_THRESHOLD]). Header: "run · N commands · exit 0 / N
- * failed". Rows: [MonoCommandRow] per item, hairline-divided.
- */
-@Composable
-private fun MonoCommandBlockInline(items: List<ConversationItem>) {
-    val neon = LocalNeonTheme.current
-    val failCount = remember(items) { clusterFailCount(items) }
-    val ok = failCount == 0
-    val shape = RoundedCornerShape(neon.radiusDp.dp)
-    LaunchedEffect(items.size, failCount) {
-        Telemetry.breadcrumb(
-            "chat",
-            "command_run_block_render",
-            mapOf(
-                "count" to items.size.toString(),
-                "failCount" to failCount.toString(),
-                "collapsed" to "false",
-            ),
-        )
-    }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(neon.codeBg)
-            .border(0.5.dp, neon.border, shape),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "run",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.5.sp,
-                ),
-                fontFamily = neon.mono,
-                color = neon.textFaint,
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "${items.size} command${if (items.size == 1) "" else "s"}",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = neon.mono,
-                color = neon.textFaint,
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                if (ok) "✓" else "$failCount failed",
-                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                fontFamily = neon.mono,
-                color = if (ok) neon.textFaint else neon.red,
-            )
-        }
-        HorizontalDivider(color = neon.border, thickness = 0.5.dp)
-        items.forEachIndexed { idx, ev ->
-            MonoCommandRow(ev, neon)
-            if (idx < items.size - 1) {
-                HorizontalDivider(color = neon.border, thickness = 0.5.dp)
-            }
-        }
-    }
-}
-
-// ── §10b Collapsible block ───────────────────────────────────────────────────
-
-/**
- * §10b expanded ledger: a height-capped, internally-scrolling LazyColumn of
- * numbered rows. Each row: index, $ command, per-row duration, exit (nonzero
- * only). All / Failed filter chip at the top.
- */
-@Composable
-private fun MonoCommandLedger(items: List<ConversationItem>, neon: NeonTheme) {
-    // 0 = All, 1 = Failed filter.
-    var filterIdx by remember { mutableIntStateOf(0) }
-    val failedItems = remember(items) { clusterFailedRows(items) }
-    val displayItems = if (filterIdx == 1) failedItems else items
-
-    Telemetry.breadcrumb(
-        "chat",
-        "command_run_ledger_filter",
-        mapOf("filter" to if (filterIdx == 0) "all" else "failed"),
-    )
-
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        // All / Failed filter chips.
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            FilterChip(
-                selected = filterIdx == 0,
-                onClick = {
-                    filterIdx = 0
-                    Telemetry.breadcrumb("chat", "command_run_filter_toggle", mapOf("filter" to "all"))
-                },
-                label = { Text("All", style = MaterialTheme.typography.labelSmall, fontFamily = neon.mono) },
-            )
-            FilterChip(
-                selected = filterIdx == 1,
-                onClick = {
-                    filterIdx = 1
-                    Telemetry.breadcrumb("chat", "command_run_filter_toggle", mapOf("filter" to "failed"))
-                },
-                label = { Text("Failed", style = MaterialTheme.typography.labelSmall, fontFamily = neon.mono) },
-            )
-        }
-        // Height-capped LazyColumn: 73 rows must never blow up the transcript.
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 264.dp),
-            verticalArrangement = Arrangement.spacedBy(0.dp),
-        ) {
-            itemsIndexed(displayItems) { _, ev ->
-                val exit = ev.exitCode?.toInt()
-                val failed = ev.status.equals("failed", true) || (exit != null && exit != 0)
-                val durationText = ev.durationMs?.let { formatNeonDuration(it) }
-                val rowNumber = (items.indexOf(ev) + 1).toString().padStart(2)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 0.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // Row number (muted).
-                    Text(
-                        "$rowNumber.",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = neon.mono,
-                        color = neon.textFaint,
-                        modifier = Modifier.width(28.dp),
-                    )
-                    Text("$ ", fontFamily = neon.mono, color = neon.textFaint,
-                        style = MaterialTheme.typography.bodySmall)
-                    Text(
-                        clusterRowLabel(ev),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = neon.mono,
-                        color = if (failed) neon.red else neon.textDim,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    // Per-row duration.
-                    durationText?.let {
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            it,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = neon.mono,
-                            color = neon.textFaint,
-                        )
-                    }
-                    // Nonzero exit only.
-                    if (failed && exit != null && exit != 0) {
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            "exit $exit",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = neon.mono,
-                            color = neon.red,
-                        )
-                    }
-                }
-                HorizontalDivider(color = neon.border, thickness = 0.5.dp)
-            }
-        }
-    }
-}
-
-/**
- * §10 collapsible block for settled runs. Default: collapsed to one header
- * line. On failure: always surfaces failed rows inline. Expanded: height-capped
- * ledger with All/Failed filter.
- */
-@Composable
-private fun MonoCommandBlockCollapsible(items: List<ConversationItem>) {
-    val neon = LocalNeonTheme.current
-    val n = items.size
-    val failCount = remember(items) { clusterFailCount(items) }
-    val anyFailed = failCount > 0
-    val passedCount = n - failCount
-    val failedRows = remember(items) { clusterFailedRows(items) }
-
-    // Auto-expand when there are failures so errors are never buried.
-    var expanded by remember(items) { mutableStateOf(false) }
-
-    // Total duration: sum of all item durations.
-    val totalDurMs = remember(items) {
-        items.mapNotNull { it.durationMs }.fold(0UL) { acc, d -> acc + d }
-    }
-    val totalDurText = if (totalDurMs > 0UL) formatNeonDuration(totalDurMs) else null
-
-    Telemetry.breadcrumb(
-        "chat",
-        "command_run_block_render",
-        mapOf(
-            "count" to n.toString(),
-            "failCount" to failCount.toString(),
-            "collapsed" to (!expanded).toString(),
-        ),
-    )
-
-    val shape = RoundedCornerShape(neon.radiusDp.dp)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(neon.codeBg)
-            .border(0.5.dp, neon.border, shape),
-    ) {
-        // Collapsed header row (tap to expand).
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable {
-                    expanded = !expanded
-                    Telemetry.breadcrumb(
-                        "chat",
-                        "command_run_ledger_expand",
-                        mapOf("expanded" to (!expanded).toString()),
-                    )
-                }
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.Outlined.Terminal,
-                contentDescription = null,
-                tint = neon.textFaint,
-                modifier = Modifier.size(13.dp),
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                buildString {
-                    append("$n commands")
-                    totalDurText?.let { append(" · $it") }
-                    if (anyFailed) append(" · $failCount failed")
-                    else append(" · passed")
-                },
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = neon.mono,
-                color = if (anyFailed) neon.red else neon.textFaint,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Spacer(Modifier.width(6.dp))
-            Icon(
-                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                contentDescription = if (expanded) "Collapse" else "Expand",
-                tint = neon.textFaint,
-                modifier = Modifier.size(14.dp),
-            )
-        }
-
-        // Failed rows always surface inline below the header (never hidden by collapse).
-        if (anyFailed && !expanded) {
-            HorizontalDivider(color = neon.border, thickness = 0.5.dp)
-            failedRows.forEach { ev ->
-                MonoCommandRow(ev, neon)
-                HorizontalDivider(color = neon.border, thickness = 0.5.dp)
-            }
-            // Footer: "K ran clean — show all >"
-            if (passedCount > 0) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            expanded = true
-                            Telemetry.breadcrumb("chat", "command_run_ledger_expand", mapOf("via" to "footer"))
-                        }
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "$passedCount ran clean",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = neon.mono,
-                        color = neon.textFaint,
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        "— show all",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = neon.mono,
-                        color = neon.textFaint,
-                    )
-                    Icon(
-                        Icons.Outlined.KeyboardArrowRight,
-                        contentDescription = "Show all",
-                        tint = neon.textFaint,
-                        modifier = Modifier.size(14.dp),
-                    )
-                }
-            }
-        }
-
-        // Expanded: full ledger with filter chip.
-        AnimatedVisibility(
-            visible = expanded,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically(),
-        ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                MonoCommandLedger(items, neon)
-            }
-        }
-    }
-}
-
-// ── Top-level §10 / §10b dispatcher ─────────────────────────────────────────
-
-/** Small runs (1-9 commands) use the always-expanded inline block; runs of >= 10 collapse. */
+/** Small runs (1-9 steps) historically used the inline block; kept for tests. */
 internal const val MONO_COLLAPSE_THRESHOLD = 9
 
-/**
- * Dispatcher for the §10/§10b Mono block. Routes to:
- *  - [CommandRunTicker] while any command is running (Option C).
- *  - [MonoCommandBlockInline] for settled small runs (≤ [MONO_COLLAPSE_THRESHOLD]).
- *  - [MonoCommandBlockCollapsible] for settled large runs (> threshold).
- */
-@Composable
-private fun NeonMonoCommandCluster(items: List<ConversationItem>) {
-    val anyRunning = remember(items) { clusterAnyRunning(items) }
-    if (anyRunning) {
-        CommandRunTicker(items)
-        return
-    }
-    if (items.size <= MONO_COLLAPSE_THRESHOLD) {
-        MonoCommandBlockInline(items)
-    } else {
-        MonoCommandBlockCollapsible(items)
-    }
-}
+// NOTE: CommandRunTicker, MonoCommandRow, MonoCommandBlockInline,
+// MonoCommandBlockCollapsible, MonoCommandLedger, NeonMonoCommandCluster,
+// and ToolClusterCard have been removed. The ToolLedger composable (above)
+// is the arm-B standard replacement for all users.
 
-/**
- * Fix 10 — arm-B grouped tool cluster. Header summarizes the run
- * ("3 commands · all exit 0", or the worst non-zero exit), then hairline-split
- * one-line command rows. Collapsed (default) shows header + rows; tapping the
- * header expands to the full inline tool cards for each call. A single tool
- * call never reaches here (see [groupChatUnits]) so the inline path is intact.
- *
- * When [compact] is true (Show command detail is OFF), renders as a minimal
- * muted footnote line instead of the full bordered card: a small chevron + dim
- * text ("ran N commands"). Tapping toggles expansion; when expanded, shows the
- * same per-row cluster rows as the non-compact collapsed state. Failures surface
- * in the label even in compact mode.
- */
-@Composable
-private fun ToolClusterCard(items: List<ConversationItem>, compact: Boolean = false) {
-    val neon = LocalNeonTheme.current
-    val worstExit = remember(items) { clusterWorstExit(items) }
-    val anyFailed = items.any { it.status.equals("failed", true) } ||
-        (worstExit != null && worstExit != 0)
-    val n = items.size
-    val noun = if (n == 1) "command" else "commands"
-
-    // Auto-expand failures so errors are never buried; user can collapse manually.
-    // Seed the initial state once per (items, compact) pair.
-    var expanded by remember(items.firstOrNull()?.id, compact) { mutableStateOf(anyFailed) }
-
-    // Compact footnote label: "running N command(s)...", failure, or muted summary.
-    val allFinished = items.all {
-        it.status.isNotBlank() && !it.status.equals("running", true)
-    }
-    val compactLabel = remember(items, worstExit, anyFailed, allFinished) {
-        when {
-            !allFinished -> "running $n $noun..."
-            worstExit != null && worstExit != 0 -> {
-                val failed = items.count {
-                    val e = it.exitCode?.toInt()
-                    it.status.equals("failed", true) || (e != null && e != 0)
-                }
-                "ran $n $noun · $failed failed"
-            }
-            anyFailed -> {
-                val failed = items.count { it.status.equals("failed", true) }
-                "ran $n $noun · $failed failed"
-            }
-            else -> "ran $n $noun"
-        }
-    }
-
-    // Full-card summary label (non-compact mode).
-    val summary = remember(items, worstExit, anyFailed) {
-        when {
-            worstExit == null && !anyFailed -> "$n $noun"
-            worstExit == 0 && !anyFailed -> "$n $noun · all exit 0"
-            worstExit != null -> "$n $noun · exit $worstExit"
-            else -> "$n $noun · failed"
-        }
-    }
-
-    if (!expanded) {
-        // Collapsed: a single muted footnote line with a chevron, no card chrome.
-        // Same whether flag-off (compact=true) or flag-on (compact=false) — tap to expand.
-        Row(
-            modifier = Modifier
-                .clickable { expanded = true }
-                .padding(vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = "Expand commands",
-                tint = neon.textFaint,
-                modifier = Modifier.size(14.dp),
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(
-                compactLabel,
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = neon.mono,
-                color = if (anyFailed) neon.red else neon.textDim,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        return
-    }
-
-    // Expanded compact mode or full-card non-compact mode: render the bordered card.
-    val chevron by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (expanded) 180f else 0f,
-        label = "clusterChevron",
-    )
-    val shape = RoundedCornerShape(neon.radiusDp.dp)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface, failed = anyFailed),
-    ) {
-        // Header — tap toggles expand.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { expanded = !expanded }
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(22.dp)
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(neon.green.copy(alpha = 0.18f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Outlined.Terminal, null, tint = neon.green, modifier = Modifier.size(14.dp))
-            }
-            Spacer(Modifier.width(10.dp))
-            Text(
-                if (compact) compactLabel else summary,
-                style = MaterialTheme.typography.bodyMedium,
-                fontFamily = neon.sans,
-                fontWeight = FontWeight.SemiBold,
-                color = if (anyFailed) neon.red else neon.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-
-            Icon(
-                Icons.Default.KeyboardArrowDown,
-                contentDescription = if (expanded) "Collapse" else "Expand",
-                tint = neon.textDim,
-                modifier = Modifier
-                    .size(18.dp)
-                    .graphicsLayer { rotationZ = chevron },
-            )
-        }
-        if (expanded) {
-            // Expanded: the full inline tool cards, one per call.
-            Column(
-                modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items.forEach { ConversationToolCard(it) }
-            }
-        } else {
-            // Collapsed: hairline-split one-line command rows.
-            Column(modifier = Modifier.fillMaxWidth()) {
-                items.forEach { ev ->
-                    HorizontalDivider(color = neon.border, thickness = 0.5.dp)
-                    val exit = ev.exitCode?.toInt()
-                    val rowFailed = ev.status.equals("failed", true) || (exit != null && exit != 0)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            clusterRowLabel(ev),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = neon.mono,
-                            color = neon.codeText,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (exit != null) {
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                "exit $exit",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
-                                fontFamily = neon.mono,
-                                color = if (rowFailed) neon.red else neon.green,
-                                maxLines = 1,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+// CommandRunTicker, MonoCommandRow, MonoCommandBlockInline,
+// MonoCommandBlockCollapsible, MonoCommandLedger, NeonMonoCommandCluster,
+// and ToolClusterCard have been removed (streaming-states redesign).
+// ToolLedger (above) is the arm-B standard replacement for all users.
 
 /** Icon + tint for a tool family (§4.5 tile colours). */
 @Composable
