@@ -84,9 +84,10 @@ type ReadinessBlock struct {
 
 // AgentReadiness is per-agent readiness info in the readiness block.
 type AgentReadiness struct {
-	CLIPresent     bool   `json:"cli_present"`
-	SignedIn       bool   `json:"signed_in"`
-	AuthExpiresInS *int64 `json:"auth_expires_in_s"` // null = API-key or no-expiry
+	CLIPresent       bool   `json:"cli_present"`
+	SignedIn         bool   `json:"signed_in"`
+	AuthExpiresInS   *int64 `json:"auth_expires_in_s"`           // null = API-key or no-expiry
+	CredentialSource string `json:"credential_source,omitempty"` // "env", "box", or "app"
 }
 
 // credStore is the subset of *credentials.Store readiness consults: a
@@ -148,7 +149,7 @@ func buildReadiness(mgr *session.Manager, reg registryLister, creds credStore) R
 			continue
 		}
 		ar := AgentReadiness{CLIPresent: cliSnap[name]}
-		ar.SignedIn, ar.AuthExpiresInS = agentSignInState(a, creds)
+		ar.SignedIn, ar.AuthExpiresInS, ar.CredentialSource = agentSignInState(a, creds)
 		agentMap[name] = ar
 	}
 
@@ -186,12 +187,12 @@ type registryLister interface {
 // store second: a box that received an auto-propagated credential but has
 // no host login still reports signed_in=true (expiresInS=nil — we don't
 // decrypt the blob here just to surface an expiry). `creds` may be nil.
-func agentSignInState(a agents.Adapter, creds credStore) (signedIn bool, expiresInS *int64) {
+func agentSignInState(a agents.Adapter, creds credStore) (signedIn bool, expiresInS *int64, source string) {
 	// 1. API-key env var → always signed-in, no expiry.
 	for _, env := range a.EnvPassthrough {
 		if env == "ANTHROPIC_API_KEY" || env == "OPENAI_API_KEY" {
 			if v := os.Getenv(env); v != "" {
-				return true, nil
+				return true, nil, "env"
 			}
 		}
 	}
@@ -199,7 +200,7 @@ func agentSignInState(a agents.Adapter, creds credStore) (signedIn bool, expires
 	// 2. Host credential file.
 	provider := a.LoginProvider
 	if provider == "" {
-		return false, nil
+		return false, nil, ""
 	}
 	// 2a. App-pushed credential present for this identity → signed-in.
 	//     Checked before the host-file read so an auto-propagated box with
@@ -207,28 +208,28 @@ func agentSignInState(a agents.Adapter, creds credStore) (signedIn bool, expires
 	//     store knows (openai/anthropic) can be Has()-true; opencode and
 	//     any other LoginProvider fall through to the host-file path.
 	if creds != nil && creds.Has(provider) {
-		return true, nil
+		return true, nil, "app"
 	}
 	path := hostCredFile(provider)
 	if path == "" {
-		return false, nil
+		return false, nil, ""
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		// File absent → not signed in.
-		return false, nil
+		return false, nil, ""
 	}
 	// File present → signed in. Decode expiry from the blob.
 	expMS, ok := credentialExpiryMillisForReadiness(provider, data)
 	if !ok {
 		// Can't parse expiry; treat as signed in with no known expiry.
-		return true, nil
+		return true, nil, "box"
 	}
 	secsUntil := (expMS - time.Now().UnixMilli()) / 1000
 	if secsUntil < 0 {
 		secsUntil = 0
 	}
-	return true, &secsUntil
+	return true, &secsUntil, "box"
 }
 
 // hostCredFile returns the host-login credential path for the given provider.

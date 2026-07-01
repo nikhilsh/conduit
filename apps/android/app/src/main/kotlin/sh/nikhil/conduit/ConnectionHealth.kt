@@ -20,6 +20,8 @@ data class AgentReadiness(
     val signedIn: Boolean,
     /** Seconds until the credential expires; null = permanent (API key) or unknown. */
     val authExpiresInS: Int?,
+    /** How the credential is held: "env" (API key on box), "box" (signed in on box), or "app" (pushed from Conduit app). */
+    val credentialSource: String? = null,
 )
 
 /**
@@ -161,6 +163,8 @@ data class ReadinessCheckItem(
      * tmux) that the user must install themselves.
      */
     val autoInstalls: Boolean = false,
+    /** How the credential is held when signed in: "env", "box", or "app". Null when not signed in or unknown. */
+    val credentialSource: String? = null,
 )
 
 /**
@@ -187,7 +191,7 @@ fun readinessCheckItems(
             !ar.signedIn   -> ReadinessStatus.NotSignedIn
             else           -> ReadinessStatus.Ok
         }
-        items.add(ReadinessCheckItem(id = key, label = displayName, status = status, loginProvider = provider, autoInstalls = true))
+        items.add(ReadinessCheckItem(id = key, label = displayName, status = status, loginProvider = provider, autoInstalls = true, credentialSource = ar.credentialSource))
     }
     // Infra rows — only when absent. node is intentionally omitted: it is a
     // terminal-scrollback sidecar and does not block running any agent.
@@ -216,10 +220,11 @@ fun parseReadiness(raw: String): BrokerReadiness? {
             for (name in agentsObj.keys()) {
                 val a = agentsObj.optJSONObject(name) ?: continue
                 agents[name] = AgentReadiness(
-                    cliPresent = a.optBoolean("cli_present", false),
-                    signedIn   = a.optBoolean("signed_in", false),
-                    authExpiresInS = if (a.isNull("auth_expires_in_s") || !a.has("auth_expires_in_s")) null
-                                    else a.optInt("auth_expires_in_s"),
+                    cliPresent       = a.optBoolean("cli_present", false),
+                    signedIn         = a.optBoolean("signed_in", false),
+                    authExpiresInS   = if (a.isNull("auth_expires_in_s") || !a.has("auth_expires_in_s")) null
+                                       else a.optInt("auth_expires_in_s"),
+                    credentialSource = a.optString("credential_source").takeIf { it.isNotEmpty() },
                 )
             }
         }

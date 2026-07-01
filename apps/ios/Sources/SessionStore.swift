@@ -445,24 +445,29 @@ struct AgentReadiness: Decodable, Equatable {
     var signedIn: Bool
     /// Seconds until the credential expires; nil = permanent (API key) or unknown.
     var authExpiresInS: Int?
+    /// How the credential is held: "env" (API key on box), "box" (signed in on box), or "app" (pushed from Conduit app).
+    var credentialSource: String?
 
     enum CodingKeys: String, CodingKey {
-        case cliPresent     = "cli_present"
-        case signedIn       = "signed_in"
-        case authExpiresInS = "auth_expires_in_s"
+        case cliPresent        = "cli_present"
+        case signedIn          = "signed_in"
+        case authExpiresInS    = "auth_expires_in_s"
+        case credentialSource  = "credential_source"
     }
 
-    init(cliPresent: Bool = false, signedIn: Bool = false, authExpiresInS: Int? = nil) {
-        self.cliPresent     = cliPresent
-        self.signedIn       = signedIn
-        self.authExpiresInS = authExpiresInS
+    init(cliPresent: Bool = false, signedIn: Bool = false, authExpiresInS: Int? = nil, credentialSource: String? = nil) {
+        self.cliPresent       = cliPresent
+        self.signedIn         = signedIn
+        self.authExpiresInS   = authExpiresInS
+        self.credentialSource = credentialSource
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        cliPresent     = try c.decodeIfPresent(Bool.self, forKey: .cliPresent)     ?? false
-        signedIn       = try c.decodeIfPresent(Bool.self, forKey: .signedIn)       ?? false
-        authExpiresInS = try c.decodeIfPresent(Int.self,  forKey: .authExpiresInS)
+        cliPresent        = try c.decodeIfPresent(Bool.self,   forKey: .cliPresent)      ?? false
+        signedIn          = try c.decodeIfPresent(Bool.self,   forKey: .signedIn)        ?? false
+        authExpiresInS    = try c.decodeIfPresent(Int.self,    forKey: .authExpiresInS)
+        credentialSource  = try c.decodeIfPresent(String.self, forKey: .credentialSource)
     }
 }
 
@@ -602,6 +607,8 @@ struct ReadinessCheckItem: Equatable, Identifiable {
     /// session start (i.e. agent CLIs). False for infra tools (git, node,
     /// tmux) that the user must install themselves.
     var autoInstalls: Bool = false
+    /// How the credential is held when signed in: "env", "box", or "app". Nil when not signed in or unknown.
+    var credentialSource: String? = nil
 }
 
 /// Derive the ordered checklist from a `BrokerReadiness` block plus the live
@@ -632,7 +639,8 @@ func readinessCheckItems(
             label: displayName,
             status: status,
             loginProvider: provider?.isEmpty == false ? provider : nil,
-            autoInstalls: true
+            autoInstalls: true,
+            credentialSource: ar.credentialSource
         ))
     }
     // Infra rows — only flag when absent (they are subtle secondary rows).
