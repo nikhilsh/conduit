@@ -77,6 +77,18 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	// applyLegacyDefaults) chatConversationOnDisk returns false, which just
 	// means resume IDs are cleared — safe, if conservative.
 	hasAgentConversation := chatConversationOnDisk(sessionDir, adapter.ConfigDir)
+	// When CONDUIT_SHARED_AGENT_CREDS is on, conversations land in the
+	// broker-owned config dir (pointed at by CLAUDE_CONFIG_DIR / CODEX_HOME)
+	// rather than the per-session agent-home, so chatConversationOnDisk always
+	// returns false. Check the shared dir for the specific latched session id.
+	if !hasAgentConversation && meta.ClaudeChatSessionID != "" && sharedAgentCredsEnabled() {
+		if subdir := configSubdir(adapter.LoginProvider); subdir != "" {
+			pat := filepath.Join(m.conduitRoot, "agent-cred", subdir, "projects", "*", meta.ClaudeChatSessionID+".jsonl")
+			if ms, _ := filepath.Glob(pat); len(ms) > 0 {
+				hasAgentConversation = true
+			}
+		}
+	}
 	resumeID := meta.ClaudeChatSessionID
 	if !hasAgentConversation {
 		resumeID = ""
