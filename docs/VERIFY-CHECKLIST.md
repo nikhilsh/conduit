@@ -9,6 +9,14 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.211
+
+**Drop multi-question AskUserQuestion echo bubbles — iOS + Android. PR #789.**
+
+- **iOS + Android**: When a user answers a multi-question `AskUserQuestion`, the app joins per-question answers with `\n`. `dropPendingInputEchoes` previously only matched single-option echoes (`c in pendingOptionSet`), so the newline-joined answer slipped through as a plain user bubble alongside the collapsed chip. Fix: split by `\n` and drop if every non-empty line is in `pendingOptionSet`. Unit tests added on both platforms. [iOS + Android, **needs on-device verify**: trigger a multi-question AskUserQuestion, answer it — confirm no duplicate plain bubble appears next to the chip]
+
+---
+
 ## v0.0.210
 
 **Streaming assistant turn on the spine + typed-step tool ledger — iOS + Android. PRs #790, #791.**
