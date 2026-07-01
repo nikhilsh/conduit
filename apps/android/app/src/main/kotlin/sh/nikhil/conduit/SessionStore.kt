@@ -3685,6 +3685,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     /**
+     * Test seam: seed [_conversationLog] for [sessionId] directly so unit
+     * tests can exercise transcript logic ([resolvePendingInput] ts-backfill,
+     * ordering) without a live broker/WS. Mirrors iOS, where `conversationLog`
+     * is a settable property the tests assign directly.
+     */
+    internal fun seedConversationLogForTest(sessionId: String, items: List<ConversationItem>) {
+        _conversationLog.value = _conversationLog.value + (sessionId to items)
+    }
+
+    /**
      * Latest-first archived rows for History, tombstoned ids excluded.
      * Mirror of iOS `SavedSessionsStore.recent`.
      */
