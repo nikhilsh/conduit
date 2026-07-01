@@ -20,7 +20,11 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
-_(nothing yet)_
+**Streaming-turn animation fixes — iOS + Android. PR #810.**
+
+- **Thinking/working dot pulse (iOS + Android)** — the single "working…/thinking…" dot was driven off a 0.3s 3-phase timer with a mismatched 0.6s animation, so it stuttered. Now a dedicated continuous pulse (scale 0.55↔1.0, opacity 0.4↔1.0, ~0.8s `repeatForever(autoreverses:)` / `infiniteRepeatable` Reverse). 3-dot "writing" state unchanged; reduce-motion static. [iOS + Android, **needs on-device verify**: trigger a turn → the pre-token dot pulses smoothly]
+- **Rail flows downward (iOS + Android)** — the working-state rail gradient scrolled **up**; now two identical stacked accent→green cycles animate so the pattern flows **downward** and wraps seamlessly. Reduce-motion static. [iOS + Android, **needs on-device verify**: while the agent works, the rail bar flows down, not up]
+- **Streaming caret trails the last character (iOS + Android)** — the caret was pinned to the far right of the last line (full-width Text); now composed inline into the text run (block glyph `▌` in accent, blinking) so it sits right after the last streamed character and wraps naturally. Reduce-motion: no caret. [iOS + Android, **needs on-device verify**: caret sits at the end of the streaming text, not the right margin]
 
 ---
 
