@@ -59,6 +59,12 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import sh.nikhil.conduit.ui.components.ActionPillVariant
+import sh.nikhil.conduit.ui.components.ButtonVariant
+import sh.nikhil.conduit.ui.components.ConduitActionPill
+import sh.nikhil.conduit.ui.components.ConduitButton
+import sh.nikhil.conduit.ui.components.ConduitCard
+import sh.nikhil.conduit.ui.components.ConduitChip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -654,24 +660,12 @@ private fun OfflineEmptyState(
             fontSize = 12.sp,
             color = neon.textFaint,
         )
-        FilledTonalButton(
+        ConduitButton(
+            title = if (isOffline) "Reconnect" else "Scan again",
             onClick = onAction,
-            colors = ButtonDefaults.filledTonalButtonColors(
-                containerColor = neon.accent,
-                contentColor = neon.accentText,
-            ),
-        ) {
-            Icon(
-                if (isOffline) Icons.Default.Refresh else Icons.Default.Refresh,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-            )
-            Spacer(Modifier.size(6.dp))
-            Text(
-                if (isOffline) "Reconnect" else "Scan again",
-                fontFamily = neon.sans,
-            )
-        }
+            variant = ButtonVariant.Primary,
+            tint = neon.accent,
+        )
     }
 }
 
@@ -729,25 +723,20 @@ fun FoundSessionErrorComposable(
                 Text(details, fontFamily = neon.mono, fontSize = 10.sp, color = neon.textFaint, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
         }
-        FilledTonalButton(
+        ConduitButton(
+            title = primaryLabel,
             onClick = onPrimary,
             modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.filledTonalButtonColors(
-                containerColor = neon.accent,
-                contentColor = neon.accentText,
-            ),
-        ) {
-            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.size(6.dp))
-            Text(primaryLabel, fontFamily = neon.sans)
-        }
+            variant = ButtonVariant.Primary,
+            tint = neon.accent,
+        )
         if (secondaryLabel != null && onSecondary != null) {
-            OutlinedButton(
+            ConduitButton(
+                title = secondaryLabel,
                 onClick = onSecondary,
                 modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(secondaryLabel, fontFamily = neon.sans)
-            }
+                variant = ButtonVariant.Ghost,
+            )
         }
     }
 }
@@ -913,54 +902,59 @@ private fun FoundSessionRowItem(
             ) {
                 when (session.state) {
                     FoundSessionState.IDLE -> {
-                        FilledTonalButton(
-                            onClick = onResume,
+                        // Resume = primary CTA (Solid); View = secondary (Soft) -- mirrors iOS actionButton
+                        ConduitActionPill(
+                            label = "Resume",
                             modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = neon.accent,
-                                contentColor = neon.accentText,
-                            ),
-                        ) {
-                            Text("Resume", fontFamily = neon.sans, fontSize = 12.sp)
-                        }
-                        OutlinedButton(onClick = onView, modifier = Modifier.weight(1f)) {
-                            Text("View", fontFamily = neon.sans, fontSize = 12.sp)
-                        }
+                            onClick = onResume,
+                            variant = ActionPillVariant.Solid,
+                            tint = neon.accent,
+                        )
+                        ConduitActionPill(
+                            label = "View",
+                            modifier = Modifier.weight(1f),
+                            onClick = onView,
+                            variant = ActionPillVariant.Soft,
+                            tint = neon.textDim,
+                        )
                     }
                     FoundSessionState.RUNNING -> {
-                        FilledTonalButton(
-                            onClick = onBranch,
+                        // Branch = primary CTA (Solid); Watch/View = secondary (Soft)
+                        ConduitActionPill(
+                            label = "Branch a copy",
                             modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = neon.yellow,
-                                contentColor = neon.accentText,
-                            ),
-                        ) {
-                            Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.size(4.dp))
-                            Text("Branch a copy", fontFamily = neon.sans, fontSize = 12.sp)
-                        }
+                            onClick = onBranch,
+                            leadingIcon = Icons.Outlined.ForkRight,
+                            variant = ActionPillVariant.Solid,
+                            tint = neon.yellow,
+                        )
                         if (sessionWatch) {
-                            OutlinedButton(onClick = onWatch, modifier = Modifier.weight(1f)) {
-                                Icon(
-                                    Icons.Outlined.Visibility,
-                                    contentDescription = null,
-                                    tint = neon.yellow,
-                                    modifier = Modifier.size(13.dp),
-                                )
-                                Spacer(Modifier.size(4.dp))
-                                Text("Watch live", fontFamily = neon.sans, fontSize = 12.sp)
-                            }
+                            ConduitActionPill(
+                                label = "Watch live",
+                                modifier = Modifier.weight(1f),
+                                onClick = onWatch,
+                                leadingIcon = Icons.Outlined.Visibility,
+                                variant = ActionPillVariant.Soft,
+                                tint = neon.yellow,
+                            )
                         } else {
-                            OutlinedButton(onClick = onView, modifier = Modifier.weight(1f)) {
-                                Text("View", fontFamily = neon.sans, fontSize = 12.sp)
-                            }
+                            ConduitActionPill(
+                                label = "View",
+                                modifier = Modifier.weight(1f),
+                                onClick = onView,
+                                variant = ActionPillVariant.Soft,
+                                tint = neon.textDim,
+                            )
                         }
                     }
                     FoundSessionState.ADOPTED -> {
-                        OutlinedButton(onClick = onView, modifier = Modifier.fillMaxWidth()) {
-                            Text("Open in Conduit", fontFamily = neon.sans, fontSize = 12.sp)
-                        }
+                        ConduitActionPill(
+                            label = "Open in Conduit",
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = onView,
+                            variant = ActionPillVariant.Soft,
+                            tint = neon.accent,
+                        )
                     }
                 }
             }
@@ -1059,14 +1053,9 @@ private fun BranchCopySheet(
         }
 
         // "The copy starts with" list
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .neonCardSurface(neon = neon, shape = RoundedCornerShape(12.dp), fill = neon.surface, borderColor = neon.border)
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
+        ConduitCard {
             Text("The copy starts with", fontFamily = neon.mono, fontSize = 11.sp, color = neon.accent, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(6.dp))
             CopyStartsWithRow(neon, "Full transcript", "${session.turnCount} turns restored")
             CopyStartsWithRow(neon, "Working directory", "new worktree")
             CopyStartsWithRow(neon, "Model & settings", session.agent)
@@ -1108,73 +1097,87 @@ private fun BranchCopySheet(
                 }
             }
             is ForkProbeState.Failed -> {
-                FilledTonalButton(
+                // Transient probe failure -- offer retry via ConduitButton
+                ConduitButton(
+                    title = "Couldn't check this box -- Retry",
                     onClick = {
                         Telemetry.breadcrumb("found_sessions", "fork probe retry", mapOf("surface" to "branch_sheet"))
                         onRetryForkProbe()
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = neon.accent,
-                        contentColor = neon.accentText,
-                    ),
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.size(6.dp))
-                    Text("Couldn't check this box -- Retry", fontFamily = neon.sans, fontSize = 13.sp)
-                }
+                    variant = ButtonVariant.Primary,
+                    tint = neon.accent,
+                )
             }
             is ForkProbeState.Ready -> {
                 val forkEnabled = forkProbe.sessionFork
-                FilledTonalButton(
-                    onClick = {
-                        if (!forkEnabled) return@FilledTonalButton
-                        scope.launch {
-                            branching = true
-                            Telemetry.breadcrumb("found_sessions", "branch attempt", mapOf("external_id" to session.externalId))
-                            val sessionId = store.adoptFound(
-                                endpoint = server.endpoint,
-                                agent = session.agent,
-                                externalId = session.externalId,
-                                cwd = session.cwd,
-                                mode = "fork",
-                            )
-                            branching = false
-                            if (sessionId != null) {
-                                // Stamp box ownership then join over WS so the resumed
-                                // agent streams in and chat send works (mirrors iOS fix).
-                                Telemetry.breadcrumb("found_sessions", "adopt attach",
-                                    mapOf("session_id" to sessionId, "mode" to "fork", "box" to server.id))
-                                store.stampSessionBox(sessionId, server.id)
-                                store.attachLiveSession(sessionId, session.agent)
-                                onOpenSession(sessionId)
-                            } else {
-                                errorMsg = "The box dropped while forking. Your terminal session keeps running, untouched."
-                            }
-                        }
-                    },
-                    enabled = forkEnabled && !branching,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = neon.yellow,
-                        contentColor = neon.accentText,
-                        disabledContainerColor = neon.yellow.copy(alpha = 0.38f),
-                        disabledContentColor = neon.accentText.copy(alpha = 0.60f),
-                    ),
-                ) {
-                    if (branching) {
+                if (branching) {
+                    // In-flight branch: keep M3 disabled button with spinner (no ConduitButton disabled API)
+                    FilledTonalButton(
+                        onClick = {},
+                        enabled = false,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = neon.yellow,
+                            contentColor = neon.accentText,
+                            disabledContainerColor = neon.yellow.copy(alpha = 0.38f),
+                            disabledContentColor = neon.accentText.copy(alpha = 0.60f),
+                        ),
+                    ) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.size(8.dp))
                         Text("Forking ${session.turnCount} turns into a Conduit copy...", fontFamily = neon.sans, fontSize = 13.sp)
-                    } else if (!forkEnabled) {
+                    }
+                } else if (!forkEnabled) {
+                    // Old broker: disabled appearance, no ConduitButton disabled API -- stay M3
+                    FilledTonalButton(
+                        onClick = {},
+                        enabled = false,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = neon.yellow,
+                            contentColor = neon.accentText,
+                            disabledContainerColor = neon.yellow.copy(alpha = 0.38f),
+                            disabledContentColor = neon.accentText.copy(alpha = 0.60f),
+                        ),
+                    ) {
                         Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.size(6.dp))
                         Text("Branching needs a newer broker on this box. Update it to enable.", fontFamily = neon.sans, fontSize = 13.sp)
-                    } else {
-                        Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.size(6.dp))
-                        Text("Branch a copy & open", fontFamily = neon.sans, fontSize = 13.sp)
                     }
+                } else {
+                    // Fork enabled: migrate to ConduitButton (Solid, yellow)
+                    ConduitButton(
+                        title = "Branch a copy & open",
+                        onClick = {
+                            scope.launch {
+                                branching = true
+                                Telemetry.breadcrumb("found_sessions", "branch attempt", mapOf("external_id" to session.externalId))
+                                val sessionId = store.adoptFound(
+                                    endpoint = server.endpoint,
+                                    agent = session.agent,
+                                    externalId = session.externalId,
+                                    cwd = session.cwd,
+                                    mode = "fork",
+                                )
+                                branching = false
+                                if (sessionId != null) {
+                                    // Stamp box ownership then join over WS so the resumed
+                                    // agent streams in and chat send works (mirrors iOS fix).
+                                    Telemetry.breadcrumb("found_sessions", "adopt attach",
+                                        mapOf("session_id" to sessionId, "mode" to "fork", "box" to server.id))
+                                    store.stampSessionBox(sessionId, server.id)
+                                    store.attachLiveSession(sessionId, session.agent)
+                                    onOpenSession(sessionId)
+                                } else {
+                                    errorMsg = "The box dropped while forking. Your terminal session keeps running, untouched."
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        variant = ButtonVariant.Primary,
+                        tint = neon.yellow,
+                    )
                 }
             }
         }
@@ -1264,21 +1267,11 @@ private fun TranscriptViewSheet(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            // Persistent read-only chip
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(99.dp))
-                    .background(neon.textFaint.copy(alpha = 0.1f))
-                    .border(1.dp, neon.border, RoundedCornerShape(99.dp))
-                    .padding(horizontal = 9.dp, vertical = 4.dp),
-            ) {
-                Text(
-                    "Read-only · not resumed",
-                    fontFamily = neon.mono,
-                    fontSize = 10.sp,
-                    color = neon.textFaint,
-                )
-            }
+            // Persistent read-only chip -- ConduitChip (unselected, dim tint)
+            ConduitChip(
+                label = "Read-only · not resumed",
+                tint = neon.textFaint,
+            )
         }
 
         // Transcript content
@@ -1338,6 +1331,7 @@ private fun TranscriptViewSheet(
                 session.isRunning -> {
                     when (forkProbe) {
                         is ForkProbeState.Checking -> {
+                            // Probe in flight: keep M3 disabled button with spinner
                             FilledTonalButton(
                                 onClick = {},
                                 enabled = false,
@@ -1355,56 +1349,58 @@ private fun TranscriptViewSheet(
                             }
                         }
                         is ForkProbeState.Failed -> {
-                            FilledTonalButton(
+                            ConduitButton(
+                                title = "Couldn't check this box -- Retry",
                                 onClick = {
                                     Telemetry.breadcrumb("found_sessions", "fork probe retry", mapOf("surface" to "transcript_sheet"))
                                     onRetryForkProbe()
                                 },
                                 modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.filledTonalButtonColors(
-                                    containerColor = neon.accent,
-                                    contentColor = neon.accentText,
-                                ),
-                            ) {
-                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.size(6.dp))
-                                Text("Couldn't check this box -- Retry", fontFamily = neon.sans)
-                            }
+                                variant = ButtonVariant.Primary,
+                                tint = neon.accent,
+                            )
                         }
                         is ForkProbeState.Ready -> {
-                            FilledTonalButton(
-                                onClick = { onBranch(session) },
-                                enabled = forkProbe.sessionFork,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.filledTonalButtonColors(
-                                    containerColor = neon.yellow,
-                                    contentColor = neon.accentText,
-                                    disabledContainerColor = neon.yellow.copy(alpha = 0.38f),
-                                    disabledContentColor = neon.accentText.copy(alpha = 0.60f),
-                                ),
-                            ) {
-                                Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.size(6.dp))
-                                Text(
-                                    if (forkProbe.sessionFork) "Branch a copy"
-                                    else "Branching needs a newer broker on this box. Update it to enable.",
-                                    fontFamily = neon.sans,
+                            if (forkProbe.sessionFork) {
+                                ConduitButton(
+                                    title = "Branch a copy",
+                                    onClick = { onBranch(session) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    variant = ButtonVariant.Primary,
+                                    tint = neon.yellow,
                                 )
+                            } else {
+                                // Old broker: disabled appearance -- stay M3
+                                FilledTonalButton(
+                                    onClick = {},
+                                    enabled = false,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.filledTonalButtonColors(
+                                        containerColor = neon.yellow,
+                                        contentColor = neon.accentText,
+                                        disabledContainerColor = neon.yellow.copy(alpha = 0.38f),
+                                        disabledContentColor = neon.accentText.copy(alpha = 0.60f),
+                                    ),
+                                ) {
+                                    Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.size(6.dp))
+                                    Text(
+                                        "Branching needs a newer broker on this box. Update it to enable.",
+                                        fontFamily = neon.sans,
+                                    )
+                                }
                             }
                         }
                     }
                 }
                 else -> {
-                    FilledTonalButton(
+                    ConduitButton(
+                        title = "Resume in Conduit with full context",
                         onClick = { onResume(session) },
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = neon.accent,
-                            contentColor = neon.accentText,
-                        ),
-                    ) {
-                        Text("Resume in Conduit with full context", fontFamily = neon.sans)
-                    }
+                        variant = ButtonVariant.Primary,
+                        tint = neon.accent,
+                    )
                 }
             }
         }
@@ -1556,11 +1552,8 @@ private fun ResumeProgressSheet(
                     )
                 }
 
-                // Checklist
-                Column(
-                    Modifier.fillMaxWidth().neonCardSurface(neon = neon, shape = RoundedCornerShape(13.dp), fill = neon.surface, borderColor = neon.border).padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
+                // Checklist -- ConduitCard replaces hand-rolled neonCardSurface card
+                ConduitCard {
                     steps.forEachIndexed { idx, step ->
                         val done = idx <= currentStep
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1571,14 +1564,20 @@ private fun ResumeProgressSheet(
                             }
                             Text(step, fontFamily = neon.mono, fontSize = 12.sp, color = if (done) neon.text else neon.textFaint)
                         }
+                        if (idx < steps.size - 1) {
+                            Spacer(Modifier.height(10.dp))
+                        }
                     }
                 }
 
                 Spacer(Modifier.weight(1f))
 
-                OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
-                    Text("Cancel", fontFamily = neon.sans)
-                }
+                ConduitButton(
+                    title = "Cancel",
+                    onClick = onCancel,
+                    modifier = Modifier.fillMaxWidth(),
+                    variant = ButtonVariant.Ghost,
+                )
             }
         }
 
@@ -1976,6 +1975,7 @@ private fun WatchLiveSheet(
         ) {
             when (forkProbe) {
                 is ForkProbeState.Checking -> {
+                    // Probe in flight: keep M3 disabled button with spinner
                     FilledTonalButton(
                         onClick = {},
                         enabled = false,
@@ -1993,49 +1993,54 @@ private fun WatchLiveSheet(
                     }
                 }
                 is ForkProbeState.Failed -> {
-                    FilledTonalButton(
+                    ConduitButton(
+                        title = "Couldn't check this box -- Retry",
                         onClick = {
                             Telemetry.breadcrumb("found_sessions", "fork probe retry", mapOf("surface" to "watch_sheet"))
                             onRetryForkProbe()
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = neon.accent,
-                            contentColor = neon.accentText,
-                        ),
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.size(6.dp))
-                        Text("Couldn't check this box -- Retry", fontFamily = neon.sans, fontSize = 13.sp)
-                    }
+                        variant = ButtonVariant.Primary,
+                        tint = neon.accent,
+                    )
                 }
                 is ForkProbeState.Ready -> {
-                    FilledTonalButton(
-                        onClick = {
-                            Telemetry.breadcrumb(
-                                "found_sessions",
-                                "watch branch",
-                                mapOf("id" to session.externalId),
-                            )
-                            onBranch(session)
-                        },
-                        enabled = forkProbe.sessionFork,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = neon.yellow,
-                            contentColor = neon.accentText,
-                            disabledContainerColor = neon.yellow.copy(alpha = 0.38f),
-                            disabledContentColor = neon.accentText.copy(alpha = 0.60f),
-                        ),
-                    ) {
-                        Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.size(6.dp))
-                        Text(
-                            if (forkProbe.sessionFork) "Branch a copy to take control"
-                            else "Branching needs a newer broker on this box. Update it to enable.",
-                            fontFamily = neon.sans,
-                            fontSize = 13.sp,
+                    if (forkProbe.sessionFork) {
+                        ConduitButton(
+                            title = "Branch a copy to take control",
+                            onClick = {
+                                Telemetry.breadcrumb(
+                                    "found_sessions",
+                                    "watch branch",
+                                    mapOf("id" to session.externalId),
+                                )
+                                onBranch(session)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            variant = ButtonVariant.Primary,
+                            tint = neon.yellow,
                         )
+                    } else {
+                        // Old broker: disabled appearance -- stay M3
+                        FilledTonalButton(
+                            onClick = {},
+                            enabled = false,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = neon.yellow,
+                                contentColor = neon.accentText,
+                                disabledContainerColor = neon.yellow.copy(alpha = 0.38f),
+                                disabledContentColor = neon.accentText.copy(alpha = 0.60f),
+                            ),
+                        ) {
+                            Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.size(6.dp))
+                            Text(
+                                "Branching needs a newer broker on this box. Update it to enable.",
+                                fontFamily = neon.sans,
+                                fontSize = 13.sp,
+                            )
+                        }
                     }
                 }
             }
