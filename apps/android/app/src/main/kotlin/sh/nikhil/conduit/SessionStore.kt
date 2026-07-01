@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import sh.nikhil.conduit.auth.OAuthClient
 import sh.nikhil.conduit.auth.OAuthCredential
 import sh.nikhil.conduit.auth.OAuthProvider
 import sh.nikhil.conduit.auth.OAuthStore
@@ -1176,6 +1177,38 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val ctx = appContext ?: return@withContext
         for (provider in listOf(OAuthProvider.OPENAI, OAuthProvider.ANTHROPIC)) {
             val cred = runCatching { OAuthStore.load(ctx, provider) }.getOrNull() ?: continue
+
+            // Refresh Anthropic tokens that are near or past expiry before
+            // pushing — a stale access token silently breaks agent auth.
+            var credToPush = cred
+            if (cred is OAuthCredential.Anthropic) {
+                val nowMs = System.currentTimeMillis()
+                if (cred.blob.claudeAiOauth.expiresAt - nowMs < 5 * 60 * 1000L) {
+                    Telemetry.breadcrumb(
+                        "agent-credentials",
+                        "anthropic token near expiry — refreshing",
+                        mapOf("host" to endpoint.displayHost),
+                    )
+                    val refreshed = OAuthClient(OAuthProvider.ANTHROPIC)
+                        .refreshAnthropicCredential(cred.blob.claudeAiOauth.refreshToken)
+                    if (refreshed != null) {
+                        runCatching { OAuthStore.save(ctx, refreshed) }
+                        credToPush = refreshed
+                        Telemetry.breadcrumb(
+                            "agent-credentials",
+                            "anthropic refresh ok before push",
+                            mapOf("host" to endpoint.displayHost),
+                        )
+                    } else {
+                        Telemetry.breadcrumb(
+                            "agent-credentials",
+                            "anthropic refresh failed — pushing stale",
+                            mapOf("host" to endpoint.displayHost),
+                        )
+                    }
+                }
+            }
+
             Telemetry.breadcrumb(
                 "agent-credentials",
                 "propagate start",
@@ -1186,7 +1219,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     put("provider", provider.raw)
                     put("kind", "oauth")
                     // Nest the native blob as a JSON object, not a string.
-                    put("credential", JSONObject(cred.toJson()))
+                    put("credential", JSONObject(credToPush.toJson()))
                 }.toString()
                 val conn = (URL("$base/api/agent/credentials").openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"

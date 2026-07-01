@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/nikhilsh/conduit/broker/internal/credentials"
 )
 
 // Credential freshness plumbing for the per-session ephemeral HOME.
@@ -226,4 +228,42 @@ func (s *Session) refreshStaleAgentCredentials() {
 		return
 	}
 	log.Printf("session %s: re-mirrored fresher host %s credentials (copy expiry %d → host expiry %d)", s.ID, provider, copyExp, hostExp)
+}
+
+// absorbCanonicalIfFresher checks whether the on-disk canonical credential
+// file (at sessionCredentialFile(provider, credHome)) is fresher than the
+// stored blob. If so it writes the on-disk data back into the store — so
+// future restarts see the CLI-refreshed lineage — and returns true (the
+// caller should skip materializing the stale blob). Returns false when the
+// blob is fresher or equal, or the on-disk file is absent/unreadable.
+//
+// This guards the ensureSharedCred seed path against the restart footgun:
+// the Claude CLI refreshes tokens directly into the canonical file
+// (Anthropic rotates the refresh token on every use), so re-materializing
+// the stored blob after a restart would clobber the valid refresh token with
+// a dead one.
+func absorbCanonicalIfFresher(provider string, store *credentials.Store, credHome string) bool {
+	path := sessionCredentialFile(provider, credHome)
+	if path == "" {
+		return false
+	}
+	diskData, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	blobData, err := store.Get(provider)
+	if err != nil {
+		return false
+	}
+	diskExp, diskOK := credentialExpiryMillis(provider, diskData)
+	blobExp, blobOK := credentialExpiryMillis(provider, blobData)
+	if !diskOK || !blobOK || diskExp <= blobExp {
+		return false
+	}
+	// On-disk is fresher: absorb into store (best-effort; skip is
+	// unconditional so a Set failure doesn't trigger an overwrite).
+	if err := store.Set(provider, json.RawMessage(diskData)); err != nil {
+		fmt.Fprintf(os.Stderr, "credentials: absorb fresher %s canonical into store: %v\n", provider, err)
+	}
+	return true
 }
