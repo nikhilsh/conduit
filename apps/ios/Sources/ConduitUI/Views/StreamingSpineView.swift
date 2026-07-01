@@ -92,7 +92,7 @@ extension ConduitUI {
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
                             .stroke(neon.border, lineWidth: 1)
                     )
-                ConduitUI.ConduitMark(size: 15, glow: false)
+                ConduitUI.ConduitMark(size: 15, glow: true)
             }
             .frame(width: 24, height: 24)
             // Breathe: shadow pulses between accent and green while streaming.
@@ -178,8 +178,15 @@ extension ConduitUI {
                     // Inline caret: thin-space + block glyph always present while streaming.
                     // Blinks via color toggle (accentBright <-> .clear) so text width is stable.
                     // Under reduceMotion: caretSuffix is empty, no caret rendered.
+                    //
+                    // Inline markdown: same AttributedString parse used by the settled path
+                    // (conduitInlineAttributed / .inlineOnlyPreservingWhitespace). Unclosed
+                    // markers (partial stream) are left as literal text by the parser, so
+                    // partial content never mangles. Cache hit on every streaming tick after
+                    // the first parse for that content chunk.
+                    let markdownAttr = conduitInlineAttributed(content)
                     (
-                        Text(content).foregroundStyle(neon.text)
+                        Text(markdownAttr).foregroundStyle(neon.text)
                         + Text(caretSuffix).foregroundStyle(caretVisible ? neon.accentBright : .clear)
                     )
                     .font(neon.sans(15.5))

@@ -2402,16 +2402,7 @@ private struct ConduitStructuredMarkdownView: View {
     }
 
     private static func inlineAttributed(_ raw: String) -> AttributedString {
-        let key = "conduit-md-inline:\(raw.hashValue)"
-        if let hit = MessageRenderCache.shared.get(itemID: key, revision: 0) {
-            return hit
-        }
-        let attr = (try? AttributedString(
-            markdown: raw,
-            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )) ?? AttributedString(raw)
-        MessageRenderCache.shared.set(itemID: key, revision: 0, value: attr)
-        return attr
+        conduitInlineAttributed(raw)
     }
 
     private var foregroundForRole: Color {
@@ -5106,4 +5097,29 @@ struct ConduitPlanCard: View {
                 .frame(width: 16, height: 16)
         }
     }
+}
+
+// MARK: - Shared inline markdown helper
+
+/// Parse `raw` as inline-only markdown and return an `AttributedString`.
+/// Uses `.inlineOnlyPreservingWhitespace` so block markers are left
+/// literal and unclosed spans (partial streams) appear as plain text
+/// rather than mangling the output. Result is cached in
+/// `MessageRenderCache.shared` so repeated calls with the same content
+/// (streaming ticks, recycled rows) are free after the first parse.
+///
+/// Accessible to `StreamingSpineView` and any other ConduitUI view that
+/// needs the same settled inline-markdown look.
+@MainActor
+func conduitInlineAttributed(_ raw: String) -> AttributedString {
+    let key = "conduit-md-inline:\(raw.hashValue)"
+    if let hit = MessageRenderCache.shared.get(itemID: key, revision: 0) {
+        return hit
+    }
+    let attr = (try? AttributedString(
+        markdown: raw,
+        options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+    )) ?? AttributedString(raw)
+    MessageRenderCache.shared.set(itemID: key, revision: 0, value: attr)
+    return attr
 }

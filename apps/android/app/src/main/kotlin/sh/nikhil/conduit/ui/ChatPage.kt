@@ -2864,9 +2864,27 @@ private fun StreamingSpineRow(content: String) {
             // The caret suffix is ALWAYS present in the layout while streaming so width is
             // stable; it blinks by toggling between accentBright and Color.Transparent (not
             // by swapping glyph/space). Under reduceMotion: no caret suffix appended at all.
+            // Inline markdown: parse content for bold/italic/code spans via
+            // ConduitMarkdownHeadingScaler.inlineAnnotated, cached by content hash in
+            // LocalParsedMarkdownCache so each unique content string is parsed once.
+            // Unclosed markers (partial stream) are emitted as literal text, not consumed.
+            // remember() is always called (no conditional composable) with content as key;
+            // empty content returns an empty AnnotatedString (placeholder).
+            val cache = LocalParsedMarkdownCache.current
             val hasContent = content.isNotEmpty()
+            val contentAnnotated = remember(content) {
+                if (hasContent) {
+                    cache.getOrPut(id = "stream-inline:${content.hashCode()}", revision = 0) {
+                        ConduitMarkdownHeadingScaler.inlineAnnotated(content)
+                    }
+                } else null
+            }
             val proseText = buildAnnotatedString {
-                append(if (hasContent) content else "​")
+                if (contentAnnotated != null) {
+                    append(contentAnnotated)
+                } else {
+                    append("​")
+                }
                 if (hasContent && !reduceMotion) {
                     // Thin-space gap + block glyph, always in layout; color toggles for blink.
                     val caretColor = if (caretVisible) neon.accentBright else Color.Transparent
