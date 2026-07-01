@@ -252,11 +252,17 @@ func ensureSharedCred(conduitRoot string, store *credentials.Store) (credResolut
 		}
 		switch {
 		case res.seedFromBlob[p] && store != nil:
-			// Reuse Materialize: it writes <home>/.claude/.credentials.json
-			// resp <home>/.codex/auth.json — exactly the canonical subpaths.
-			if err := store.Materialize(p, res.home); err != nil {
-				if firstErr == nil {
-					firstErr = fmt.Errorf("ensureSharedCred: seed %s from blob: %w", p, err)
+			// Skip re-materializing the stored blob when the canonical file on
+			// disk is already fresher: the CLI refreshed its tokens there since
+			// the app last pushed, and overwriting would clobber the valid
+			// refresh_token with the original (now rotated/dead) one.
+			if !absorbCanonicalIfFresher(p, store, res.home) {
+				// Reuse Materialize: it writes <home>/.claude/.credentials.json
+				// resp <home>/.codex/auth.json — exactly the canonical subpaths.
+				if err := store.Materialize(p, res.home); err != nil {
+					if firstErr == nil {
+						firstErr = fmt.Errorf("ensureSharedCred: seed %s from blob: %w", p, err)
+					}
 				}
 			}
 		case res.sourceLabel[p] == "box":

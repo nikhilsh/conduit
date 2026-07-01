@@ -533,6 +533,54 @@ class OAuthClient(
         return exchangeCode(code, req.verifier, req.state)
     }
 
+    // MARK: - Anthropic token refresh
+
+    /**
+     * Exchange a stored Anthropic refresh token for a fresh credential.
+     * Same endpoint as the code exchange, `grant_type=refresh_token`.
+     * Returns null on failure (network error, 4xx/5xx) so callers can
+     * fall back to pushing the stale credential.
+     */
+    suspend fun refreshAnthropicCredential(refreshToken: String): OAuthCredential? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val cfg = provider.config
+                val body = JSONObject().apply {
+                    put("grant_type", "refresh_token")
+                    put("refresh_token", refreshToken)
+                    put("client_id", cfg.clientId)
+                }.toString()
+                val conn = (java.net.URL(cfg.tokenUrl).openConnection()
+                        as java.net.HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Accept", "application/json")
+                    connectTimeout = 10_000
+                    readTimeout = 15_000
+                }
+                try {
+                    conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                    val code = conn.responseCode
+                    if (code !in 200..299) {
+                        Telemetry.breadcrumb("oauth_refresh", "anthropic refresh failed",
+                            mapOf("status" to code.toString()))
+                        return@runCatching null
+                    }
+                    val data = conn.inputStream.use { it.readBytes() }
+                    val creds = decodeAnthropicTokenResponse(data)
+                    Telemetry.breadcrumb("oauth_refresh", "anthropic refresh ok")
+                    OAuthCredential.Anthropic(creds)
+                } finally {
+                    conn.disconnect()
+                }
+            }.getOrElse { e ->
+                Telemetry.breadcrumb("oauth_refresh", "anthropic refresh exception",
+                    mapOf("error" to (e.message ?: e.javaClass.simpleName)))
+                null
+            }
+        }
+
     companion object {
         // MARK: PKCE math (unit-tested)
 

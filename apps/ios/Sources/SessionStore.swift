@@ -4440,7 +4440,29 @@ final class SessionStore {
         guard let base = endpoint.httpBaseURL else { return }
         for provider in [OAuthProvider.openai, .anthropic] {
             guard let credential = OAuthCredentialStore.load(provider: provider) else { continue }
-            guard let jsonString = try? Self.encodeCredentialAsJSONString(credential),
+
+            // Refresh Anthropic tokens that are near or past expiry before
+            // pushing — a stale access token silently breaks agent auth.
+            var credentialToPush = credential
+            if case .anthropic(let creds) = credential {
+                let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+                if creds.claudeAiOauth.expiresAt - nowMs < 5 * 60 * 1000 {
+                    Telemetry.breadcrumb("agent_creds", "anthropic token near expiry — refreshing",
+                                         data: ["host": endpoint.displayHost])
+                    if let refreshed = try? await OAuthClient(provider: .anthropic)
+                            .refreshAnthropicCredential(using: creds) {
+                        try? OAuthCredentialStore.save(refreshed)
+                        credentialToPush = refreshed
+                        Telemetry.breadcrumb("agent_creds", "anthropic refresh ok before push",
+                                             data: ["host": endpoint.displayHost])
+                    } else {
+                        Telemetry.breadcrumb("agent_creds", "anthropic refresh failed — pushing stale",
+                                             data: ["host": endpoint.displayHost])
+                    }
+                }
+            }
+
+            guard let jsonString = try? Self.encodeCredentialAsJSONString(credentialToPush),
                   let blobData = jsonString.data(using: .utf8),
                   // Re-parse so `credential` lands as a nested JSON object,
                   // not a quoted string (the load-bearing correctness point).

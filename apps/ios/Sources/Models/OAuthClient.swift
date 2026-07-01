@@ -791,6 +791,39 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
             )
         )
     }
+
+    // MARK: - Anthropic token refresh
+
+    /// Exchange a stored Anthropic refresh token for a fresh credential.
+    /// Mirrors `exchangeCodeForCredential` for the `grant_type=refresh_token`
+    /// path — same endpoint, same JSON body shape, same response decoder.
+    /// The caller should save the returned credential and use it in place
+    /// of the stale one.
+    func refreshAnthropicCredential(using creds: ClaudeCredentialsJson) async throws -> OAuthCredential {
+        guard provider == .anthropic else {
+            throw OAuthClientError.underlying("refreshAnthropicCredential called on non-anthropic client")
+        }
+        let config = provider.config
+        var req = URLRequest(url: config.tokenURL)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        let body: [String: String] = [
+            "grant_type": "refresh_token",
+            "refresh_token": creds.claudeAiOauth.refreshToken,
+            "client_id": config.clientID,
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await urlSession.data(for: req)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            Telemetry.breadcrumb("oauth_refresh", "anthropic refresh failed",
+                                 data: ["status": "\(statusCode)"])
+            throw OAuthClientError.underlying("anthropic refresh HTTP \(statusCode)")
+        }
+        Telemetry.breadcrumb("oauth_refresh", "anthropic refresh ok")
+        return try .anthropic(Self.decodeAnthropicTokenResponse(data))
+    }
 }
 
 /// Persistence shim used by `AgentLoginSheet`. Keeps the OAuth blob in
