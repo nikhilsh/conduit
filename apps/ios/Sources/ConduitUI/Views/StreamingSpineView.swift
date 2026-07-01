@@ -43,6 +43,13 @@ extension ConduitUI {
         // Rail flow: tile height unit for the flowing gradient stack.
         // railOffset animates -railTile -> 0, started once in .task(id: reduceMotion).
         private let railTile: CGFloat = 46
+        // FIXED tile count (generous: 48 * 46 ≈ 2200pt covers any realistic
+        // message). Kept constant — NOT derived from the rail height — so the
+        // tile `ForEach` and the inner stack frame never change as the streamed
+        // message grows. Only the outer clip (`.frame(height: h)`) tracks height,
+        // which is cheap; deriving the count from `h` rebuilt the stack every
+        // token and stuttered the flow.
+        private let railTileCount: Int = 48
         @State private var railOffset: CGFloat = 0
 
         var body: some View {
@@ -136,11 +143,13 @@ extension ConduitUI {
                         .frame(width: 2, height: h)
                         .opacity(0.5)
                     } else {
-                        // Tile stack sized to cover the full rail height plus wrap margin.
-                        // Animation is driven by railOffset (started once in body/.task).
-                        let count = Int((h / railTile).rounded(.up)) + 2
+                        // FIXED-size tile stack (railTileCount tiles) — constant across
+                        // streamed-message growth so it never rebuilds. It's taller than
+                        // any realistic rail; the outer `.frame(height: h)` + `.clipped()`
+                        // trims it to the actual height. Animation is driven by railOffset
+                        // (started once in body/.task), untouched by height changes.
                         VStack(spacing: 0) {
-                            ForEach(0..<count, id: \.self) { _ in
+                            ForEach(0..<railTileCount, id: \.self) { _ in
                                 LinearGradient(
                                     colors: [neon.accentBright, neon.green],
                                     startPoint: .top,
@@ -149,7 +158,7 @@ extension ConduitUI {
                                 .frame(width: 2, height: railTile)
                             }
                         }
-                        .frame(width: 2, height: railTile * CGFloat(count), alignment: .top)
+                        .frame(width: 2, height: railTile * CGFloat(railTileCount), alignment: .top)
                         .offset(y: railOffset)
                         .opacity(0.95)
                     }
