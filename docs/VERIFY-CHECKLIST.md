@@ -20,6 +20,12 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+_(nothing yet)_
+
+---
+
+## v0.0.208
+
 **Android onboarding parity — welcome + top bar aligned to iOS. PR #818.**
 
 - Five welcome/top-bar spots where Android had drifted from the iOS source of
@@ -31,6 +37,10 @@ pending section above it. Newest merge first._
   screenshot-verified via the appetize.yml pipeline. [Android, **needs
   on-device verify**: first-run onboarding welcome matches iOS — trailing
   chevron, no ×, logo tile, teal `>`, and teal "Enter a code"]
+
+**Onboarding install command uses the real conduit.kaopeh.com/install.sh — iOS + Android. PR #817.**
+
+- The onboarding "add a box" screen told users to run `curl -fsSL https://conduit.sh | sh`, but `conduit.sh` does not resolve (connection refused) — the command failed for everyone who pasted it. Replaced with the vanity URL the website actually serves (`https://conduit.kaopeh.com/install.sh`, HTTP 200) for the mac/linux command and the VPS `ssh` variant, both platforms. [iOS + Android, **needs on-device verify**: Onboarding → add a box → the copied command uses conduit.kaopeh.com/install.sh and installs successfully]
 
 ---
 
