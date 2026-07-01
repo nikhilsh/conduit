@@ -722,11 +722,12 @@ extension ConduitUI {
                                 }
                             }
                         }
-                        // Streaming overlay: shows in-progress assistant content
-                        // before the final on_chat_event commits it to the store.
+                        // Streaming spine: Direction C "Flowing conduit" render.
+                        // Replaces the legacy ConduitStreamingOverlay. Shows while
+                        // chat_streaming view_events deliver partial content.
                         // Old brokers never emit chat_streaming so this stays nil.
                         if let content = streamingOverlayContent, !content.isEmpty, !isReadOnly {
-                            ConduitStreamingOverlay(content: content)
+                            ConduitUI.StreamingSpineView(content: content)
                                 .padding(.horizontal, 16)
                                 .transition(.opacity)
                                 .id("streaming-overlay")
@@ -2498,39 +2499,11 @@ private struct ConduitTypingIndicator: View {
     }
 }
 
-// MARK: - Streaming overlay
+// MARK: - Streaming overlay (legacy removed)
 //
-// Renders in-progress assistant content streamed via chat_streaming view_events
-// before the final on_chat_event commits the message to the Rust store.
-// Shown as a plain text bubble with the assistant role header so it reads
-// visually like the incoming message. Dismissed automatically when the
-// permanent ConversationItem arrives (SessionStore clears streamingMessage).
-private struct ConduitStreamingOverlay: View {
-    let content: String
-    @Environment(\.neonTheme) private var neon
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("assistant")
-                .font(neon.mono(11).weight(.bold))
-                .foregroundStyle(neon.textDim)
-                .textCase(.uppercase)
-            Text(content)
-                .font(neon.sans(14))
-                .foregroundStyle(neon.text)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // Streaming cursor: a blinking underscore appended inline.
-                .overlay(alignment: .bottomTrailing) {
-                    Text("_")
-                        .font(neon.mono(14))
-                        .foregroundStyle(neon.accent)
-                        .opacity(0.8)
-                }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityLabel("Assistant is writing: \(content)")
-    }
-}
+// ConduitStreamingOverlay has been replaced by ConduitUI.StreamingSpineView
+// (Direction C "Flowing conduit" — design handoff streaming_turn/README.md).
+// The spine render lives in StreamingSpineView.swift.
 
 private struct ConduitCodeBlock: View {
     let language: String?
@@ -2832,6 +2805,9 @@ private struct ConduitToolBundleCard: View {
 
     @State private var expanded: Bool
     @State private var focusedID: String?
+    /// Per-message expand state for the ToolLedger (arm B). Starts collapsed (footnote)
+    /// once anyRunning is false; failures auto-expand.
+    @State private var ledgerExpanded: Bool
     @Environment(\.neonTheme) private var neon
     /// chat-shell-v2 arm (§2). Arm B drops the grouped card and renders each
     /// tool as a recessive one-line spine row.
@@ -2901,6 +2877,8 @@ private struct ConduitToolBundleCard: View {
         // initial state re-evaluates.)
         _expanded = State(initialValue: !fails.isEmpty)
         _focusedID = State(initialValue: fails.first?.id)
+        // ToolLedger (arm B): starts collapsed unless there are failures.
+        _ledgerExpanded = State(initialValue: !fails.isEmpty)
     }
 
     private var tint: Color {
@@ -2919,12 +2897,19 @@ private struct ConduitToolBundleCard: View {
     }
 
     var body: some View {
-        if commandRunBlockEnabled {
+        if arm == .b {
+            // Arm B (Signature/spine — the permanent default for all non-staff):
+            // always render the new typed-step ToolLedger regardless of other flags.
+            ToolLedger(
+                items: items,
+                anyRunning: anyRunning,
+                failCount: failCount,
+                isExpanded: $ledgerExpanded
+            )
+        } else if commandRunBlockEnabled {
             monoBlockBody
         } else if !commandDetailEnabled {
             compactBody
-        } else if arm == .b {
-            signatureBody
         } else {
             breatheBody
         }
@@ -3934,7 +3919,7 @@ private struct ConduitSpineToolRow: View {
 // MARK: - Neon status helpers (shared by tool / command cards)
 
 /// One of the four card states the design distinguishes (§4.5).
-private enum NeonCardState: Equatable {
+enum NeonCardState: Equatable {
     case running, ok, fail, pending
 
     init(status: String, exitCode: Int32?) {

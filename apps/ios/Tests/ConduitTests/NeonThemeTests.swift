@@ -144,6 +144,22 @@ struct NeonThemeTests {
         #expect(light.glowColor == Color(hex: "#22d3ee"))
     }
 
+    // MARK: - Streaming-turn neutral tokens (design handoff streaming_turn)
+
+    /// ghost and lineSoft are identical in dark + light — palette-independent
+    /// rgba(160,184,224) at 0.24 and 0.12 respectively.
+    @Test func ghostAndLineSoftDarkIce() {
+        let t = NeonTheme.resolve(palette: .ice, dark: true, glow: true)
+        #expect(t.ghost    == Color(red: 160 / 255, green: 184 / 255, blue: 224 / 255, opacity: 0.24))
+        #expect(t.lineSoft == Color(red: 160 / 255, green: 184 / 255, blue: 224 / 255, opacity: 0.12))
+    }
+
+    @Test func ghostAndLineSoftLightIce() {
+        let t = NeonTheme.resolve(palette: .ice, dark: false, glow: true)
+        #expect(t.ghost    == Color(red: 160 / 255, green: 184 / 255, blue: 224 / 255, opacity: 0.24))
+        #expect(t.lineSoft == Color(red: 160 / 255, green: 184 / 255, blue: 224 / 255, opacity: 0.12))
+    }
+
     // MARK: - AppearanceStore persistence round-trip
 
     @Test func persistsAndRestoresNeonPalette() {
