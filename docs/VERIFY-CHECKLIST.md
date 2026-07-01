@@ -9,6 +9,20 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.208
+
+**Long-press user bubble copies whole message — iOS + Android. PR #786.**
+
+- **iOS**: `.contextMenu { Button("Copy") }` on `ConduitUserBubble` — long-press shows "Copy" menu that copies full message text to clipboard (replaces per-character text-selection handles). [iOS, **needs on-device verify**: long-press a sent bubble → "Copy" appears → pastes full message]
+- **Android**: `.pointerInput` + `detectTapGestures(onLongPress)` on the user bubble Box — long-press silently copies full content to clipboard. [Android, **needs on-device verify**: long-press a sent bubble → full message on clipboard]
+
+**Anthropic credential refresh fix — iOS + Android + broker. PR #787.**
+
+- **App (iOS + Android)**: `propagateStoredAgentCredentials` now checks `expiresAt` before pushing to the broker. If within 5 min of expiry, calls the new `refreshAnthropicCredential()` on `OAuthClient` (grant_type=refresh_token → same Anthropic token endpoint), saves fresh tokens locally, pushes those instead. Falls back to stale on failure. [iOS + Android, **needs on-device verify**: let token age near expiry, reconnect to box — should push fresh tokens not 401]
+- **Broker**: `absorbCanonicalIfFresher()` in `ensureSharedCred` — before re-materializing the stored blob to `agent-cred/.claude/.credentials.json` on restart, compares `expiresAt`; if the on-disk file is fresher (Claude CLI refreshed it), absorbs disk data into the encrypted store and skips the overwrite. Prevents broker restart from clobbering CLI-refreshed tokens with the original (now-rotated) refresh_token. [broker, **redeploy required**; verify: long-running session → broker restart → Claude retains auth without 401]
+
+---
+
 ## v0.0.207
 
 **Restore --resume after broker restart when CONDUIT_SHARED_AGENT_CREDS is on. PR #785.**
