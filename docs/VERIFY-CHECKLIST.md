@@ -20,6 +20,17 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+_(nothing yet)_
+
+---
+
+## v0.0.207
+
+**Streaming caret + rail refinements — iOS + Android. PR #815.**
+
+- **Caret gap + no width jiggle (iOS + Android)** — the streaming caret sat flush against the last character and swapped block↔space on blink (jiggling the text width). Now a thin space precedes it and the block glyph stays in layout, blinking via color (accent ↔ clear). Reduce-motion: no caret. [iOS + Android, **needs on-device verify**: caret has a small gap after the last char and the text doesn't jiggle as it blinks]
+- **Rail flow no longer erratic (iOS + Android)** — the working-rail animation was keyed on the rail height, which changes as prose streams in, so it kept restarting. Reworked to a fixed-period tile (iOS stacked gradient tiles; Android `TileMode.Repeated` brush) that is height-independent → smooth downward flow, no restart. Reduce-motion: static. [iOS + Android, **needs on-device verify**: left rail flows downward smoothly with no stutter while prose streams]
+
 **Appetize build + screenshot pipeline — CI tooling (manual workflow). PRs #811, #814.**
 
 - **`appetize.yml` (manual `workflow_dispatch`)** — uploads the unsigned
