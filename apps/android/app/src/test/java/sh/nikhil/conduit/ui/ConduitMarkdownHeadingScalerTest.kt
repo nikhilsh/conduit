@@ -69,4 +69,52 @@ class ConduitMarkdownHeadingScalerTest {
         )
         assertEquals("Just regular markdown body, no headings.", out.text)
     }
+
+    // --- inlineAnnotated / appendInlineSpans tests ---
+
+    @Test
+    fun inlineAnnotated_plainTextUnchanged() {
+        val out = ConduitMarkdownHeadingScaler.inlineAnnotated("Hello world")
+        assertEquals("Hello world", out.text)
+    }
+
+    @Test
+    fun inlineAnnotated_boldStripMarkers() {
+        val out = ConduitMarkdownHeadingScaler.inlineAnnotated("Say **bold** here")
+        // Markers are consumed; visible text has no asterisks.
+        assertEquals("Say bold here", out.text)
+    }
+
+    @Test
+    fun inlineAnnotated_codeStripMarkers() {
+        val out = ConduitMarkdownHeadingScaler.inlineAnnotated("Run `ls -la` now")
+        assertEquals("Run ls -la now", out.text)
+    }
+
+    @Test
+    fun inlineAnnotated_italicStripMarkers() {
+        val out = ConduitMarkdownHeadingScaler.inlineAnnotated("An *italic* word")
+        assertEquals("An italic word", out.text)
+    }
+
+    @Test
+    fun inlineAnnotated_unclosedBoldEmitsLiteralMarkers() {
+        // Partial stream: bold opened but not closed yet.
+        val out = ConduitMarkdownHeadingScaler.inlineAnnotated("Say **bold")
+        // The two `*` chars are emitted literally, then "bold".
+        assertEquals("Say **bold", out.text)
+    }
+
+    @Test
+    fun inlineAnnotated_unclosedBacktickEmitsLiteral() {
+        val out = ConduitMarkdownHeadingScaler.inlineAnnotated("Run `ls")
+        assertEquals("Run `ls", out.text)
+    }
+
+    @Test
+    fun inlineAnnotated_snakeCasePreserved() {
+        // Underscores in identifiers must NOT be treated as italic markers.
+        val out = ConduitMarkdownHeadingScaler.inlineAnnotated("foo_bar_baz")
+        assertEquals("foo_bar_baz", out.text)
+    }
 }
