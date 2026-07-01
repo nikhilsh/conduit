@@ -20,6 +20,13 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Chat transcript fixes: answered-chip ordering + first-message ack — iOS + Android. PRs #799, #798.**
+
+- **Answered AskUserQuestion chip sorts in place (PR #799)** — a live `pending_input` card is created with an empty `ts`, which `sortedByConversationTs` deliberately sorts NEWEST (empty/unparseable ts → `.greatestFiniteMagnitude` / `Long.MAX_VALUE`). That's correct while the card is unanswered, but on answer it collapses to the `✓` chip and its `ts` was never backfilled — so once later assistant turns arrived the chip stayed pinned to the bottom ("my answer is below your response"). Fix: `resolvePendingInput` backfills the card `ts` to an anchored epoch (max known parseable epoch + ε) when empty/unparseable; extracted a shared `anchorEpoch` helper reused by `answerPendingInput`. Unit tests both platforms (Android seeds via a new `internal seedConversationLogForTest` seam). [iOS + Android, **needs on-device verify**: trigger an AskUserQuestion, answer it, keep chatting — the ✓ chip must stay in chronological place, not jump to the bottom]
+- **First-message dotted bubble now clears (PR #798)** — `drainSentNormal` (clears the sent-but-unacked bubble when an assistant reply proves broker receipt) required `sent=true`, but `markSent` runs async after the WS write. For the FIRST message the broker often replies (fires an `AskUserQuestion`) before `markSent` lands, so the entry stayed `sent=false`, was skipped, and the bubble stuck faded forever. Fix: drain non-failed `.normal` entries regardless of `sent` — a reply is itself proof of receipt; the broker dedups any resend by `client_msg_id`. Unit tests both platforms. [iOS + Android, **needs on-device verify**: start a fresh session, send a first message that triggers an AskUserQuestion — the user bubble should go solid, not stay dotted]
+
+---
+
 **Tighten handoff classifier to first line only — core. PR #801.**
 
 - **core**: `looks_like_handoff` was scanning the full message body, so any long assistant reply that *discussed* handoffs mid-text (e.g. a technical analysis quoting "Handing off to app-engineer: …") was misclassified as `kind == "handoff"`, producing a false "Now → conversation" agent-avatar card. Fix: only check the first non-empty line — real handoff declarations always lead the message. HTML briefs (`data-section="handoff"`) still match unconditionally. Regression test added. [no device verify needed — pure logic fix with unit test coverage]
