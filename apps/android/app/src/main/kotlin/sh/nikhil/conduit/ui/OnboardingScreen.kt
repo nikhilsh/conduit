@@ -34,6 +34,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -137,6 +140,11 @@ fun OnboardingScreen(
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             OnbTopBar(neon = neon, step = step, guide = guide,
+                // iOS shows the × only for Settings-launched replay/addMachine
+                // entries; first-run keeps a clear placeholder (the gate intends
+                // completion).
+                showClose = entry == FeatureFlags.OnboardingEntry.replay ||
+                    entry == FeatureFlags.OnboardingEntry.addMachine,
                 onBack = { if (step in 1..2) go(step - 1) },
                 onGuide = { appearance.setOnboardingGuide(it) },
                 onClose = {
@@ -172,7 +180,7 @@ private val onbGrad: @Composable (NeonTheme) -> Brush = { neon ->
 }
 
 @Composable
-private fun OnbTopBar(neon: NeonTheme, step: Int, guide: Boolean, onBack: () -> Unit, onGuide: (Boolean) -> Unit, onClose: () -> Unit) {
+private fun OnbTopBar(neon: NeonTheme, step: Int, guide: Boolean, showClose: Boolean, onBack: () -> Unit, onGuide: (Boolean) -> Unit, onClose: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -209,12 +217,18 @@ private fun OnbTopBar(neon: NeonTheme, step: Int, guide: Boolean, onBack: () -> 
             }
         }
         Spacer(Modifier.weight(1f))
-        Box(
-            modifier = Modifier.size(34.dp).clip(CircleShape)
-                .background(neon.surface).border(1.dp, neon.border, CircleShape)
-                .clickable(onClick = onClose),
-            contentAlignment = Alignment.Center,
-        ) { Text("×", color = neon.textDim, fontFamily = neon.mono, fontSize = 18.sp) }
+        // Close (×) only for Settings-launched entries (replay / addMachine),
+        // matching iOS — first-run keeps a clear 34dp placeholder for symmetry.
+        if (showClose && step < FeatureFlags.Step.DONE) {
+            Box(
+                modifier = Modifier.size(34.dp).clip(CircleShape)
+                    .background(neon.surface).border(1.dp, neon.border, CircleShape)
+                    .clickable(onClick = onClose),
+                contentAlignment = Alignment.Center,
+            ) { Text("×", color = neon.textDim, fontFamily = neon.mono, fontSize = 18.sp) }
+        } else {
+            Spacer(Modifier.size(34.dp))
+        }
     }
 }
 
@@ -249,11 +263,22 @@ private fun OnbWelcome(neon: NeonTheme, onPair: () -> Unit, onCode: () -> Unit, 
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        ConduitMark(size = 62.dp)
+        // Mirrors iOS: the mark sits in a 96dp rounded-square tile with a faint
+        // fill + border, not a bare icon.
+        Box(
+            modifier = Modifier.size(96.dp).clip(RoundedCornerShape(26.dp))
+                .background(Color.White.copy(alpha = 0.03f))
+                .border(1.5.dp, neon.border, RoundedCornerShape(26.dp)),
+            contentAlignment = Alignment.Center,
+        ) { ConduitMark(size = 62.dp) }
         Spacer(Modifier.height(20.dp))
+        // Two-tone wordmark: `>` in codex, `conduit` in text (matches iOS).
         Text(
-            ">conduit",
-            fontFamily = neon.mono, fontWeight = FontWeight.ExtraBold, fontSize = 30.sp, color = neon.text,
+            buildAnnotatedString {
+                withStyle(SpanStyle(color = neon.codex)) { append(">") }
+                withStyle(SpanStyle(color = neon.text)) { append("conduit") }
+            },
+            fontFamily = neon.mono, fontWeight = FontWeight.ExtraBold, fontSize = 30.sp,
         )
         Spacer(Modifier.height(10.dp))
         Text("Your agents, in your pocket.", fontFamily = neon.sans, fontSize = 20.sp, color = neon.textDim)
@@ -265,9 +290,13 @@ private fun OnbWelcome(neon: NeonTheme, onPair: () -> Unit, onCode: () -> Unit, 
         Spacer(Modifier.height(28.dp))
         OnbPrimary(neon, "Pair a machine", onPair)
         Spacer(Modifier.height(11.dp))
+        // Two-tone: the question in textFaint, the CTA in codex (matches iOS).
         Text(
-            "Already running a broker?  Enter a code ->",
-            fontFamily = neon.mono, fontSize = 13.sp, color = neon.codex,
+            buildAnnotatedString {
+                withStyle(SpanStyle(color = neon.textFaint)) { append("Already running a broker?  ") }
+                withStyle(SpanStyle(color = neon.codex)) { append("Enter a code ->") }
+            },
+            fontFamily = neon.mono, fontSize = 13.sp,
             modifier = Modifier.clickable(onClick = onCode).padding(6.dp),
         )
         // Demo mode CTA for App Store reviewers who have no VPS.
@@ -381,7 +410,11 @@ private fun OnbPrimary(neon: NeonTheme, label: String, onClick: () -> Unit) {
             .background(onbGrad(neon)).clickable(onClick = onClick).padding(vertical = 15.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 15.5.sp, color = neon.accentText)
+        // Mirrors iOS primaryCTA: label + trailing chevron (chevron.right).
+        Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 15.5.sp, color = neon.accentText)
+            Text("›", fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 15.5.sp, color = neon.accentText)
+        }
     }
 }
 
