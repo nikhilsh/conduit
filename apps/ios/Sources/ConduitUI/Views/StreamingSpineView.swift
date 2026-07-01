@@ -33,15 +33,17 @@ extension ConduitUI {
         // MARK: Breathe animation (mark head glow, 2.1s half-cycle)
         @State private var glowPhase: Bool = false
 
-        // MARK: Rail flow animation (gradient offset, 1.4s)
-        @State private var flowOffset: CGFloat = 0
-
         // MARK: Caret blink (1.0s step)
         @State private var caretVisible: Bool = true
 
-        // Async loop tasks (rail flow animation is driven by .task(id:h) inside railLine)
+        // Async loop tasks
         @State private var breatheTask: Task<Void, Never>? = nil
         @State private var caretTask: Task<Void, Never>? = nil
+
+        // Rail flow: fixed-tile offset animates -railTile -> 0, started once on appear.
+        private let railTile: CGFloat = 46
+        private let railTileCount: Int = 24
+        @State private var railOffset: CGFloat = 0
 
         var body: some View {
             HStack(alignment: .top, spacing: 13) {
@@ -67,13 +69,11 @@ extension ConduitUI {
                 guard !reduceMotion else {
                     // Calm end-state: static, no glow, no caret blink, full prose.
                     glowPhase = false
-                    flowOffset = 0
+                    railOffset = 0
                     caretVisible = true
                     return
                 }
                 startBreathe()
-                // Rail flow is driven inside railLine's GeometryReader (.task(id:h))
-                // so it uses the real view height.
                 startCaret()
             }
             .onAppear {
@@ -106,74 +106,65 @@ extension ConduitUI {
         // MARK: Rail line
 
         // The rail is a 2px wide view that fills remaining height.
-        // While streaming: flowing gradient (200% height, scrolls downward, 1.4s loop).
-        // Under reduceMotion: static gradient at opacity 0.5 (calm end-state).
+        // While streaming: fixed-tile gradient stack flows downward at a stable 1.4s period.
+        //   - railTileCount tiles (each railTile pt) are stacked; total height ~1100pt covers
+        //     any realistic rail. railOffset animates -railTile -> 0 once, started in .onAppear.
+        //   - Because every tile is identical the wrap is seamless. Height changes during
+        //     streaming cannot restart the animation (no h dependency).
+        // Under reduceMotion: static accent->green at opacity 0.5 (calm end-state).
         private var railLine: some View {
-            GeometryReader { geo in
-                let h = max(geo.size.height, 30)
-                ZStack(alignment: .topLeading) {
-                    if reduceMotion {
-                        // Calm end-state: static accent->green at opacity 0.5.
-                        LinearGradient(
-                            colors: [neon.accentBright, neon.green],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .frame(width: 2, height: h)
-                        .opacity(0.5)
-                    } else {
-                        // Flowing downward: two identical accent->green cycles stacked (total 2h).
-                        // flowOffset animates -h -> 0 so the pattern moves DOWN, wrapping seamlessly.
-                        // The animation is started inside the GeometryReader via .task(id:h) so we
-                        // have the actual height when we set the target value.
-                        VStack(spacing: 0) {
+            Group {
+                if reduceMotion {
+                    // Calm end-state: static accent->green at opacity 0.5.
+                    LinearGradient(
+                        colors: [neon.accentBright, neon.green],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(width: 2)
+                    .opacity(0.5)
+                } else {
+                    // Fixed-tile stack: railTileCount identical accent->green tiles.
+                    // railOffset animates -railTile -> 0, started once on appear.
+                    // Clipped to available height so only the rail region is visible.
+                    VStack(spacing: 0) {
+                        ForEach(0..<railTileCount, id: \.self) { _ in
                             LinearGradient(
                                 colors: [neon.accentBright, neon.green],
                                 startPoint: .top,
                                 endPoint: .bottom
                             )
-                            .frame(width: 2, height: h)
-                            LinearGradient(
-                                colors: [neon.accentBright, neon.green],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .frame(width: 2, height: h)
+                            .frame(width: 2, height: railTile)
                         }
-                        .frame(width: 2, height: h * 2, alignment: .top)
-                        .offset(y: flowOffset)
-                        .opacity(0.95)
-                        .task(id: h) {
-                            // Restart the flow animation with the real measured height.
-                            // The .task(id:h) lifecycle automatically cancels this block when
-                            // h changes or the view disappears. Set initial offset then launch
-                            // the SwiftUI animation (which is separate from this task and
-                            // will be driven by the SwiftUI render loop).
-                            guard !reduceMotion else { return }
-                            // Start at -h (first cycle on screen), animate to 0 (second
-                            // identical cycle on screen): seamless downward-flowing gradient.
-                            flowOffset = -h
-                            withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
-                                flowOffset = 0
-                            }
+                    }
+                    .frame(width: 2, height: railTile * CGFloat(railTileCount), alignment: .top)
+                    .offset(y: railOffset)
+                    .opacity(0.95)
+                    .onAppear {
+                        guard !reduceMotion else { return }
+                        // Start just above the top tile, animate down by one tile.
+                        // Because tiles repeat, the gradient is seamless at the wrap point.
+                        railOffset = -railTile
+                        withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                            railOffset = 0
                         }
                     }
                 }
-                .frame(width: 2, height: h)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
             }
             .frame(width: 2)
             .frame(maxHeight: .infinity, alignment: .top)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
         }
 
         // MARK: Prose block with caret
 
-        // The block glyph used as the inline caret. A zero-width space is used
-        // when the caret is invisible so the line height stays stable.
-        private var caretGlyph: String {
-            if reduceMotion { return "" }
-            return caretVisible ? "\u{258C}" : " "
+        // caretSuffix: always present in the layout while streaming (no width jiggle).
+        // Blinks by toggling color accent <-> .clear, NOT by swapping glyph/space.
+        // \u{2009} = THIN SPACE (gap after last char); \u{258C} = LEFT HALF BLOCK (caret).
+        // Under reduceMotion: empty string so no caret is rendered at all.
+        private var caretSuffix: String {
+            reduceMotion ? "" : "\u{2009}\u{258C}"
         }
 
         private var proseBlock: some View {
@@ -184,12 +175,12 @@ extension ConduitUI {
                         .font(neon.sans(15.5))
                         .foregroundStyle(neon.text)
                 } else {
-                    // Inline caret: appended directly to the text run so it trails
-                    // the last glyph and wraps naturally with the text.
-                    // Under reduceMotion: caretGlyph is empty string, no caret rendered.
+                    // Inline caret: thin-space + block glyph always present while streaming.
+                    // Blinks via color toggle (accentBright <-> .clear) so text width is stable.
+                    // Under reduceMotion: caretSuffix is empty, no caret rendered.
                     (
                         Text(content).foregroundStyle(neon.text)
-                        + Text(caretGlyph).foregroundStyle(neon.accentBright)
+                        + Text(caretSuffix).foregroundStyle(caretVisible ? neon.accentBright : .clear)
                     )
                     .font(neon.sans(15.5))
                     .lineSpacing(15.5 * (1.62 - 1.0))
