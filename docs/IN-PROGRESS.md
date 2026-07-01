@@ -9,7 +9,7 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
 
 ## Active
 
-*(none — all in-flight PRs merged)*
+- **Streaming inline markdown + mark-head glow** — iOS/Android: render bold/italic/code live during streaming (not just after settle); iOS mark-head brand glow enabled. Branch: `fix/streaming-inline-markdown`.
 
 ## Deferred (not active)
 
