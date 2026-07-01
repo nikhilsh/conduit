@@ -923,4 +923,120 @@ struct SessionStoreAITitleTests {
         store.ingestSessionTitle(id, payload: ["title": id])
         #expect(store.displayName(for: s) == "first ask")
     }
+
+    // MARK: - resolvePendingInput ts backfill (answered chip ordering fix)
+
+    /// `resolvePendingInput` must backfill an empty `ts` on the pending_input
+    /// card so it sorts before later assistant messages rather than floating
+    /// to the bottom of the transcript.
+    @Test func resolvePendingInputBackfillsEmptyTs() {
+        let store = SessionStore()
+        let sessionID = "test-backfill-ts-\(UUID().uuidString)"
+
+        // Seed a pending_input with an empty ts (live card, not yet persisted).
+        let pendingItem = ConversationItem(
+            id: "pi-backfill", role: "assistant", kind: "pending_input",
+            status: "pending", content: "Proceed?",
+            ts: "", files: [],
+            toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+            diffSummary: nil, pendingOptions: ["Yes", "No"],
+            sourceAgent: nil, targetAgent: nil, taskText: nil,
+            resultSummary: nil, planSteps: []
+        )
+        // A prior assistant message with a real ts so anchorEpoch has something to latch to.
+        let prior = ConversationItem(
+            id: "srv-prior", role: "assistant", kind: "message",
+            status: "done", content: "Starting task...",
+            ts: "2026-06-01T10:00:00.000Z", files: [],
+            toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+            diffSummary: nil, pendingOptions: [],
+            sourceAgent: nil, targetAgent: nil, taskText: nil,
+            resultSummary: nil, planSteps: []
+        )
+        store.conversationLog[sessionID] = [prior, pendingItem]
+
+        store.resolvePendingInput(sessionID: sessionID)
+
+        let resolved = store.conversationLog[sessionID] ?? []
+        let resolvedCard = resolved.first(where: { $0.id == "pi-backfill" })
+        #expect(resolvedCard != nil)
+        // ts must now be non-empty and parseable (not greatestFiniteMagnitude).
+        let epoch = conduitConversationTsEpoch(resolvedCard?.ts ?? "")
+        #expect(epoch < .greatestFiniteMagnitude, "backfilled ts must be parseable")
+        #expect(resolvedCard?.ts.isEmpty == false, "backfilled ts must not be empty")
+    }
+
+    /// An already-populated `ts` on a pending_input card must NOT be
+    /// overwritten by `resolvePendingInput` — only empty/unparseable stamps
+    /// are backfilled.
+    @Test func resolvePendingInputDoesNotOverwriteRealTs() {
+        let store = SessionStore()
+        let sessionID = "test-no-overwrite-\(UUID().uuidString)"
+        let realTs = "2026-06-01T09:00:00.000Z"
+        let pendingItem = ConversationItem(
+            id: "pi-real-ts", role: "assistant", kind: "pending_input",
+            status: "pending", content: "Proceed?",
+            ts: realTs, files: [],
+            toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+            diffSummary: nil, pendingOptions: ["Yes", "No"],
+            sourceAgent: nil, targetAgent: nil, taskText: nil,
+            resultSummary: nil, planSteps: []
+        )
+        store.conversationLog[sessionID] = [pendingItem]
+
+        store.resolvePendingInput(sessionID: sessionID)
+
+        let resolved = store.conversationLog[sessionID] ?? []
+        let resolvedCard = resolved.first(where: { $0.id == "pi-real-ts" })
+        #expect(resolvedCard?.ts == realTs, "real broker ts must not be overwritten")
+    }
+
+    /// After `resolvePendingInput`, the answered chip (with backfilled ts)
+    /// must sort BEFORE a later assistant message when the list is sorted by
+    /// `sortedByConversationTs`. This is the invariant the bug violated.
+    @Test func answeredChipSortsBeforeLaterAssistantMessage() {
+        let store = SessionStore()
+        let sessionID = "test-sort-order-\(UUID().uuidString)"
+
+        let pendingItem = ConversationItem(
+            id: "pi-sort", role: "assistant", kind: "pending_input",
+            status: "pending", content: "Approve?",
+            ts: "", files: [],
+            toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+            diffSummary: nil, pendingOptions: ["Yes"],
+            sourceAgent: nil, targetAgent: nil, taskText: nil,
+            resultSummary: nil, planSteps: []
+        )
+        let prior = ConversationItem(
+            id: "srv-prior", role: "assistant", kind: "message",
+            status: "done", content: "Working...",
+            ts: "2026-06-01T10:00:00.000Z", files: [],
+            toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+            diffSummary: nil, pendingOptions: [],
+            sourceAgent: nil, targetAgent: nil, taskText: nil,
+            resultSummary: nil, planSteps: []
+        )
+        store.conversationLog[sessionID] = [prior, pendingItem]
+
+        // Resolve (backfills the empty ts).
+        store.resolvePendingInput(sessionID: sessionID)
+
+        // A later assistant reply arrives after the answer.
+        let laterReply = ConversationItem(
+            id: "srv-later", role: "assistant", kind: "message",
+            status: "done", content: "Done!",
+            ts: "2026-06-01T10:00:02.000Z", files: [],
+            toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+            diffSummary: nil, pendingOptions: [],
+            sourceAgent: nil, targetAgent: nil, taskText: nil,
+            resultSummary: nil, planSteps: []
+        )
+        let all = (store.conversationLog[sessionID] ?? []) + [laterReply]
+        let sorted = all.sortedByConversationTs { $0.ts }
+
+        let ids = sorted.map(\.id)
+        let chipIdx = ids.firstIndex(of: "pi-sort") ?? Int.max
+        let laterIdx = ids.firstIndex(of: "srv-later") ?? Int.max
+        #expect(chipIdx < laterIdx, "answered chip must sort before the later assistant reply")
+    }
 }

@@ -3823,18 +3823,60 @@ final class SessionStore {
         return true
     }
 
+    /// Compute an anchor epoch one tick past the newest known item in the
+    /// conversation log for `sessionID`. Used by both `resolvePendingInput`
+    /// (to backfill the answered card's `ts`) and `answerPendingInput` (to
+    /// stamp the optimistic user echo). Mirrors the Android helper
+    /// `anchorEpochMillis`.
+    ///
+    /// Resolution order:
+    ///   1. max parseable epoch across conversationLog + chatLog + 0.001 s
+    ///   2. session startedAt epoch + 0.001 s
+    ///   3. Date().timeIntervalSince1970 (last resort)
+    private func anchorEpoch(sessionID: String) -> Double {
+        let lastKnownEpoch = ((conversationLog[sessionID] ?? []).map { $0.ts }
+            + (chatLog[sessionID] ?? []).map { $0.ts })
+            .map { conduitConversationTsEpoch($0) }
+            .filter { $0 < .greatestFiniteMagnitude }
+            .max()
+        let startedEpoch = (statusBySession[sessionID]?.startedAt)
+            .map { conduitConversationTsEpoch($0) }
+            .flatMap { $0 < .greatestFiniteMagnitude ? $0 : nil }
+        return lastKnownEpoch.map { $0 + 0.001 }
+            ?? startedEpoch.map { $0 + 0.001 }
+            ?? Date().timeIntervalSince1970
+    }
+
     /// Optimistically mark the last unanswered `pending_input` item for a
     /// session as resolved so the inline chat card flips to "ANSWERED" immediately
     /// on decision success, without waiting for the broker's WS echo. Called from
     /// every out-of-band decision path (ConduitApprovalsView, lock-screen intent).
     /// Idempotent; no-op when no unresolved pending item exists.
+    ///
+    /// Also backfills the card's `ts` if it is currently empty or unparseable
+    /// (i.e. `conduitConversationTsEpoch` returns `.greatestFiniteMagnitude`).
+    /// Without the backfill the chip stays pinned to the bottom of the
+    /// transcript even after later assistant turns arrive — because the sort
+    /// treats an empty `ts` as "newest". Stamping it one tick past the max
+    /// known epoch anchors it in chronological order.
     func resolvePendingInput(sessionID: String) {
-        let items = conversationLog[sessionID] ?? []
-        guard let item = items.last(where: {
-            $0.kind.lowercased() == "pending_input"
-                && !resolvedPendingInputIDs.contains($0.id)
+        var items = conversationLog[sessionID] ?? []
+        guard let idx = items.indices.last(where: {
+            items[$0].kind.lowercased() == "pending_input"
+                && !resolvedPendingInputIDs.contains(items[$0].id)
         }) else { return }
+        let item = items[idx]
         resolvedPendingInputIDs.insert(item.id)
+        // Backfill ts if the card has no real broker timestamp so the chip
+        // sorts into its chronological position rather than floating to the
+        // bottom of the transcript.
+        if conduitConversationTsEpoch(item.ts) == .greatestFiniteMagnitude {
+            let stampedTs = conduitConversationTsString(epoch: anchorEpoch(sessionID: sessionID))
+            items[idx].ts = stampedTs
+            conversationLog[sessionID] = items
+            Telemetry.breadcrumb("approvals", "pending_input ts backfilled on resolve",
+                data: ["session": sessionID, "item_id": item.id, "ts": stampedTs])
+        }
         Telemetry.breadcrumb("approvals", "pending_input optimistically resolved",
             data: ["session": sessionID, "item_id": item.id])
     }
@@ -3857,17 +3899,7 @@ final class SessionStore {
         // Anchor the echo into the broker clock domain (same approach as
         // `sendChat`) so it sorts ahead of the agent's reply regardless of
         // device-vs-broker clock drift.
-        let lastKnownEpoch = ((conversationLog[sessionID] ?? []).map { $0.ts }
-            + (chatLog[sessionID] ?? []).map { $0.ts })
-            .map { conduitConversationTsEpoch($0) }
-            .filter { $0 < .greatestFiniteMagnitude }
-            .max()
-        let startedEpoch = (statusBySession[sessionID]?.startedAt)
-            .map { conduitConversationTsEpoch($0) }
-            .flatMap { $0 < .greatestFiniteMagnitude ? $0 : nil }
-        let echoEpoch = lastKnownEpoch.map { $0 + 0.001 }
-            ?? startedEpoch.map { $0 + 0.001 }
-            ?? Date().timeIntervalSince1970
+        let echoEpoch = anchorEpoch(sessionID: sessionID)
         let now = conduitConversationTsString(epoch: echoEpoch)
         let localID = "local-\(UUID().uuidString)"
         quickReplies[sessionID] = nil

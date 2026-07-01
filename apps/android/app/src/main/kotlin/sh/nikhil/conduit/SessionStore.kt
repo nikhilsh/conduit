@@ -768,6 +768,38 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     /**
+     * Compute an anchor timestamp string one ms past the newest known item
+     * in the conversation/chat log for [sessionId]. Used by both
+     * [resolvePendingInput] (to backfill the answered card's `ts`) and
+     * [sendChat] (to stamp the optimistic user echo). Mirrors the iOS
+     * helper `anchorEpoch(sessionID:)`.
+     *
+     * Resolution order:
+     *   1. max parseable ms across conversationLog + chatLog + 1
+     *   2. session startedAt ms + 1
+     *   3. System.currentTimeMillis() (last resort)
+     */
+    private fun anchorEpochMillis(sessionId: String): Long {
+        val lastKnownMs = (
+            (_conversationLog.value[sessionId].orEmpty().map { it.ts }) +
+                (_chatLog.value[sessionId].orEmpty().map { it.ts })
+            ).map { tsEpochMillis(it) }.filter { it > 0L }.maxOrNull()
+        val startedMs = _statusBySession.value[sessionId]?.startedAt
+            ?.let { tsEpochMillis(it) }?.takeIf { it > 0L }
+        return when {
+            lastKnownMs != null -> lastKnownMs + 1
+            startedMs != null -> startedMs + 1
+            else -> System.currentTimeMillis()
+        }
+    }
+
+    /** Format an epoch-millis value as an RFC3339 / ISO-8601 timestamp string. */
+    private fun epochMillisToTs(ms: Long): String =
+        java.time.Instant.ofEpochMilli(ms)
+            .atOffset(java.time.ZoneOffset.UTC)
+            .format(java.time.format.DateTimeFormatter.ISO_INSTANT)
+
+    /**
      * Optimistically mark the last unanswered `pending_input` item for
      * [sessionId] as resolved so the inline chat card flips to answered
      * immediately on decision success — without waiting for the broker's
@@ -775,6 +807,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * out-of-band decision path (ApprovalsScreen, notification action).
      * Idempotent; no-op when no unresolved pending item exists. Mirror of
      * iOS `SessionStore.resolvePendingInput(sessionID:)`.
+     *
+     * Also backfills the card's `ts` if it is currently empty or
+     * unparseable (tsEpochMillis <= 0). Without the backfill the chip
+     * stays pinned to the bottom of the transcript after later assistant
+     * turns arrive — the sort treats an empty `ts` as Long.MAX_VALUE
+     * (newest). Stamping it one ms past the max known epoch anchors it
+     * in chronological order.
      */
     fun resolvePendingInput(sessionId: String) {
         val items = _conversationLog.value[sessionId] ?: return
@@ -783,6 +822,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
             it.kind.lowercase() == "pending_input" && it.id !in resolved
         } ?: return
         _resolvedPendingInputIDs.value = resolved + item.id
+        // Backfill ts if the card has no real broker timestamp so the chip
+        // sorts into its chronological position rather than floating to the
+        // bottom of the transcript.
+        if (tsEpochMillis(item.ts) <= 0L) {
+            val stampedTs = epochMillisToTs(anchorEpochMillis(sessionId))
+            item.ts = stampedTs
+            _conversationLog.value = _conversationLog.value.toMutableMap().also { m ->
+                m[sessionId] = items
+            }
+            Telemetry.breadcrumb(
+                "approvals", "pending_input ts backfilled on resolve",
+                mapOf("session" to sessionId, "item_id" to item.id, "ts" to stampedTs),
+            )
+        }
         Telemetry.breadcrumb(
             "approvals", "pending_input optimistically resolved",
             mapOf("session" to sessionId, "item_id" to item.id),
@@ -3632,6 +3685,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     /**
+     * Test seam: seed [_conversationLog] for [sessionId] directly so unit
+     * tests can exercise transcript logic ([resolvePendingInput] ts-backfill,
+     * ordering) without a live broker/WS. Mirrors iOS, where `conversationLog`
+     * is a settable property the tests assign directly.
+     */
+    internal fun seedConversationLogForTest(sessionId: String, items: List<ConversationItem>) {
+        _conversationLog.value = _conversationLog.value + (sessionId to items)
+    }
+
+    /**
      * Latest-first archived rows for History, tombstoned ids excluded.
      * Mirror of iOS `SavedSessionsStore.recent`.
      */
@@ -3745,21 +3808,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // case -- a one-shot reply with a tiny user->reply gap, where the old
         // device-now() fallback flipped the order. Device now() is the last
         // resort (status not yet received). See [sortedByConversationTs].
-        val nowMs = System.currentTimeMillis()
-        val lastKnownMs = (
-            (_conversationLog.value[sessionId].orEmpty().map { it.ts }) +
-                (_chatLog.value[sessionId].orEmpty().map { it.ts })
-            ).map { tsEpochMillis(it) }.filter { it > 0L }.maxOrNull()
-        val startedMs = _statusBySession.value[sessionId]?.startedAt
-            ?.let { tsEpochMillis(it) }?.takeIf { it > 0L }
-        val echoMs = when {
-            lastKnownMs != null -> lastKnownMs + 1
-            startedMs != null -> startedMs + 1
-            else -> nowMs
-        }
-        val ts = java.time.Instant.ofEpochMilli(echoMs)
-            .atOffset(java.time.ZoneOffset.UTC)
-            .format(java.time.format.DateTimeFormatter.ISO_INSTANT)
+        val ts = epochMillisToTs(anchorEpochMillis(sessionId))
         val localId = "local-${java.util.UUID.randomUUID()}"
         // "Queued Next" gate (spec PR #481): if a turn is currently active,
         // queue the message in the "Queued Next" panel instead of delivering
