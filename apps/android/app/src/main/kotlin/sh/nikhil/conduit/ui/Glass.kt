@@ -42,9 +42,10 @@ fun Modifier.glassRect(
 @Composable
 fun Modifier.glassRoundedRect(
     cornerRadiusDp: Float = ConduitTheme.cardCornerRadiusDp,
+    tint: Color? = null,
 ): Modifier = neonChromeSurface(
     shape = RoundedCornerShape(cornerRadiusDp.dp),
-    tint = null,
+    tint = tint,
 )
 
 @Composable
