@@ -90,6 +90,8 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.RectangleShape
@@ -2558,7 +2560,16 @@ private fun TypingIndicatorRow(
     turnPhase: String? = null,
 ) {
     val neon = LocalNeonTheme.current
-    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "typing")
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val reduceMotion = remember {
+        android.provider.Settings.Global.getFloat(
+            context.contentResolver,
+            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f,
+        ) == 0f
+    }
+    // Shared infinite transition for three-dot writing state.
+    val writingTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "typing")
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -2576,28 +2587,54 @@ private fun TypingIndicatorRow(
             else -> "$assistant is typing..."
         }
         if (turnPhase == "working" || turnPhase == "thinking") {
-            // Single pulsing dot for working/thinking states
-            val dotAlpha by transition.animateFloat(
-                initialValue = 0.3f,
-                targetValue = 1f,
-                animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-                    animation = androidx.compose.animation.core.tween(durationMillis = 600),
-                    repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
-                ),
-                label = "pulseDot",
-            )
+            // Single pulsing dot: smooth 800ms ease-in-out on both scale and alpha.
+            // Under reduceMotion: static dot, no animation.
             val dotColor = if (turnPhase == "thinking") neon.textDim else neon.accent2
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .graphicsLayer { alpha = dotAlpha }
-                    .background(dotColor, CircleShape),
-            )
+            if (reduceMotion) {
+                // Static dot — no animation under reduceMotion.
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .background(dotColor, CircleShape),
+                )
+            } else {
+                val pulseTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "singleDotPulse")
+                val dotScale by pulseTransition.animateFloat(
+                    initialValue = 0.55f,
+                    targetValue = 1.0f,
+                    animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                        animation = androidx.compose.animation.core.tween(
+                            durationMillis = 800,
+                            easing = androidx.compose.animation.core.FastOutSlowInEasing,
+                        ),
+                        repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
+                    ),
+                    label = "singleDotScale",
+                )
+                val dotAlpha by pulseTransition.animateFloat(
+                    initialValue = 0.4f,
+                    targetValue = 1.0f,
+                    animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                        animation = androidx.compose.animation.core.tween(
+                            durationMillis = 800,
+                            easing = androidx.compose.animation.core.FastOutSlowInEasing,
+                        ),
+                        repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
+                    ),
+                    label = "singleDotAlpha",
+                )
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .graphicsLayer { scaleX = dotScale; scaleY = dotScale; alpha = dotAlpha }
+                        .background(dotColor, CircleShape),
+                )
+            }
         } else {
             // Three staggered bouncing dots for writing/default state
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 repeat(3) { i ->
-                    val dotAlpha by transition.animateFloat(
+                    val dotAlpha by writingTransition.animateFloat(
                         initialValue = 0.3f,
                         targetValue = 1f,
                         animationSpec = androidx.compose.animation.core.infiniteRepeatable(
@@ -2772,21 +2809,26 @@ private fun StreamingSpineRow(content: String) {
                     if (railEndY > railStartY) {
                         val railH = railEndY - railStartY
                         val railBrush = if (!reduceMotion && flowTransition != null) {
-                            // Flowing: codex->green->codex->green animated downward.
-                            val offset = flowOffset * railH
+                            // Flowing downward: a 5-stop symmetric gradient over 2*railH
+                            // (accent->green->accent->green->accent) is shifted UPWARD by
+                            // flowOffset*railH. From the fixed drawn-rect window, the pattern
+                            // appears to flow DOWNWARD, completing one seamless cycle per 1.4s.
+                            // At flowOffset=0 and flowOffset=1 the visible window is identical
+                            // (both show accent->green->accent), so the loop is gapless.
                             Brush.verticalGradient(
                                 colorStops = arrayOf(
-                                    0f to neon.accent,
-                                    0.33f to neon.green,
-                                    0.66f to neon.accent,
-                                    1f to neon.green,
+                                    0.00f to neon.accentBright,
+                                    0.25f to neon.green,
+                                    0.50f to neon.accentBright,
+                                    0.75f to neon.green,
+                                    1.00f to neon.accentBright,
                                 ),
-                                startY = railStartY - offset * 2f,
-                                endY = railStartY + railH + offset * 2f,
+                                startY = railStartY - flowOffset * railH,
+                                endY = railStartY + 2f * railH - flowOffset * railH,
                             )
                         } else {
                             Brush.verticalGradient(
-                                listOf(neon.accent, neon.green),
+                                listOf(neon.accentBright, neon.green),
                                 startY = railStartY,
                                 endY = railEndY,
                             )
@@ -2817,28 +2859,33 @@ private fun StreamingSpineRow(content: String) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             // Prose: neon.sans, 15.5sp, line-height 1.62, neon.text.
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    content.ifEmpty { "​" },
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontSize = 15.5.sp,
-                        lineHeight = (15.5f * 1.62f).sp,
-                    ),
-                    fontFamily = neon.sans,
-                    color = neon.text,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                // Blinking caret: 7x1em accent block.
-                if (!reduceMotion && caretVisible) {
-                    Spacer(Modifier.width(2.dp))
-                    Box(
-                        modifier = Modifier
-                            .width(7.dp)
-                            .height(15.5.sp.value.dp)
-                            .background(neon.accent, RoundedCornerShape(1.dp)),
-                    )
-                } // else: reduced-motion or caret hidden — no caret rendered
+            // Caret is appended INLINE as an AnnotatedString span so it trails the last
+            // character and wraps naturally with the text (not pinned to the right margin).
+            // Under reduceMotion or when content is empty: no caret glyph appended.
+            val hasContent = content.isNotEmpty()
+            val caretGlyph = when {
+                !hasContent || reduceMotion -> ""
+                caretVisible -> "▌" // LEFT HALF BLOCK — same glyph as iOS
+                else -> " "  // same-width space to keep line height stable
             }
+            val proseText = buildAnnotatedString {
+                append(if (hasContent) content else "​")
+                if (caretGlyph.isNotEmpty()) {
+                    pushStyle(SpanStyle(color = neon.accentBright))
+                    append(caretGlyph)
+                    pop()
+                }
+            }
+            Text(
+                proseText,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 15.5.sp,
+                    lineHeight = (15.5f * 1.62f).sp,
+                    color = neon.text,
+                ),
+                fontFamily = neon.sans,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

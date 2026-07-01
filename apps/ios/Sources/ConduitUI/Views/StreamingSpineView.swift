@@ -39,9 +39,8 @@ extension ConduitUI {
         // MARK: Caret blink (1.0s step)
         @State private var caretVisible: Bool = true
 
-        // Async loop tasks
+        // Async loop tasks (rail flow animation is driven by .task(id:h) inside railLine)
         @State private var breatheTask: Task<Void, Never>? = nil
-        @State private var flowTask: Task<Void, Never>? = nil
         @State private var caretTask: Task<Void, Never>? = nil
 
         var body: some View {
@@ -64,7 +63,6 @@ extension ConduitUI {
             .frame(maxWidth: .infinity, alignment: .leading)
             .task(id: reduceMotion) {
                 breatheTask?.cancel()
-                flowTask?.cancel()
                 caretTask?.cancel()
                 guard !reduceMotion else {
                     // Calm end-state: static, no glow, no caret blink, full prose.
@@ -74,7 +72,8 @@ extension ConduitUI {
                     return
                 }
                 startBreathe()
-                startFlow()
+                // Rail flow is driven inside railLine's GeometryReader (.task(id:h))
+                // so it uses the real view height.
                 startCaret()
             }
             .onAppear {
@@ -123,16 +122,41 @@ extension ConduitUI {
                         .frame(width: 2, height: h)
                         .opacity(0.5)
                     } else {
-                        // Flowing: 4-stop gradient at 2x height, shifted by flowOffset.
-                        // flowOffset is animated from 0 to -h via repeatForever in startFlow().
-                        LinearGradient(
-                            colors: [neon.accentBright, neon.green, neon.accentBright, neon.green],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .frame(width: 2, height: h * 2)
+                        // Flowing downward: two identical accent->green cycles stacked (total 2h).
+                        // flowOffset animates -h -> 0 so the pattern moves DOWN, wrapping seamlessly.
+                        // The animation is started inside the GeometryReader via .task(id:h) so we
+                        // have the actual height when we set the target value.
+                        VStack(spacing: 0) {
+                            LinearGradient(
+                                colors: [neon.accentBright, neon.green],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(width: 2, height: h)
+                            LinearGradient(
+                                colors: [neon.accentBright, neon.green],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(width: 2, height: h)
+                        }
+                        .frame(width: 2, height: h * 2, alignment: .top)
                         .offset(y: flowOffset)
                         .opacity(0.95)
+                        .task(id: h) {
+                            // Restart the flow animation with the real measured height.
+                            // The .task(id:h) lifecycle automatically cancels this block when
+                            // h changes or the view disappears. Set initial offset then launch
+                            // the SwiftUI animation (which is separate from this task and
+                            // will be driven by the SwiftUI render loop).
+                            guard !reduceMotion else { return }
+                            // Start at -h (first cycle on screen), animate to 0 (second
+                            // identical cycle on screen): seamless downward-flowing gradient.
+                            flowOffset = -h
+                            withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                                flowOffset = 0
+                            }
+                        }
                     }
                 }
                 .frame(width: 2, height: h)
@@ -145,6 +169,13 @@ extension ConduitUI {
 
         // MARK: Prose block with caret
 
+        // The block glyph used as the inline caret. A zero-width space is used
+        // when the caret is invisible so the line height stays stable.
+        private var caretGlyph: String {
+            if reduceMotion { return "" }
+            return caretVisible ? "\u{258C}" : " "
+        }
+
         private var proseBlock: some View {
             Group {
                 if content.isEmpty {
@@ -153,24 +184,17 @@ extension ConduitUI {
                         .font(neon.sans(15.5))
                         .foregroundStyle(neon.text)
                 } else {
-                    HStack(alignment: .bottom, spacing: 0) {
-                        Text(content)
-                            .font(neon.sans(15.5))
-                            .foregroundStyle(neon.text)
-                            .lineSpacing(15.5 * (1.62 - 1.0))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                        // Blinking caret: 7x1em accent block.
-                        // Under reduceMotion: no caret.
-                        if !reduceMotion {
-                            RoundedRectangle(cornerRadius: 1, style: .continuous)
-                                .fill(neon.accentBright)
-                                .frame(width: 7, height: 15.5)
-                                .opacity(caretVisible ? 0.9 : 0)
-                                .padding(.leading, 3)
-                                .shadow(color: neon.accentBright.opacity(0.5), radius: 4)
-                        }
-                    }
+                    // Inline caret: appended directly to the text run so it trails
+                    // the last glyph and wraps naturally with the text.
+                    // Under reduceMotion: caretGlyph is empty string, no caret rendered.
+                    (
+                        Text(content).foregroundStyle(neon.text)
+                        + Text(caretGlyph).foregroundStyle(neon.accentBright)
+                    )
+                    .font(neon.sans(15.5))
+                    .lineSpacing(15.5 * (1.62 - 1.0))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -186,24 +210,6 @@ extension ConduitUI {
                         glowPhase.toggle()
                     }
                     try? await Task.sleep(nanoseconds: 1_050_000_000)
-                }
-            }
-        }
-
-        private func startFlow() {
-            flowTask?.cancel()
-            flowTask = Task {
-                // 1.4s to travel one full height downward (the gradient is 2x tall).
-                // We animate flowOffset from 0 to -height, but since we don't have
-                // geometry here, we use a proxy: animate from 0 to -1000 and clamp in
-                // the view. The actual clipping handles the visual.
-                // Simpler: use a repeating linear animation on flowOffset.
-                withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
-                    flowOffset = -500
-                }
-                // Keep alive so cancellation works.
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
                 }
             }
         }
