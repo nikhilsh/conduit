@@ -40,9 +40,16 @@ extension ConduitUI {
         @State private var breatheTask: Task<Void, Never>? = nil
         @State private var caretTask: Task<Void, Never>? = nil
 
-        // Rail flow: fixed-tile offset animates -railTile -> 0, started once on appear.
+        // Rail flow: tile height unit for the flowing gradient stack.
+        // railOffset animates -railTile -> 0, started once in .task(id: reduceMotion).
         private let railTile: CGFloat = 46
-        private let railTileCount: Int = 24
+        // FIXED tile count (generous: 48 * 46 ≈ 2200pt covers any realistic
+        // message). Kept constant — NOT derived from the rail height — so the
+        // tile `ForEach` and the inner stack frame never change as the streamed
+        // message grows. Only the outer clip (`.frame(height: h)`) tracks height,
+        // which is cheap; deriving the count from `h` rebuilt the stack every
+        // token and stuttered the flow.
+        private let railTileCount: Int = 48
         @State private var railOffset: CGFloat = 0
 
         var body: some View {
@@ -72,6 +79,12 @@ extension ConduitUI {
                     railOffset = 0
                     caretVisible = true
                     return
+                }
+                // Start rail flow once, keyed on reduceMotion only (NOT on height),
+                // so height changes during streaming never restart the animation.
+                railOffset = -railTile
+                withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                    railOffset = 0
                 }
                 startBreathe()
                 startCaret()
@@ -105,56 +118,57 @@ extension ConduitUI {
 
         // MARK: Rail line
 
-        // The rail is a 2px wide view that fills remaining height.
-        // While streaming: fixed-tile gradient stack flows downward at a stable 1.4s period.
-        //   - railTileCount tiles (each railTile pt) are stacked; total height ~1100pt covers
-        //     any realistic rail. railOffset animates -railTile -> 0 once, started in .onAppear.
-        //   - Because every tile is identical the wrap is seamless. Height changes during
-        //     streaming cannot restart the animation (no h dependency).
-        // Under reduceMotion: static accent->green at opacity 0.5 (calm end-state).
+        // The rail is a 2px wide view that fills the full remaining height offered by the
+        // parent VStack (which is intrinsic-height-matched to the prose column).
+        //
+        // GeometryReader is used ONLY for sizing: it gives us `h` = the true rail height
+        // so the tile stack always covers the full column. Height changes during streaming
+        // re-clip the stack cheaply and do NOT restart the animation because railOffset is
+        // started ONCE in .task(id: reduceMotion) in body, not here.
+        //
+        // While streaming: tile count = ceil(h / railTile) + 2 (wrap margin). The stack
+        // sits at railOffset (animated -railTile -> 0, looping), seamlessly flowing down.
+        // Under reduceMotion: static accent->green gradient spanning h, opacity 0.5.
         private var railLine: some View {
-            Group {
-                if reduceMotion {
-                    // Calm end-state: static accent->green at opacity 0.5.
-                    LinearGradient(
-                        colors: [neon.accentBright, neon.green],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(width: 2)
-                    .opacity(0.5)
-                } else {
-                    // Fixed-tile stack: railTileCount identical accent->green tiles.
-                    // railOffset animates -railTile -> 0, started once on appear.
-                    // Clipped to available height so only the rail region is visible.
-                    VStack(spacing: 0) {
-                        ForEach(0..<railTileCount, id: \.self) { _ in
-                            LinearGradient(
-                                colors: [neon.accentBright, neon.green],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .frame(width: 2, height: railTile)
+            GeometryReader { geo in
+                let h = max(geo.size.height, railTile)
+                Group {
+                    if reduceMotion {
+                        // Calm end-state: static full-height accent->green at opacity 0.5.
+                        LinearGradient(
+                            colors: [neon.accentBright, neon.green],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(width: 2, height: h)
+                        .opacity(0.5)
+                    } else {
+                        // FIXED-size tile stack (railTileCount tiles) — constant across
+                        // streamed-message growth so it never rebuilds. It's taller than
+                        // any realistic rail; the outer `.frame(height: h)` + `.clipped()`
+                        // trims it to the actual height. Animation is driven by railOffset
+                        // (started once in body/.task), untouched by height changes.
+                        VStack(spacing: 0) {
+                            ForEach(0..<railTileCount, id: \.self) { _ in
+                                LinearGradient(
+                                    colors: [neon.accentBright, neon.green],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(width: 2, height: railTile)
+                            }
                         }
-                    }
-                    .frame(width: 2, height: railTile * CGFloat(railTileCount), alignment: .top)
-                    .offset(y: railOffset)
-                    .opacity(0.95)
-                    .onAppear {
-                        guard !reduceMotion else { return }
-                        // Start just above the top tile, animate down by one tile.
-                        // Because tiles repeat, the gradient is seamless at the wrap point.
-                        railOffset = -railTile
-                        withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
-                            railOffset = 0
-                        }
+                        .frame(width: 2, height: railTile * CGFloat(railTileCount), alignment: .top)
+                        .offset(y: railOffset)
+                        .opacity(0.95)
                     }
                 }
+                .frame(width: 2, height: h, alignment: .top)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
             }
             .frame(width: 2)
-            .frame(maxHeight: .infinity, alignment: .top)
-            .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
+            .frame(maxHeight: .infinity)
         }
 
         // MARK: Prose block with caret
