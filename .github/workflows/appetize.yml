@@ -203,5 +203,40 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # screenshots job appended once the @appetize/playwright SDK contract is
-  # verified — drives onboarding on both publicKeys and uploads PNG artifacts.
+  # Drives the freshly-uploaded builds on Appetize with @appetize/playwright and
+  # captures the onboarding screen for each platform as a PNG artifact — the one
+  # bit of on-device UI we can otherwise never see (mobile is CI-compile-only).
+  screenshots:
+    name: onboarding screenshots
+    runs-on: ubuntu-24.04
+    needs: [ios-upload, android-upload]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: tools/appetize-screenshots/package-lock.json
+      - name: Install deps
+        working-directory: tools/appetize-screenshots
+        run: npm ci --no-audit --no-fund
+      - name: Install Playwright Chromium
+        working-directory: tools/appetize-screenshots
+        run: npx playwright install --with-deps chromium
+      # publicKeys come from the upload jobs' outputs (whether they created new
+      # apps or updated the repo-var-pinned ones). Sessions are publicKey-only —
+      # no APPETIZE_TOKEN needed here.
+      - name: Capture onboarding screenshots
+        working-directory: tools/appetize-screenshots
+        env:
+          IOS_PUBLIC_KEY: ${{ needs.ios-upload.outputs.public-key }}
+          ANDROID_PUBLIC_KEY: ${{ needs.android-upload.outputs.public-key }}
+        run: npx playwright test
+      - name: Upload screenshots artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-screenshots
+          path: tools/appetize-screenshots/screenshots/*.png
+          if-no-files-found: warn
+          retention-days: 14
