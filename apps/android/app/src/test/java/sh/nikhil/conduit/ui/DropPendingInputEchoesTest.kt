@@ -26,9 +26,10 @@ class DropPendingInputEchoesTest {
         kind: String,
         content: String,
         pendingOptions: List<String> = emptyList(),
+        role: String = "assistant",
     ): ConversationItem = ConversationItem(
         id = "${kind}-${content.hashCode()}",
-        role = "assistant",
+        role = role,
         kind = kind,
         status = "done",
         content = content,
@@ -113,6 +114,22 @@ class DropPendingInputEchoesTest {
         val result = dropPendingInputEchoes(listOf(original))
         assertEquals(1, result.size)
         assertEquals(originalContent, result[0].content)
+    }
+
+    // --- Multi-question newline-joined echo is dropped -----------------------
+
+    @Test fun multiQuestionAnswerEchoIsDropped() {
+        // Two-question AskUserQuestion; the app joins answers with "\n".
+        val card = item(
+            "pending_input",
+            "$sentinel\nStartup behavior?\n1. Default-on for everyone\n2. Opt-in\n\n" +
+                "Parallelism?\n1. Both, in parallel\n2. Sequential",
+            pendingOptions = listOf("Default-on for everyone", "Opt-in", "Both, in parallel", "Sequential"),
+        )
+        val echo = item("message", "Default-on for everyone\nBoth, in parallel", role = "user")
+        val result = dropPendingInputEchoes(listOf(card, echo))
+        assertEquals("multi-question echo must be dropped", 1, result.size)
+        assertEquals("pending_input", result[0].kind)
     }
 
     // --- strippedKey is symmetric for original and resolved ------------------

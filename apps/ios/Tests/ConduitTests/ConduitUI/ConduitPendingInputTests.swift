@@ -7,10 +7,10 @@ import Foundation
 @Suite("ConduitUI.PendingInput")
 struct ConduitPendingInputTests {
 
-    private func item(kind: String, content: String) -> ConversationItem {
+    private func item(kind: String, content: String, role: String = "assistant", pendingOptions: [String] = []) -> ConversationItem {
         ConversationItem(
             id: UUID().uuidString,
-            role: kind == "pending_input" ? "assistant" : "assistant",
+            role: role,
             kind: kind,
             status: "done",
             content: content,
@@ -21,7 +21,7 @@ struct ConduitPendingInputTests {
             exitCode: nil,
             durationMs: nil,
             diffSummary: nil,
-            pendingOptions: [],
+            pendingOptions: pendingOptions,
             sourceAgent: nil,
             targetAgent: nil,
             taskText: nil,
@@ -195,6 +195,20 @@ struct ConduitPendingInputTests {
                 + "Deploy?\n1. Yes\n2. No")
         let result = ConduitUI.ChatViewModel.dropPendingInputEchoes([q1, q2Resolved])
         #expect(result.count == 2)
+    }
+
+    /// Multi-question answers are newline-joined ("A\nB") — the echo drop must
+    /// suppress them even though no single option matches the whole string.
+    @Test func multiQuestionAnswerEchoIsDropped() {
+        let card = item(
+            kind: "pending_input",
+            content: "[[conduit:needs-input]]\nStartup behavior?\n1. Default-on for everyone\n2. Opt-in\n\nParallelism?\n1. Both, in parallel\n2. Sequential",
+            pendingOptions: ["Default-on for everyone", "Opt-in", "Both, in parallel", "Sequential"]
+        )
+        let echo = item(kind: "message", content: "Default-on for everyone\nBoth, in parallel", role: "user")
+        let result = ConduitUI.ChatViewModel.dropPendingInputEchoes([card, echo])
+        #expect(result.count == 1)
+        #expect(result[0].kind == "pending_input")
     }
 
     /// dropPendingInputEchoes uses the stripped key when matching plain echoes,

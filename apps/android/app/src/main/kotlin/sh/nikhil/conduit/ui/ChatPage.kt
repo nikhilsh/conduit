@@ -1457,8 +1457,12 @@ internal fun dropPendingInputEchoes(items: List<ConversationItem>): List<Convers
         val c = item.content.trim()
         // Exact option match: drop regardless of length floor (covers short
         // answers like "Yes", "No", "1" that appendUser writes to conversation.jsonl).
-        if (item.role.lowercase() == "user" && pendingOptionSet.isNotEmpty() &&
-            c in pendingOptionSet) return@filter false
+        // Also drop multi-question answers ("A\nB") where every non-empty line is
+        // an option — the submit() path joins per-question answers with "\n".
+        if (item.role.lowercase() == "user" && pendingOptionSet.isNotEmpty()) {
+            val parts = c.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+            if (parts.isNotEmpty() && parts.all { it in pendingOptionSet }) return@filter false
+        }
         if (c.length < 8) return@filter true
         pendingBodies.none { it == c || it.contains(c) }
     }
