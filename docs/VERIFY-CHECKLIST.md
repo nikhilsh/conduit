@@ -9,6 +9,17 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.210
+
+**Streaming assistant turn on the spine + typed-step tool ledger — iOS + Android. PRs #790, #791.**
+
+- **iOS (PR #790, merged)**: Replaces the legacy bare "ASSISTANT" label + full-bleed streaming text with Direction C — arm-B (the permanent default) now puts the in-progress turn on the conduit spine. While streaming: mark head breathes (accent↔green glow, 2.1s), rail gradient flows downward (1.4s), and a blinking caret trails the text. When tools run, the new typed-step `ToolLedger` renders live inside the spine (pencil+filename for edits, `$`+command for runs/reads, amber pulse dot for in-flight step, rowin fade-in per row). When tools finish it collapses to the one-line footnote (`N steps · ✓ passed`). No "ASSISTANT" label; text always indented past the rail. Two new NeonTheme tokens added: `ghost` (rgb 160,184,224 @ 0.24) and `lineSoft` (rgb 160,184,224 @ 0.12), with unit test pins. New file: `StreamingSpineView.swift`. [iOS, **needs on-device verify**: start a Claude task → watch streaming turn breathe on the spine; watch ledger rows tick in live then collapse; verify done state settles cleanly; test reduced-motion (all animations stop)]
+- **Android (PR #791, pending CI fix)**: Same Direction C redesign — spine-based streaming overlay, `ToolLedger` composable replacing old `NeonMonoCommandCluster` family, matching NeonTheme token additions and unit test pins. [Android, **needs on-device verify** once merged: same verification as iOS above]
+
+_Diff-chip follow-up: `ViewEventFile` in core carries only `path+rev` — no add/del line counts. Edit rows show pencil+filename; the `+N/−N` chip is omitted until core/broker adds line-delta fields._
+
+---
+
 ## v0.0.209
 
 **Credential source subtitle in box readiness checklist — iOS + Android + broker. PR #788.**
