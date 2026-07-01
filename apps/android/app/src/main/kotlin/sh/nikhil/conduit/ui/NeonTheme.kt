@@ -162,7 +162,7 @@ data class NeonTheme(
         get() = neonMonoFontFamily(chatFont)
 
     companion object {
-        const val RADIUS_DP: Float = 20f
+        const val RADIUS_DP: Float = 14f
 
         /** Tint a `0xRRGGBB`-style base ARGB to an 8-bit alpha byte
          *  (`0..255`). Mirrors the CSS `{color}AA` hex-alpha suffix used
