@@ -2010,6 +2010,13 @@ private struct ConduitUserBubble: View {
                 )
                 .opacity(inFlight ? 0.55 : 1)
                 .neonGlowBox(neon.glow && !inFlight ? neon.glowBox?.tinted(neon.accent) : nil)
+                .contextMenu {
+                    Button {
+                        UIPasteboard.general.string = parsed.text
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                }
             }
             ForEach(parsed.attachments, id: \.filename) { ref in
                 ConduitAttachmentChip(ref: ref)

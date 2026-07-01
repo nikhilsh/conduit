@@ -89,6 +89,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -2358,6 +2359,7 @@ private fun ConversationBubble(
             // (status → done). Reads `ev.status` so a flip rebuilds the row.
             val sendState = ev.status.lowercase()
             val inFlight = sendState == "pending" || sendState == "sent" || sendState == "retrying"
+            val clipboard = LocalClipboardManager.current
             // Right-aligned, content-sized pill. `neon.accent` fill +
             // `neon.accentText` foreground, pill radius — the §2 user
             // bubble. `fillMaxWidth(0.82f)` caps long turns; `wrapContentWidth`
@@ -2373,6 +2375,11 @@ private fun ConversationBubble(
                     // (in light mode `accent2` is a bright tint, e.g. Matrix lime,
                     // and `accentText` is white → white-on-lime was unreadable).
                     .background(neon.accent)
+                    .pointerInput(ev.content) {
+                        detectTapGestures(onLongPress = {
+                            clipboard.setText(AnnotatedString(ev.content))
+                        })
+                    }
                     .then(
                         if (inFlight) {
                             val dashColor = neon.accentText.copy(alpha = 0.7f)
