@@ -287,9 +287,9 @@ private fun OnbInstall(neon: NeonTheme, guide: Boolean, onNext: () -> Unit) {
     var platform by remember { mutableStateOf(0) }
     val clipboard = LocalClipboardManager.current
     val platforms = listOf(
-        Triple("macOS", "your laptop", "curl -fsSL https://conduit.sh | sh"),
-        Triple("Linux", "a dev box", "curl -fsSL https://conduit.sh | sh"),
-        Triple("Cloud VPS", "rented server", "ssh root@your-vps \"curl -fsSL https://conduit.sh | sh\""),
+        Triple("macOS", "your laptop", "curl -fsSL https://conduit.kaopeh.com/install.sh | sh"),
+        Triple("Linux", "a dev box", "curl -fsSL https://conduit.kaopeh.com/install.sh | sh"),
+        Triple("Cloud VPS", "rented server", "ssh root@your-vps \"curl -fsSL https://conduit.kaopeh.com/install.sh | sh\""),
     )
     val cmd = platforms[platform].third
     Column(
