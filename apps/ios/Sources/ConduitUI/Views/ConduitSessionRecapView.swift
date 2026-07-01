@@ -313,7 +313,7 @@ extension ConduitUI {
         private var actionRow: some View {
             HStack(spacing: 10) {
                 ShareLink(item: recap.markdown) {
-                    ConduitUI.Button(variant: .secondary, tint: neon.green, action: {}) {
+                    ConduitUI.ActionButton(variant: .secondary, tint: neon.green, action: {}) {
                         Label("Export markdown", systemImage: "square.and.arrow.up")
                     }
                 }
@@ -322,7 +322,7 @@ extension ConduitUI {
                 // shares the SAME markdown text rather than faking a URL.
                 // Labelled "Share text" to stay honest.
                 ShareLink(item: recap.markdown) {
-                    ConduitUI.Button(variant: .secondary, tint: neon.accent, action: {}) {
+                    ConduitUI.ActionButton(variant: .secondary, tint: neon.accent, action: {}) {
                         Label("Share text", systemImage: "link")
                     }
                 }

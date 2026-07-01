@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - ConduitUI.Button
+// MARK: - ConduitUI.ActionButton
 //
 // Full-width text action button in three semantic variants:
 //
@@ -10,23 +10,27 @@ import SwiftUI
 //                Mirrors the `actionPillBody` shape from ConduitSessionRecapView.
 //   .ghost     — stroke-only (strokeBorder at 35% opacity, no fill).
 //
+// Named ActionButton (not Button) to avoid shadowing SwiftUI.Button inside
+// `extension ConduitUI { }` scopes, which would break every bare Button(...)
+// call across all nested view files.
+//
 // The generic `Label` param lets callers compose an icon+text HStack
 // via the @ViewBuilder initializer, or use the convenience `init(_:variant:tint:action:)`
 // when a plain text label is enough.
 //
 // Usage (icon + text, secondary):
 //   ShareLink(item: markdown) {
-//       ConduitUI.Button(variant: .secondary, tint: neon.green) {
+//       ConduitUI.ActionButton(variant: .secondary, tint: neon.green, action: {}) {
 //           Label("Export markdown", systemImage: "square.and.arrow.up")
 //       }
 //   }
 //
 // Usage (text-only, primary):
-//   ConduitUI.Button("Start", variant: .primary) { startAction() }
+//   ConduitUI.ActionButton("Start", variant: .primary) { startAction() }
 
 extension ConduitUI {
 
-    struct Button<Label: View>: View {
+    struct ActionButton<Label: View>: View {
         enum Variant { case primary, secondary, ghost }
 
         let variant: Variant
@@ -80,7 +84,7 @@ extension ConduitUI {
 
 // MARK: - Text-only convenience initializer
 
-extension ConduitUI.Button where Label == Text {
+extension ConduitUI.ActionButton where Label == Text {
     init(
         _ title: String,
         variant: Variant,
