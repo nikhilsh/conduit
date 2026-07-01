@@ -20,6 +20,12 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+_(nothing yet)_
+
+---
+
+## v0.0.205
+
 **Shared component library — rule + iOS/Android primitives + Android screen migrations. PRs #792, #797, #795, #793, #794, #802, #800, #803, #804, #805, #807.**
 
 The design system ("SWE Kitty" project) is now enforced in-repo: a `CLAUDE.md`
