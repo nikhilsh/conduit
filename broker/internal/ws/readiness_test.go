@@ -180,7 +180,7 @@ func TestAgentSignInState(t *testing.T) {
 			}
 			a := fakeAdapter("test-agent", tc.provider, envPT...)
 
-			gotSignedIn, gotExpiry := agentSignInState(a, nil)
+			gotSignedIn, gotExpiry, _ := agentSignInState(a, nil)
 			if gotSignedIn != tc.wantSignedIn {
 				t.Errorf("signed_in = %v, want %v", gotSignedIn, tc.wantSignedIn)
 			}
@@ -223,24 +223,26 @@ func TestAgentSignInStatePushedCred(t *testing.T) {
 	a := fakeAdapter("claude", "anthropic")
 
 	// No store, no host file → signed_in=false.
-	if got, _ := agentSignInState(a, nil); got {
+	if got, _, _ := agentSignInState(a, nil); got {
 		t.Errorf("nil store + no host file: signed_in=true, want false")
 	}
 
-	// Store reports the pushed cred → signed_in=true, expiry nil
-	// (we don't decrypt the blob to surface expiry here).
+	// Store reports the pushed cred → signed_in=true, expiry nil, source "app".
 	store := stubCredStore{has: map[string]bool{"anthropic": true}}
-	signedIn, exp := agentSignInState(a, store)
+	signedIn, exp, src := agentSignInState(a, store)
 	if !signedIn {
 		t.Errorf("pushed cred present: signed_in=false, want true")
 	}
 	if exp != nil {
 		t.Errorf("pushed cred present: auth_expires_in_s=%v, want nil", *exp)
 	}
+	if src != "app" {
+		t.Errorf("pushed cred present: source=%q, want \"app\"", src)
+	}
 
 	// Store reports a DIFFERENT provider → no effect for anthropic.
 	other := stubCredStore{has: map[string]bool{"openai": true}}
-	if got, _ := agentSignInState(a, other); got {
+	if got, _, _ := agentSignInState(a, other); got {
 		t.Errorf("only openai pushed: anthropic signed_in=true, want false")
 	}
 }

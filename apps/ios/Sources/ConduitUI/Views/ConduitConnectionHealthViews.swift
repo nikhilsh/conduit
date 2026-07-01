@@ -155,9 +155,16 @@ extension ConduitUI {
         private func readinessRow(_ item: ReadinessCheckItem) -> some View {
             HStack(spacing: 10) {
                 statusIcon(item)
-                Text(item.label)
-                    .font(neon.sans(13).weight(.medium))
-                    .foregroundStyle(item.status == .ok ? neon.text : neon.textDim)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.label)
+                        .font(neon.sans(13).weight(.medium))
+                        .foregroundStyle(item.status == .ok ? neon.text : neon.textDim)
+                    if item.status == .ok, let source = item.credentialSource {
+                        Text(credentialSourceLabel(source))
+                            .font(neon.mono(10))
+                            .foregroundStyle(neon.textFaint)
+                    }
+                }
                 Spacer(minLength: 0)
                 actionLabel(item)
             }
@@ -169,6 +176,15 @@ extension ConduitUI {
                 cornerRadius: 12,
                 border: rowBorder(item)
             )
+        }
+
+        private func credentialSourceLabel(_ source: String) -> String {
+            switch source {
+            case "env": return "API key on box"
+            case "box": return "Signed in on box"
+            case "app": return "Via Conduit app"
+            default:    return source
+            }
         }
 
         @ViewBuilder

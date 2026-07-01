@@ -253,14 +253,30 @@ private fun ReadinessRow(
                 modifier = Modifier.size(18.dp),
             )
             Spacer(Modifier.width(10.dp))
-            Text(
-                item.label,
-                fontFamily = neon.sans,
-                fontWeight = FontWeight.Medium,
-                fontSize = 13.sp,
-                color = if (item.status == ReadinessStatus.Ok) neon.text else neon.textDim,
-                modifier = Modifier.weight(1f),
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    item.label,
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp,
+                    color = if (item.status == ReadinessStatus.Ok) neon.text else neon.textDim,
+                )
+                if (item.status == ReadinessStatus.Ok) {
+                    item.credentialSource?.let { source ->
+                        Text(
+                            when (source) {
+                                "env" -> "API key on box"
+                                "box" -> "Signed in on box"
+                                "app" -> "Via Conduit app"
+                                else  -> source
+                            },
+                            fontFamily = neon.mono,
+                            fontSize = 10.sp,
+                            color = neon.textFaint,
+                        )
+                    }
+                }
+            }
             // Action label. iOS shows a green checkmark for Ok rows.
             when (item.status) {
                 ReadinessStatus.Ok -> {
