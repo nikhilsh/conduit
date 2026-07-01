@@ -9,6 +9,15 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.206
+
+**Thinking vs typing indicator fix — broker + iOS + Android. PR #784.**
+
+- **Broker emits `thinking` at turn start** — `chatProcess.Send` now sets `turnPhase="thinking"` and publishes a `turn_phase:"thinking"` view_event immediately when the user sends a message, before the first token arrives. Fixes the indicator showing three bouncing dots ("typing") instead of the single pulsing dot ("thinking") during the pre-first-token wait on large contexts. [broker, **redeploy required**]
+- **iOS + Android mirror `turn_phase` from status frame** — `ingestStatus` now propagates `status.turnPhase` into `turnPhaseBySession` so reconnecting clients show the correct indicator immediately without waiting for a view_event replay. [iOS + Android, needs-device-verify: send a message, background the app mid-think, reopen — should show "thinking" dot not three dots]
+
+---
+
 ## v0.0.205
 
 **Command run block — collapse threshold + checkmark exit (iOS + Android). PR #779.**
