@@ -431,7 +431,18 @@ fn looks_like_pending_input(text: &str) -> bool {
 }
 
 fn looks_like_handoff(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
+    // HTML brief (HANDOFF-OUT.html) is a definitive signal — accept regardless
+    // of line position.
+    if text.contains(r#"data-section="handoff""#) {
+        return true;
+    }
+    // Free-text: only check the first non-empty line. A real handoff
+    // declaration leads the message ("Handing off to X: …"). Long messages
+    // that merely *discuss* handoffs mid-text (e.g. a technical analysis that
+    // quotes "Handing off to app-engineer: …" as an example) must not be
+    // misclassified — they produce false "Now → conversation" cards.
+    let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let lower = first.to_ascii_lowercase();
     (lower.contains("handing off") || lower.contains("handoff")) && lower.contains("to ")
 }
 
@@ -891,6 +902,19 @@ mod tests {
             0,
         );
         assert_eq!(item.kind, "handoff");
+    }
+
+    #[test]
+    fn handoff_not_triggered_by_mid_message_mention() {
+        // A long technical analysis that *discusses* handoffs mid-text must
+        // not be misclassified. The first line ("Now I see the gap.") doesn't
+        // contain "handing off" or "handoff", so this stays a message.
+        let content = "Now I see the gap. `ChatEvent` only has role/content/ts/files.\n\
+            The structured fields are derived from parsing.\n\
+            Option C: have the orchestrator write `Handing off to app-engineer: \
+            Read Conduit_Handoff/LANDING-IN-GITHUB.md` in a structured format.";
+        let item = item_from_chat_event(&ev("assistant", content), 0);
+        assert_eq!(item.kind, "message");
     }
 
     #[test]
