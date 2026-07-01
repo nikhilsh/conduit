@@ -9,6 +9,14 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.207
+
+**Restore --resume after broker restart when CONDUIT_SHARED_AGENT_CREDS is on. PR #785.**
+
+- **`chatConversationOnDisk` didn't check the shared config dir** — when `CONDUIT_SHARED_AGENT_CREDS` is on, Claude writes conversations to `CLAUDE_CONFIG_DIR=<conduitRoot>/agent-cred/.claude/` not the per-session `agent-home/.claude/`. Recovery was checking the (always-empty) per-session dir, clearing `resumeID`, and Claude spawned amnesiac — transcript rendered fine in UI but Claude had no memory. Fixed by also globbing the broker-owned config dir for the specific latched session id. [broker, **redeploy required**; verify: restart broker mid-session, send a new message — Claude should continue with context]
+
+---
+
 ## v0.0.206
 
 **Thinking vs typing indicator fix — broker + iOS + Android. PR #784.**
