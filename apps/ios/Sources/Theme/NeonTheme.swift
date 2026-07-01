@@ -177,6 +177,12 @@ struct NeonTheme {
     let codeBg: Color
     let codeText: Color
 
+    // Neutral palette tokens (design handoff streaming_turn)
+    /// Row numbers, disabled chevrons — rgba(160,184,224,0.24). Identical in dark + light.
+    let ghost: Color
+    /// Neutral border, ledger container, footnote outline — rgba(160,184,224,0.12). Identical in dark + light.
+    let lineSoft: Color
+
     // Shape
     let radius: CGFloat
 
@@ -355,6 +361,12 @@ struct NeonTheme {
         let sansAvailable = FontFamilyAvailability.isProseAvailable(pairing)
         let monoAvailable = FontFamilyAvailability.isMonoAvailable(pairing)
 
+        // Neutral palette tokens — identical in dark and light (design handoff streaming_turn).
+        // ghost    = rgba(160,184,224,0.24) — row numbers, disabled chevrons.
+        // lineSoft = rgba(160,184,224,0.12) — ledger border, footnote border, neutral dividers.
+        let ghost    = Color(red: 160 / 255, green: 184 / 255, blue: 224 / 255, opacity: 0.24)
+        let lineSoft = Color(red: 160 / 255, green: 184 / 255, blue: 224 / 255, opacity: 0.12)
+
         return NeonTheme(
             paletteId: palette.rawValue,
             mode: dark ? "dark" : "light",
@@ -385,6 +397,8 @@ struct NeonTheme {
             accentText: accentText,
             codeBg: codeBg,
             codeText: codeText,
+            ghost: ghost,
+            lineSoft: lineSoft,
             radius: radiusValue,
             appBg: appBg,
             glowColor: glowColor,

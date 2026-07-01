@@ -1,0 +1,662 @@
+import SwiftUI
+
+// MARK: - StreamingSpineView
+//
+// Direction C "Flowing conduit" streaming turn (design handoff streaming_turn/README.md).
+// Replaces the legacy ConduitStreamingOverlay with a spine-based render:
+//   - 24x24 mark head (radius 7, rgba(255,255,255,0.03) bg, 1px border)
+//     containing ConduitMark at 15px. While streaming: mark breathes (glow
+//     accent <-> green, ~2.1s). Done: no glow.
+//   - 2px rail (radius 2), starts 6px below mark. While streaming: flowing
+//     gradient (accent->green->accent->green sized 200% height, scrolling down,
+//     ~1.4s). Done: static accent->green at opacity 0.5.
+//   - Body column 13px to the right; vertical stack gap 12: live ToolLedger
+//     then prose. Prose streams with a blinking caret (7x1em accent block, 1s).
+//
+// All animations stop under accessibilityReduceMotion.
+//
+// Telemetry breadcrumbs mark streaming start/finish.
+
+extension ConduitUI {
+
+    // MARK: StreamingSpineView
+
+    /// The streaming-turn spine render (Direction C). Shown in place of
+    /// ConduitStreamingOverlay while an assistant turn is in progress.
+    struct StreamingSpineView: View {
+        /// The partial prose content streamed so far.
+        let content: String
+
+        @Environment(\.neonTheme) private var neon
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        // MARK: Breathe animation (mark head glow, 2.1s half-cycle)
+        @State private var glowPhase: Bool = false
+
+        // MARK: Rail flow animation (gradient offset, 1.4s)
+        @State private var flowOffset: CGFloat = 0
+
+        // MARK: Caret blink (1.0s step)
+        @State private var caretVisible: Bool = true
+
+        // Async loop tasks
+        @State private var breatheTask: Task<Void, Never>? = nil
+        @State private var flowTask: Task<Void, Never>? = nil
+        @State private var caretTask: Task<Void, Never>? = nil
+
+        var body: some View {
+            HStack(alignment: .top, spacing: 13) {
+                // MARK: Rail column (fixed 24pt)
+                VStack(spacing: 0) {
+                    markHead
+                    railLine
+                        .padding(.top, 6)
+                }
+                .frame(width: 24)
+
+                // MARK: Body column
+                VStack(alignment: .leading, spacing: 12) {
+                    proseBlock
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, 4)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .task(id: reduceMotion) {
+                breatheTask?.cancel()
+                flowTask?.cancel()
+                caretTask?.cancel()
+                guard !reduceMotion else {
+                    // Calm end-state: static, no glow, no caret blink, full prose.
+                    glowPhase = false
+                    flowOffset = 0
+                    caretVisible = true
+                    return
+                }
+                startBreathe()
+                startFlow()
+                startCaret()
+            }
+            .onAppear {
+                Telemetry.breadcrumb("streaming-spine", "streaming start", data: ["contentLen": "\(content.count)"])
+            }
+            .accessibilityLabel("Assistant is writing: \(content)")
+        }
+
+        // MARK: Mark head
+
+        private var markHead: some View {
+            ZStack {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color(red: 1, green: 1, blue: 1, opacity: 0.03))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(neon.border, lineWidth: 1)
+                    )
+                ConduitUI.ConduitMark(size: 15, glow: false)
+            }
+            .frame(width: 24, height: 24)
+            // Breathe: shadow pulses between accent and green while streaming.
+            // Under reduceMotion: no shadow (calm end-state).
+            .shadow(
+                color: reduceMotion ? .clear : (glowPhase ? neon.accentBright.opacity(0.55) : neon.green.opacity(0.45)),
+                radius: reduceMotion ? 0 : (glowPhase ? 8 : 5)
+            )
+        }
+
+        // MARK: Rail line
+
+        // The rail is a 2px wide view that fills remaining height.
+        // While streaming: flowing gradient (200% height, scrolls downward, 1.4s loop).
+        // Under reduceMotion: static gradient at opacity 0.5 (calm end-state).
+        private var railLine: some View {
+            GeometryReader { geo in
+                let h = max(geo.size.height, 30)
+                ZStack(alignment: .topLeading) {
+                    if reduceMotion {
+                        // Calm end-state: static accent->green at opacity 0.5.
+                        LinearGradient(
+                            colors: [neon.accentBright, neon.green],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(width: 2, height: h)
+                        .opacity(0.5)
+                    } else {
+                        // Flowing: 4-stop gradient at 2x height, shifted by flowOffset.
+                        // flowOffset is animated from 0 to -h via repeatForever in startFlow().
+                        LinearGradient(
+                            colors: [neon.accentBright, neon.green, neon.accentBright, neon.green],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(width: 2, height: h * 2)
+                        .offset(y: flowOffset)
+                        .opacity(0.95)
+                    }
+                }
+                .frame(width: 2, height: h)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
+            }
+            .frame(width: 2)
+            .frame(maxHeight: .infinity, alignment: .top)
+        }
+
+        // MARK: Prose block with caret
+
+        private var proseBlock: some View {
+            Group {
+                if content.isEmpty {
+                    // Pre-first-token: invisible placeholder keeps layout stable.
+                    Text("\u{200B}")
+                        .font(neon.sans(15.5))
+                        .foregroundStyle(neon.text)
+                } else {
+                    HStack(alignment: .bottom, spacing: 0) {
+                        Text(content)
+                            .font(neon.sans(15.5))
+                            .foregroundStyle(neon.text)
+                            .lineSpacing(15.5 * (1.62 - 1.0))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        // Blinking caret: 7x1em accent block.
+                        // Under reduceMotion: no caret.
+                        if !reduceMotion {
+                            RoundedRectangle(cornerRadius: 1, style: .continuous)
+                                .fill(neon.accentBright)
+                                .frame(width: 7, height: 15.5)
+                                .opacity(caretVisible ? 0.9 : 0)
+                                .padding(.leading, 3)
+                                .shadow(color: neon.accentBright.opacity(0.5), radius: 4)
+                        }
+                    }
+                }
+            }
+        }
+
+        // MARK: Animation loops
+
+        private func startBreathe() {
+            breatheTask?.cancel()
+            breatheTask = Task {
+                // 2.1s full cycle = 1.05s per half
+                while !Task.isCancelled {
+                    withAnimation(.easeInOut(duration: 1.05)) {
+                        glowPhase.toggle()
+                    }
+                    try? await Task.sleep(nanoseconds: 1_050_000_000)
+                }
+            }
+        }
+
+        private func startFlow() {
+            flowTask?.cancel()
+            flowTask = Task {
+                // 1.4s to travel one full height downward (the gradient is 2x tall).
+                // We animate flowOffset from 0 to -height, but since we don't have
+                // geometry here, we use a proxy: animate from 0 to -1000 and clamp in
+                // the view. The actual clipping handles the visual.
+                // Simpler: use a repeating linear animation on flowOffset.
+                withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                    flowOffset = -500
+                }
+                // Keep alive so cancellation works.
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                }
+            }
+        }
+
+        private func startCaret() {
+            caretTask?.cancel()
+            caretTask = Task {
+                // 1.0s step blink: visible 0.5s, hidden 0.5s.
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    guard !Task.isCancelled else { return }
+                    caretVisible.toggle()
+                }
+            }
+        }
+    }
+}
+
+// MARK: - ToolLedger
+//
+// Typed-step expandable ledger. Replaces the §10 mono block (MonoRunningTicker /
+// MonoInlineBlock / MonoCollapseBlock) and the old signatureBody for arm B.
+//
+// Three states driven by mode + anyRunning:
+//   live (anyRunning=true):  header with spinner + "N/total steps", rows tick in.
+//   done-expanded:           header with terminal + "total steps" + checkmark/failed,
+//                            chevron-up to collapse.
+//   collapsed-footnote:      one-line pill, tap to expand.
+//
+// Step classification:
+//   run/read (shell): $ + command mono, status dot.
+//   edit:             pencil + filename mono, diff chip (omitted — no data today).
+//   Consecutive identical navigational commands are coalesced to one row.
+
+/// One typed step entry in the ledger.
+struct LedgerStep: Equatable {
+    enum Kind: Equatable { case run, read, edit }
+    let kind: Kind
+    let id: String
+    /// For run/read: the command string. For edit: the filename (last path component).
+    let label: String
+    /// For edit: optional diff counts (nil today — ViewEventFile has no add/del counts).
+    let addCount: Int?
+    let delCount: Int?
+    let state: NeonCardState
+    let exitCode: Int32?
+
+    init(from item: ConversationItem) {
+        id = item.id
+        let role = NeonToolClassifier.tintRole(forToolName: item.toolName)
+        let s = NeonCardState(status: item.status, exitCode: item.exitCode)
+        state = s
+        exitCode = item.exitCode
+        // Classify edit vs read vs run.
+        if role == .claude {
+            kind = .edit
+            // Use first file path basename, or fall back to humanLabel.
+            if let f = item.files.first {
+                let url = f.path.split(separator: "/").last.map(String.init) ?? f.path
+                label = url.isEmpty ? "file" : url
+            } else {
+                label = NeonToolClassifier.humanLabel(toolName: item.toolName, fileCount: item.files.count)
+            }
+            // Diff counts are not available today (ViewEventFile has no add/del).
+            addCount = nil
+            delCount = nil
+        } else if role == .blue {
+            kind = .read
+            label = ConversationRenderer.extractCommand(from: item)
+                ?? NeonToolClassifier.humanLabel(toolName: item.toolName, fileCount: item.files.count)
+            addCount = nil
+            delCount = nil
+        } else {
+            kind = .run
+            label = ConversationRenderer.extractCommand(from: item)
+                ?? NeonToolClassifier.humanLabel(toolName: item.toolName, fileCount: item.files.count)
+            addCount = nil
+            delCount = nil
+        }
+    }
+}
+
+/// Coalesce consecutive items that are effectively duplicates (same kind + label, or
+/// repeated navigational cd commands).
+private func coalesceSteps(_ items: [ConversationItem]) -> [LedgerStep] {
+    var result: [LedgerStep] = []
+    for item in items {
+        let step = LedgerStep(from: item)
+        // Coalesce: drop if the last entry has the same kind + label (e.g. repeated cd).
+        if let last = result.last,
+           last.kind == step.kind,
+           last.label == step.label,
+           step.kind == .run {
+            // Replace with the newer state (so running > done).
+            if case .running = step.state {
+                result[result.count - 1] = step
+            }
+            continue
+        }
+        result.append(step)
+    }
+    return result
+}
+
+// MARK: ToolLedger
+
+/// The redesigned tool ledger. arm-B command-block render for live and done states.
+/// `isExpanded` is persisted by the parent (ConduitToolBundleCard) via @State.
+struct ToolLedger: View {
+    let items: [ConversationItem]
+    let anyRunning: Bool
+    let failCount: Int
+    @Binding var isExpanded: Bool
+
+    @Environment(\.neonTheme) private var neon
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var steps: [LedgerStep] { coalesceSteps(items) }
+    private var doneCount: Int { steps.filter { $0.state == .ok || $0.state == .fail }.count }
+    private var totalCount: Int { steps.count }
+
+    var body: some View {
+        if isExpanded || anyRunning {
+            expandedLedger
+        } else {
+            footnote
+        }
+    }
+
+    // MARK: Footnote (collapsed)
+
+    private var footnote: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isExpanded = true
+                Telemetry.breadcrumb("tool-ledger", "expand", data: [
+                    "steps": "\(totalCount)", "failed": "\(failCount)",
+                ])
+            }
+        } label: {
+            HStack(spacing: 9) {
+                Text("\(totalCount) step\(totalCount == 1 ? "" : "s")")
+                    .font(neon.mono(12.5))
+                    .foregroundStyle(neon.textFaint)
+                Text("\u{00B7}")
+                    .foregroundStyle(neon.ghost)
+                if failCount > 0 {
+                    Text("\(failCount) failed")
+                        .font(neon.mono(12.5))
+                        .foregroundStyle(neon.red)
+                } else {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(neon.green)
+                        Text("passed")
+                            .font(neon.mono(12.5))
+                            .foregroundStyle(neon.textFaint)
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(neon.ghost)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(red: 1, green: 1, blue: 1, opacity: 0.018))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(neon.lineSoft, lineWidth: 1)
+                )
+        )
+        .accessibilityLabel("\(totalCount) steps\(failCount > 0 ? ", \(failCount) failed" : ", passed")")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    // MARK: Expanded ledger
+
+    private var expandedLedger: some View {
+        VStack(spacing: 0) {
+            ledgerHeader
+            // Hairline divider = grid token (accent at ~5.5% opacity).
+            Rectangle()
+                .fill(neon.grid)
+                .frame(height: 1)
+            ledgerRows
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(neon.codeBg)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(neon.lineSoft, lineWidth: 1)
+                )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    // MARK: Header
+
+    private var ledgerHeader: some View {
+        HStack(spacing: 9) {
+            if anyRunning {
+                SpinnerRing(size: 12, color: neon.accentBright, reduceMotion: reduceMotion)
+            } else {
+                Image(systemName: "terminal")
+                    .font(.system(size: 14))
+                    .foregroundStyle(neon.textFaint)
+            }
+            Text(anyRunning ? "\(doneCount)/\(totalCount) steps" : "\(totalCount) step\(totalCount == 1 ? "" : "s")")
+                .font(neon.mono(12))
+                .foregroundStyle(neon.textDim)
+            Spacer(minLength: 4)
+            if !anyRunning {
+                if failCount > 0 {
+                    Text("\(failCount) failed")
+                        .font(neon.mono(11.5))
+                        .foregroundStyle(neon.red)
+                } else {
+                    HStack(spacing: 7) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(neon.green)
+                        Text("passed")
+                            .font(neon.mono(11.5))
+                            .foregroundStyle(neon.textFaint)
+                        // Collapse chevron — only shown in done state.
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isExpanded = false
+                                Telemetry.breadcrumb("tool-ledger", "collapse", data: [
+                                    "steps": "\(totalCount)",
+                                ])
+                            }
+                        } label: {
+                            Image(systemName: "chevron.up")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(neon.ghost)
+                                .frame(width: 30, height: 30)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 9)
+    }
+
+    // MARK: Rows
+
+    @ViewBuilder
+    private var ledgerRows: some View {
+        ForEach(Array(steps.enumerated()), id: \.element.id) { idx, step in
+            ToolLedgerRow(
+                step: step,
+                isFirst: idx == 0,
+                animate: anyRunning && !reduceMotion
+            )
+        }
+    }
+}
+
+// MARK: - ToolLedgerRow
+
+private struct ToolLedgerRow: View {
+    let step: LedgerStep
+    let isFirst: Bool
+    let animate: Bool
+
+    @Environment(\.neonTheme) private var neon
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    // Row-in animation state (fires once when the row appears in live mode).
+    @State private var appeared: Bool = false
+
+    // Pulse animation for running dot.
+    @State private var pulseLarge: Bool = false
+    @State private var pulseTask: Task<Void, Never>? = nil
+
+    private var isRunning: Bool { step.state == .running }
+    private var isFailed: Bool { step.state == .fail }
+    private var isDone: Bool { step.state == .ok }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            // Status dot (16pt column).
+            statusDot
+                .frame(width: 16, alignment: .center)
+
+            // Middle: label (1fr).
+            middleLabel
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Trailing: diff chip / running / failed.
+            trailingLabel
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(isRunning ? neon.accentBright.opacity(0.04) : Color.clear)
+        .overlay(alignment: .top) {
+            if !isFirst {
+                Rectangle()
+                    .fill(neon.grid)
+                    .frame(height: 1)
+            }
+        }
+        // Row-in slide + fade (once, in live mode only).
+        .opacity(animate ? (appeared ? 1 : 0) : 1)
+        .offset(y: animate ? (appeared ? 0 : 4) : 0)
+        .onAppear {
+            if animate && !appeared {
+                withAnimation(.easeOut(duration: 0.28)) { appeared = true }
+            } else {
+                appeared = true
+            }
+            if isRunning && !reduceMotion { startPulse() }
+        }
+        .onDisappear {
+            pulseTask?.cancel()
+        }
+    }
+
+    @ViewBuilder
+    private var statusDot: some View {
+        if isRunning {
+            Circle()
+                .fill(neon.yellow)
+                .frame(width: 6, height: 6)
+                .shadow(color: neon.yellow.opacity(0.7), radius: pulseLarge ? 5 : 3)
+                .scaleEffect(pulseLarge ? 1.2 : 1.0)
+        } else if isFailed {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(neon.red)
+                .frame(width: 12, height: 12)
+        } else {
+            Circle()
+                .fill(neon.green)
+                .frame(width: 6, height: 6)
+                .shadow(color: neon.green.opacity(0.65), radius: 4)
+        }
+    }
+
+    @ViewBuilder
+    private var middleLabel: some View {
+        switch step.kind {
+        case .edit:
+            HStack(spacing: 8) {
+                Image(systemName: "pencil")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(neon.accentBright)
+                Text(step.label)
+                    .font(neon.mono(12.5))
+                    .foregroundStyle(isRunning ? neon.text : neon.textDim)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        case .run, .read:
+            HStack(spacing: 0) {
+                Text("$")
+                    .font(neon.mono(12.5))
+                    .foregroundStyle(neon.textFaint)
+                    .padding(.trailing, 7)
+                Text(step.label)
+                    .font(neon.mono(12.5))
+                    .foregroundStyle(isRunning ? neon.text : neon.textDim)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var trailingLabel: some View {
+        if step.kind == .edit, let add = step.addCount, let del = step.delCount {
+            // Diff chip: only shown when data is available (none today).
+            HStack(spacing: 4) {
+                Text("+\(add)")
+                    .font(neon.mono(11))
+                    .foregroundStyle(neon.green)
+                Text("-\(del)")
+                    .font(neon.mono(11))
+                    .foregroundStyle(neon.red)
+            }
+        } else if isRunning && step.kind != .edit {
+            Text("running")
+                .font(neon.mono(10.5))
+                .foregroundStyle(neon.yellow)
+        } else if isFailed {
+            Text("exit \(step.exitCode.map(String.init) ?? "?")")
+                .font(neon.mono(11))
+                .foregroundStyle(neon.red)
+        } else {
+            EmptyView()
+        }
+    }
+
+    private func startPulse() {
+        pulseTask?.cancel()
+        pulseTask = Task {
+            // 1.25s ease-in-out infinite (pulse spec).
+            while !Task.isCancelled {
+                withAnimation(.easeInOut(duration: 0.625)) {
+                    pulseLarge = true
+                }
+                try? await Task.sleep(nanoseconds: 625_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.625)) {
+                    pulseLarge = false
+                }
+                try? await Task.sleep(nanoseconds: 625_000_000)
+            }
+        }
+    }
+}
+
+// MARK: - SpinnerRing
+
+/// 12px accent ring that spins ~0.9s per revolution. Stops under reduceMotion.
+private struct SpinnerRing: View {
+    let size: CGFloat
+    let color: Color
+    let reduceMotion: Bool
+
+    @State private var angle: Double = 0
+
+    var body: some View {
+        Circle()
+            .trim(from: 0.1, to: 0.9)
+            .stroke(
+                AngularGradient(
+                    colors: [color.opacity(0.2), color],
+                    center: .center
+                ),
+                style: StrokeStyle(lineWidth: 2, lineCap: .round)
+            )
+            .frame(width: size, height: size)
+            .rotationEffect(.degrees(angle))
+            .onAppear {
+                guard !reduceMotion else { return }
+                // Continuous rotation: 0.9s per revolution.
+                withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
+                    angle = 360
+                }
+            }
+    }
+}
