@@ -42,6 +42,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import sh.nikhil.conduit.ui.components.ActionPillVariant
+import sh.nikhil.conduit.ui.components.ConduitActionPill
 import sh.nikhil.conduit.ui.components.ConduitChip
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
@@ -703,32 +705,11 @@ fun HomeScreen(
                                     // Mirrors iOS HomeRowView box-name capsule.
                                     if (rowBoxName != null) {
                                         val badgeTint = if (isCurrentBox) neon.textDim else neon.accent
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                        ) {
-                                            Icon(
-                                                Icons.Filled.Storage,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(9.dp),
-                                                tint = badgeTint,
-                                            )
-                                            Text(
-                                                rowBoxName,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontFamily = neon.mono,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = badgeTint,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier
-                                                    .background(
-                                                        badgeTint.copy(alpha = 0.12f),
-                                                        RoundedCornerShape(50),
-                                                    )
-                                                    .padding(horizontal = 5.dp, vertical = 2.dp),
-                                            )
-                                        }
+                                        ConduitChip(
+                                            label = rowBoxName,
+                                            leadingIcon = Icons.Filled.Storage,
+                                            tint = badgeTint,
+                                        )
                                     }
                                 }
                             }
@@ -816,15 +797,9 @@ fun HomeScreen(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Text(
-                        "Open guide",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontFamily = neon.sans,
-                        fontWeight = FontWeight.SemiBold,
-                        color = neon.accentText,
-                        modifier = Modifier
-                            .background(neon.accent, RoundedCornerShape(50))
-                            .padding(horizontal = 11.dp, vertical = 6.dp),
+                    ConduitActionPill(
+                        label = "Open guide",
+                        variant = ActionPillVariant.Solid,
                     )
                 }
             }
@@ -1097,29 +1072,17 @@ private fun HomeBoxRow(
             )
         }
         if (isActive) {
-            Text(
-                "ACTIVE",
-                fontFamily = neon.mono,
-                fontWeight = FontWeight.Bold,
-                fontSize = 9.sp,
-                letterSpacing = 0.8.sp,
-                color = neon.green,
-                modifier = Modifier
-                    .background(neon.green.copy(alpha = 0.14f), CircleShape)
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ConduitActionPill(
+                label = "ACTIVE",
+                variant = ActionPillVariant.Soft,
+                tint = neon.green,
             )
         } else {
             // Fix 4: per-row Connect button for non-active boxes.
-            Text(
-                "Connect",
-                fontFamily = neon.mono,
-                fontWeight = FontWeight.Bold,
-                fontSize = 10.sp,
-                color = neon.accent,
-                modifier = Modifier
-                    .clickable(onClick = onConnect)
-                    .background(neon.accent.copy(alpha = 0.13f), CircleShape)
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            ConduitActionPill(
+                label = "Connect",
+                variant = ActionPillVariant.Solid,
+                onClick = onConnect,
             )
         }
         Box(modifier = Modifier.size(6.dp).background(statusColor, CircleShape))
@@ -1214,15 +1177,11 @@ private fun NeedsYouBannerCard(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Text(
-            "Review",
-            style = MaterialTheme.typography.titleSmall,
-            fontFamily = neon.sans,
-            fontWeight = FontWeight.SemiBold,
-            color = neon.bg,
-            modifier = Modifier
-                .background(neon.claude, CircleShape)
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+        ConduitActionPill(
+            label = "Review",
+            variant = ActionPillVariant.Solid,
+            tint = neon.claude,
+            onClick = onReview,
         )
     }
 }
