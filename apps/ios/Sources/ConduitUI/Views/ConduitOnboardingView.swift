@@ -676,8 +676,8 @@ extension ConduitUI {
         }
         var command: String {
             switch self {
-            case .mac, .linux: return "curl -fsSL https://conduit.sh | sh"
-            case .vps:         return "ssh root@your-vps \"curl -fsSL https://conduit.sh | sh\""
+            case .mac, .linux: return "curl -fsSL https://conduit.kaopeh.com/install.sh | sh"
+            case .vps:         return "ssh root@your-vps \"curl -fsSL https://conduit.kaopeh.com/install.sh | sh\""
             }
         }
     }
