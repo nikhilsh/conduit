@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - StreamingSpineView
 //
@@ -91,6 +92,20 @@ extension ConduitUI {
             }
             .onAppear {
                 Telemetry.breadcrumb("streaming-spine", "streaming start", data: ["contentLen": "\(content.count)"])
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            ) { _ in
+                // Core Animation suspends repeatForever animations on background.
+                // Re-kick the rail flow so it resumes after the app foregrounds.
+                // The breathe/caret are Task-loop based and survive independently.
+                guard !reduceMotion else { return }
+                railOffset = -railTile
+                withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                    railOffset = 0
+                }
+                Telemetry.breadcrumb("streaming-spine", "foreground restart",
+                    data: ["contentLen": "\(content.count)"])
             }
             .accessibilityLabel("Assistant is writing: \(content)")
         }

@@ -1016,6 +1016,13 @@ final class SessionStore {
     // Old brokers never send chat_streaming events so this stays empty.
     var streamingMessage: [String: String] = [:]
 
+    // The `turn_ts` of the currently-streaming turn per sessionID, set by
+    // ingestChatStreaming and used by ingestChat to distinguish a final
+    // current-turn message from a broker-replayed older transcript entry.
+    // Replayed entries have a ts < streamingTurnTs and must NOT clear
+    // the live streaming state. Cleared alongside streamingMessage.
+    var streamingTurnTs: [String: String] = [:]
+
     // Current turn phase per session, sourced from the broker's turn_phase
     // view_event. Values: "writing" (streaming text), "working" (tool calls),
     // "" (thinking/waiting). Nil = no phase info from broker yet.
@@ -4955,6 +4962,10 @@ final class SessionStore {
     func ingestChatStreaming(_ sessionID: String, payload: [String: String]) {
         guard let content = payload["content"], let turnTs = payload["turn_ts"] else { return }
         streamingMessage[sessionID] = content
+        // Record the turn timestamp of the active streaming turn. ingestChat
+        // uses this to skip clearing streaming state when a broker replay
+        // delivers an older settled message during a live turn.
+        streamingTurnTs[sessionID] = turnTs
         Telemetry.breadcrumb("streaming", "partial arrived",
             data: ["turn_ts": turnTs, "len": "\(content.count)", "session": sessionID])
         if let coordinator = streamingCoordinator {
@@ -4992,10 +5003,36 @@ final class SessionStore {
                     data: ["session": sessionID, "count": "\(drained.count)"])
             }
             // Final assistant message arrived — clear the in-memory streaming
-            // overlay. The permanent message is now in the Rust store / chatLog
-            // and will appear via the normal conversationLog path.
-            streamingMessage[sessionID] = nil
-            turnPhaseBySession[sessionID] = nil
+            // overlay. Guard: only clear when this event belongs to the
+            // current-or-newer turn, not an older broker-replayed transcript
+            // message. On WS reconnect the broker replays the last 200 settled
+            // messages; each replayed assistant event must NOT evict the live
+            // streaming state for an in-flight turn that is still producing
+            // tokens. Compare the event ts against streamingTurnTs to decide.
+            let shouldClearStreaming: Bool = {
+                guard let activeTurnTs = streamingTurnTs[sessionID] else {
+                    // No active streaming turn recorded: safe to clear.
+                    return true
+                }
+                let activeTurnEpoch = conduitConversationTsEpoch(activeTurnTs)
+                let eventEpoch = conduitConversationTsEpoch(event.ts)
+                if activeTurnEpoch == .greatestFiniteMagnitude || eventEpoch == .greatestFiniteMagnitude {
+                    // Timestamps not comparable (unparseable); fall back to
+                    // checking whether the broker says the turn is still active.
+                    return statusBySession[sessionID]?.turnActive != true
+                }
+                // Clear only when this event is the current turn or newer.
+                return eventEpoch >= activeTurnEpoch
+            }()
+            if shouldClearStreaming {
+                streamingMessage[sessionID] = nil
+                turnPhaseBySession[sessionID] = nil
+                streamingTurnTs[sessionID] = nil
+            } else {
+                Telemetry.breadcrumb("streaming", "replay skipped clear",
+                    data: ["session": sessionID, "event_ts": event.ts,
+                           "turn_ts": streamingTurnTs[sessionID] ?? ""])
+            }
         }
         chatLog[sessionID, default: []].append(event)
         // Memory telemetry: breadcrumb at milestones so Sentry has context
@@ -5427,6 +5464,17 @@ final class SessionStore {
         // Flush one queued-turn entry now that the agent is idle.
         if turnJustCompleted {
             flushQueuedOnTurnComplete(sessionID: status.session)
+        }
+        // Safety net: when turnActive transitions false, clear any lingering
+        // streaming state. This covers cancelled turns and clock-skew cases
+        // where no final ingestChat arrives with a matching ts to trigger the
+        // normal clear path above.
+        if turnJustCompleted {
+            streamingMessage[status.session] = nil
+            turnPhaseBySession[status.session] = nil
+            streamingTurnTs[status.session] = nil
+            Telemetry.breadcrumb("streaming", "cleared on turn-complete status",
+                data: ["session": status.session])
         }
         // Promote lifecycle from a non-terminal state using the phase the
         // broker actually reported — NOT a blanket `.live`. A status frame
