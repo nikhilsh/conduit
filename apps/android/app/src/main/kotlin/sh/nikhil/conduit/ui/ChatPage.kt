@@ -102,6 +102,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawscope.Stroke
 import sh.nikhil.conduit.FeatureFlags
 import androidx.compose.ui.unit.Dp
@@ -2804,27 +2805,25 @@ private fun StreamingSpineRow(content: String) {
                     )
 
                     // Rail: 2dp wide from 6dp below mark top to row bottom.
+                    // Fixed-tile brush: a single accent->green tile of ~46dp is repeated
+                    // via TileMode.Repeated. The phase (0 -> tilePx) shifts the start/end
+                    // offsets by one tile per 1.4s, creating a seamless downward flow.
+                    // Because tile size is fixed, the rail height does NOT affect the
+                    // animation, preventing restarts as prose streams in.
                     val railStartY = headSize + 6.dp.toPx()
                     val railEndY = size.height
                     if (railEndY > railStartY) {
                         val railH = railEndY - railStartY
+                        val tilePx = 46.dp.toPx()
                         val railBrush = if (!reduceMotion && flowTransition != null) {
-                            // Flowing downward: a 5-stop symmetric gradient over 2*railH
-                            // (accent->green->accent->green->accent) is shifted UPWARD by
-                            // flowOffset*railH. From the fixed drawn-rect window, the pattern
-                            // appears to flow DOWNWARD, completing one seamless cycle per 1.4s.
-                            // At flowOffset=0 and flowOffset=1 the visible window is identical
-                            // (both show accent->green->accent), so the loop is gapless.
-                            Brush.verticalGradient(
-                                colorStops = arrayOf(
-                                    0.00f to neon.accentBright,
-                                    0.25f to neon.green,
-                                    0.50f to neon.accentBright,
-                                    0.75f to neon.green,
-                                    1.00f to neon.accentBright,
-                                ),
-                                startY = railStartY - flowOffset * railH,
-                                endY = railStartY + 2f * railH - flowOffset * railH,
+                            // phase shifts downward 0 -> tilePx over 1.4s; TileMode.Repeated
+                            // makes the gradient wrap seamlessly at every tile boundary.
+                            val phase = flowOffset * tilePx
+                            Brush.linearGradient(
+                                colors = listOf(neon.accentBright, neon.green),
+                                start = Offset(0f, phase),
+                                end = Offset(0f, phase + tilePx),
+                                tileMode = TileMode.Repeated,
                             )
                         } else {
                             Brush.verticalGradient(
@@ -2861,18 +2860,18 @@ private fun StreamingSpineRow(content: String) {
             // Prose: neon.sans, 15.5sp, line-height 1.62, neon.text.
             // Caret is appended INLINE as an AnnotatedString span so it trails the last
             // character and wraps naturally with the text (not pinned to the right margin).
-            // Under reduceMotion or when content is empty: no caret glyph appended.
+            // A thin-space ( ) before the block glyph (▌) provides a small gap.
+            // The caret suffix is ALWAYS present in the layout while streaming so width is
+            // stable; it blinks by toggling between accentBright and Color.Transparent (not
+            // by swapping glyph/space). Under reduceMotion: no caret suffix appended at all.
             val hasContent = content.isNotEmpty()
-            val caretGlyph = when {
-                !hasContent || reduceMotion -> ""
-                caretVisible -> "▌" // LEFT HALF BLOCK — same glyph as iOS
-                else -> " "  // same-width space to keep line height stable
-            }
             val proseText = buildAnnotatedString {
                 append(if (hasContent) content else "​")
-                if (caretGlyph.isNotEmpty()) {
-                    pushStyle(SpanStyle(color = neon.accentBright))
-                    append(caretGlyph)
+                if (hasContent && !reduceMotion) {
+                    // Thin-space gap + block glyph, always in layout; color toggles for blink.
+                    val caretColor = if (caretVisible) neon.accentBright else Color.Transparent
+                    pushStyle(SpanStyle(color = caretColor))
+                    append(" ▌")
                     pop()
                 }
             }
