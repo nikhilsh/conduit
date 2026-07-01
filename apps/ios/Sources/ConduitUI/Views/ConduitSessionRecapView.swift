@@ -217,28 +217,11 @@ extension ConduitUI {
         private var fileStatsSection: some View {
             if recap.filesChanged > 0 || recap.linesAdded > 0 || recap.linesRemoved > 0 {
                 HStack(spacing: 12) {
-                    statTile(value: "\(recap.filesChanged)", label: "files", tint: neon.text)
-                    statTile(value: "+\(recap.linesAdded)", label: "added", tint: neon.green)
-                    statTile(value: "−\(recap.linesRemoved)", label: "removed", tint: neon.red)
+                    ConduitUI.StatTile(value: "\(recap.filesChanged)", label: "files", tint: neon.text)
+                    ConduitUI.StatTile(value: "+\(recap.linesAdded)", label: "added", tint: neon.green)
+                    ConduitUI.StatTile(value: "−\(recap.linesRemoved)", label: "removed", tint: neon.red)
                 }
             }
-        }
-
-        private func statTile(value: String, label: String, tint: Color) -> some View {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(value)
-                    .font(neon.mono(20).weight(.bold))
-                    .foregroundStyle(tint)
-                    .neonTextGlow(neon.textGlow)
-                Text(label)
-                    .font(neon.mono(10.5))
-                    .foregroundStyle(neon.textDim)
-                    .textCase(.uppercase)
-                    .tracking(0.6)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
         }
 
         // MARK: Commands run
@@ -330,37 +313,21 @@ extension ConduitUI {
         private var actionRow: some View {
             HStack(spacing: 10) {
                 ShareLink(item: recap.markdown) {
-                    actionPillBody(systemImage: "square.and.arrow.up", label: "Export markdown", tint: neon.green)
+                    ConduitUI.Button(variant: .secondary, tint: neon.green, action: {}) {
+                        Label("Export markdown", systemImage: "square.and.arrow.up")
+                    }
                 }
                 .buttonStyle(.plain)
                 // No real shareable URL exists in the stack, so "Share link"
                 // shares the SAME markdown text rather than faking a URL.
                 // Labelled "Share text" to stay honest.
                 ShareLink(item: recap.markdown) {
-                    actionPillBody(systemImage: "link", label: "Share text", tint: neon.accent)
+                    ConduitUI.Button(variant: .secondary, tint: neon.accent, action: {}) {
+                        Label("Share text", systemImage: "link")
+                    }
                 }
                 .buttonStyle(.plain)
             }
-        }
-
-        private func actionPillBody(systemImage: String, label: String, tint: Color) -> some View {
-            HStack(spacing: 7) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 14, weight: .semibold))
-                Text(label)
-                    .font(neon.sans(13).weight(.semibold))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(tint)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .neonCardSurface(
-                neon,
-                fill: neon.surface,
-                cornerRadius: 13,
-                border: tint.opacity(0.4),
-                glowTint: neon.glow ? tint : nil
-            )
         }
 
         // MARK: Helpers
