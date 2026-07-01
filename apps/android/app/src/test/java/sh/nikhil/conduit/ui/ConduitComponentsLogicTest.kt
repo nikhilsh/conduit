@@ -3,7 +3,9 @@ package sh.nikhil.conduit.ui
 import androidx.compose.ui.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import sh.nikhil.conduit.ui.components.ActionPillVariant
 import sh.nikhil.conduit.ui.components.ButtonVariant
+import sh.nikhil.conduit.ui.components.resolveActionPillColors
 import sh.nikhil.conduit.ui.components.resolveButtonColors
 import sh.nikhil.conduit.ui.components.resolveChipFg
 
@@ -153,6 +155,63 @@ class ConduitComponentsLogicTest {
         )
         assertEquals(customTint, btnAccent)
         assertEquals(customTint, labelFg)
+    }
+
+    // endregion
+
+    // region ConduitActionPill color resolution
+
+    @Test
+    fun pillColors_softNoTint_fillIsAccentAt14Alpha_fgIsAccent() {
+        val (fill, fg) = resolveActionPillColors(
+            variant = ActionPillVariant.Soft,
+            tint = null,
+            accent = accent,
+            accentText = accentText,
+        )
+        assertEquals(accent.copy(alpha = 0.14f), fill)
+        assertEquals(accent, fg)
+    }
+
+    @Test
+    fun pillColors_softWithTint_fillIsTintAt14Alpha_fgIsTint() {
+        val (fill, fg) = resolveActionPillColors(
+            variant = ActionPillVariant.Soft,
+            tint = customTint,
+            accent = accent,
+            accentText = accentText,
+        )
+        assertEquals(customTint.copy(alpha = 0.14f), fill)
+        assertEquals(customTint, fg)
+    }
+
+    @Test
+    fun pillColors_solidNoTint_fillIsAccent_fgIsAccentText() {
+        val (fill, fg) = resolveActionPillColors(
+            variant = ActionPillVariant.Solid,
+            tint = null,
+            accent = accent,
+            accentText = accentText,
+        )
+        assertEquals(accent, fill)
+        assertEquals(accentText, fg)
+    }
+
+    @Test
+    fun pillColors_solidWithTint_fillIsTint_fgIsAccentText() {
+        val (fill, fg) = resolveActionPillColors(
+            variant = ActionPillVariant.Solid,
+            tint = customTint,
+            accent = accent,
+            accentText = accentText,
+        )
+        assertEquals(customTint, fill)
+        assertEquals(accentText, fg)
+    }
+
+    @Test
+    fun actionPillVariantEnumHasTwoMembers() {
+        assertEquals(2, ActionPillVariant.entries.size)
     }
 
     // endregion
