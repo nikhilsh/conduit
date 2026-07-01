@@ -309,7 +309,12 @@ extension ConduitUI {
                 let c = item.content.trimmingCharacters(in: .whitespacesAndNewlines)
                 // Exact option match: drop regardless of length floor (covers short
                 // answers like "Yes", "No", "1" that appendUser writes to conversation.jsonl).
-                if item.role.lowercased() == "user" && pendingOptionSet.contains(c) { return false }
+                // Also drop multi-question answers ("A\nB") where every non-empty line is
+                // an option — the submit path joins per-question answers with "\n".
+                if item.role.lowercased() == "user" && !pendingOptionSet.isEmpty {
+                    let parts = c.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                    if !parts.isEmpty && parts.allSatisfy({ pendingOptionSet.contains($0) }) { return false }
+                }
                 guard c.count >= 8 else { return true }
                 return !pending.contains { $0 == c || $0.contains(c) }
             }
