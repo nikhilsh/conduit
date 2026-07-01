@@ -1,0 +1,207 @@
+name: appetize
+
+# Manual-only: uploads the iOS Simulator .app and the Android debug .apk to
+# Appetize.io so a running build can be poked from a phone. A fast-follow adds
+# a screenshots job that drives the onboarding flow and captures PNG artifacts.
+#
+# Appetize runs cloud SIMULATORS/EMULATORS, so iOS needs an UNSIGNED
+# iOS-Simulator .app (NOT a signed device .ipa) and Android a plain .apk —
+# exactly what ci.yml already builds. This workflow rebuilds the same
+# artifacts and pushes them up.
+#
+# Trigger from the Actions tab. Leave the *_public_key inputs blank the first
+# time to CREATE new Appetize apps (the run summary prints the new keys); set
+# the repo variables APPETIZE_IOS_PUBLIC_KEY / APPETIZE_ANDROID_PUBLIC_KEY (or
+# pass the inputs) on later runs to UPDATE the same apps in place and keep a
+# stable appetize.io/app/<key> URL.
+#
+# Requires the APPETIZE_TOKEN secret (Appetize account → API token).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ios_public_key:
+        description: "Appetize iOS publicKey to update in place (blank = create new; falls back to repo var APPETIZE_IOS_PUBLIC_KEY)"
+        required: false
+        default: ""
+      android_public_key:
+        description: "Appetize Android publicKey to update in place (blank = create new; falls back to repo var APPETIZE_ANDROID_PUBLIC_KEY)"
+        required: false
+        default: ""
+
+concurrency:
+  # One Appetize run at a time per ref — manual runs shouldn't race each other
+  # into the same publicKey update.
+  group: appetize-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+
+  ios-upload:
+    name: ios sim → appetize
+    runs-on: macos-26
+    outputs:
+      public-key: ${{ steps.upload.outputs.public_key }}
+      app-url: ${{ steps.upload.outputs.app_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 26.4.1
+        run: sudo xcode-select -s /Applications/Xcode_26.4.1.app
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - name: Install xcodegen
+        run: brew install xcodegen
+      - name: Build Rust xcframework
+        working-directory: apps/ios
+        run: ./build-rust.sh
+      - name: Generate Xcode project
+        working-directory: apps/ios
+        run: xcodegen generate
+      # Build the same unsigned simulator .app ci.yml builds, but pin
+      # -derivedDataPath so the product lands at a known path we can zip.
+      # Deliberately NO SENTRY_DSN: these are throwaway sim sessions and a
+      # live DSN would ship synthetic events to production Sentry (same
+      # rationale as ci.yml's test run).
+      - name: xcodebuild (simulator, no signing)
+        working-directory: apps/ios
+        run: |
+          set -o pipefail
+          xcodebuild -scheme Conduit \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/DerivedData \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            build
+      # Appetize wants a .zip with the .app at the archive root. `ditto`
+      # preserves the bundle's symlinks/structure (embedded PlugIns:
+      # widget + notification-service extensions) where `zip` can mangle
+      # them; --keepParent puts `Conduit.app/…` at the root.
+      - name: Zip the .app for Appetize
+        working-directory: apps/ios
+        run: |
+          APP="build/DerivedData/Build/Products/Debug-iphonesimulator/Conduit.app"
+          if [ ! -d "$APP" ]; then
+            echo "::error::Conduit.app not found at $APP"
+            ls -R build/DerivedData/Build/Products || true
+            exit 1
+          fi
+          ditto -c -k --sequesterRsrc --keepParent "$APP" Conduit.zip
+          ls -lh Conduit.zip
+      - name: Upload to Appetize
+        id: upload
+        working-directory: apps/ios
+        env:
+          APPETIZE_TOKEN: ${{ secrets.APPETIZE_TOKEN }}
+          # input wins; else repo var; else empty → create new app.
+          PUBLIC_KEY: ${{ inputs.ios_public_key || vars.APPETIZE_IOS_PUBLIC_KEY }}
+        run: |
+          if [ -z "$APPETIZE_TOKEN" ]; then
+            echo "::error::APPETIZE_TOKEN secret is not set"; exit 1
+          fi
+          if [ -n "$PUBLIC_KEY" ]; then
+            URL="https://api.appetize.io/v1/apps/$PUBLIC_KEY"   # update in place
+          else
+            URL="https://api.appetize.io/v1/apps"               # create new
+          fi
+          RESP=$(curl -sS -X POST "$URL" \
+            -H "X-API-KEY: $APPETIZE_TOKEN" \
+            -F "file=@Conduit.zip" \
+            -F "platform=ios" \
+            -F "fileType=zip")
+          echo "$RESP"
+          KEY=$(printf '%s' "$RESP" | python3 -c "import sys,json;print(json.load(sys.stdin).get('publicKey',''))")
+          if [ -z "$KEY" ]; then
+            echo "::error::Appetize returned no publicKey — see response above"; exit 1
+          fi
+          echo "public_key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "app_url=https://appetize.io/app/$KEY" >> "$GITHUB_OUTPUT"
+          {
+            echo "## iOS → Appetize"
+            echo "- publicKey: \`$KEY\`"
+            echo "- App: https://appetize.io/app/$KEY"
+            if [ -z "$PUBLIC_KEY" ]; then
+              echo "- ℹ️ New app created. Set repo variable **APPETIZE_IOS_PUBLIC_KEY** = \`$KEY\` to update this same app (stable URL) on future runs."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  android-upload:
+    name: android apk → appetize
+    runs-on: ubuntu-24.04
+    outputs:
+      public-key: ${{ steps.upload.outputs.public_key }}
+      app-url: ${{ steps.upload.outputs.app_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android NDK
+        run: sdkmanager "ndk;26.3.11579264"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --version ^3
+      - name: Build Rust jniLibs
+        working-directory: apps/android
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.3.11579264
+        run: ./build-rust.sh
+      # Debug APK — unsigned-but-debuggable, runs on Appetize's emulator.
+      # No SENTRY_DSN_ANDROID for the same synthetic-event reason as iOS.
+      - name: gradle assembleDebug
+        working-directory: apps/android
+        run: ./gradlew assembleDebug --no-daemon
+      - name: Upload to Appetize
+        id: upload
+        working-directory: apps/android
+        env:
+          APPETIZE_TOKEN: ${{ secrets.APPETIZE_TOKEN }}
+          PUBLIC_KEY: ${{ inputs.android_public_key || vars.APPETIZE_ANDROID_PUBLIC_KEY }}
+        run: |
+          if [ -z "$APPETIZE_TOKEN" ]; then
+            echo "::error::APPETIZE_TOKEN secret is not set"; exit 1
+          fi
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK" ]; then
+            echo "::error::app-debug.apk not found at $APK"
+            ls -R app/build/outputs/apk || true
+            exit 1
+          fi
+          if [ -n "$PUBLIC_KEY" ]; then
+            URL="https://api.appetize.io/v1/apps/$PUBLIC_KEY"
+          else
+            URL="https://api.appetize.io/v1/apps"
+          fi
+          RESP=$(curl -sS -X POST "$URL" \
+            -H "X-API-KEY: $APPETIZE_TOKEN" \
+            -F "file=@$APK" \
+            -F "platform=android" \
+            -F "fileType=apk")
+          echo "$RESP"
+          KEY=$(printf '%s' "$RESP" | python3 -c "import sys,json;print(json.load(sys.stdin).get('publicKey',''))")
+          if [ -z "$KEY" ]; then
+            echo "::error::Appetize returned no publicKey — see response above"; exit 1
+          fi
+          echo "public_key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "app_url=https://appetize.io/app/$KEY" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Android → Appetize"
+            echo "- publicKey: \`$KEY\`"
+            echo "- App: https://appetize.io/app/$KEY"
+            if [ -z "$PUBLIC_KEY" ]; then
+              echo "- ℹ️ New app created. Set repo variable **APPETIZE_ANDROID_PUBLIC_KEY** = \`$KEY\` to update this same app (stable URL) on future runs."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # screenshots job appended once the @appetize/playwright SDK contract is
+  # verified — drives onboarding on both publicKeys and uploads PNG artifacts.
