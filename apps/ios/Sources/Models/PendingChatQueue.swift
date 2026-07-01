@@ -157,14 +157,26 @@ struct PendingChatQueue: Equatable {
     }
 
     /// Called when an assistant reply arrives for a session, proving the broker
-    /// received the user's prior message(s). Removes all `sent=true, kind==.normal`
+    /// received the user's prior message(s). Removes all non-failed `.normal`
     /// entries and returns their localIDs so the shell can flip each echo to `done`.
     /// A `chat_ack` arriving later no-ops (entry already gone). `.queuedTurn` and
-    /// steer entries are NOT touched — they may not have been delivered yet.
+    /// steer entries are NOT touched -- they may not have been delivered yet.
+    ///
+    /// WHY we no longer require `sent==true`: `markSent` runs async after the WS
+    /// write succeeds. On the first message of a session the broker can reply
+    /// (firing an AskUserQuestion turn) before `markSent` completes, leaving the
+    /// entry still `sent=false`. Requiring `sent` would skip that entry and leave
+    /// the bubble faded forever -- no later reply arrives to retry. An assistant
+    /// reply is itself proof the broker received the prior user message(s); we do
+    /// not need the local WS-write flag to confirm it. The broker dedups any
+    /// resend by client_msg_id, so clearing without `sent` cannot cause a
+    /// double-send. `failed` entries are preserved (user must explicitly retry);
+    /// `.queuedTurn`/`.steering`/`.retrying` entries are preserved (they may be
+    /// genuinely undelivered).
     mutating func drainSentNormal(sessionID: String) -> [String] {
         guard var list = bySession[sessionID] else { return [] }
-        let drained = list.filter { $0.sent && $0.kind == .normal }.map { $0.localID }
-        list.removeAll { $0.sent && $0.kind == .normal }
+        let drained = list.filter { !$0.failed && $0.kind == .normal }.map { $0.localID }
+        list.removeAll { !$0.failed && $0.kind == .normal }
         if list.isEmpty { bySession[sessionID] = nil } else { bySession[sessionID] = list }
         return drained
     }
