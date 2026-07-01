@@ -20,6 +20,18 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+_(nothing yet)_
+
+---
+
+## v0.0.209
+
+**Streaming-turn spine polish — iOS + Android. PRs #821, #822, #824.**
+
+- **Rail fills full height + no stutter (#821, iOS)** — the working rail now spans the full message height (restored GeometryReader sizing) and uses a fixed tile stack so streamed-message growth can't rebuild/stutter it; smooth downward flow preserved. [iOS, **needs on-device verify**: long streaming message → rail spans full height, flows down smoothly]
+- **Inline markdown renders live while streaming + mark-head brand glow (#822, iOS + Android)** — the streaming spine renders `**bold**` / `*italic*` / `` `code` `` live using the same parser as settled messages (unclosed markers stay literal until closed); the conduit mark on the thinking rail now glows (BRAND.md §3 — was disabled on iOS). [iOS + Android, **needs on-device verify**: mid-stream markdown renders styled not raw; mark glows]
+- **Animations resume on foreground + streamed chat survives reconnect (#824, iOS + Android)** — `repeatForever` animations (typing dot, rail, spinner, sheen, blink) restart on foreground/phase-change instead of freezing after minimize/back (iOS); a replayed prior-turn message on WS reconnect no longer wipes the in-progress streaming spine/phase (turn-ts guard; unit tests added). [iOS + Android, **needs on-device verify**: (a) background→reopen mid-turn — dot + rail keep animating; (b) nav away→back mid-stream — spine + phase persist, chat not dead]
+
 **Appetize screenshots now capture the connected UI via demo mode — CI tooling. PR #823.**
 
 - `tools/appetize-screenshots/tests/tour.spec.ts` drives the App Store **demo
