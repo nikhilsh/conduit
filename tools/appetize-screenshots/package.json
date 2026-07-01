@@ -1,0 +1,14 @@
+{
+  "name": "appetize-screenshots",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Headless Appetize onboarding screenshots, driven by the manual appetize.yml workflow",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@appetize/playwright": "^1.6.0",
+    "@playwright/test": "^1.47.0"
+  }
+}
