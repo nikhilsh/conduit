@@ -2837,7 +2837,7 @@ private fun StreamingSpineRow(content: String) {
                             .height(15.5.sp.value.dp)
                             .background(neon.accent, RoundedCornerShape(1.dp)),
                     )
-                // else: reduced-motion or caret hidden — no caret rendered
+                } // else: reduced-motion or caret hidden — no caret rendered
             }
         }
     }
