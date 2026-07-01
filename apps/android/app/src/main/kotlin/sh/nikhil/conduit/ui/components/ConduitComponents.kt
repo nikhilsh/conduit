@@ -219,6 +219,9 @@ fun ConduitToggleRow(
  * capsule with [tint] (or [NeonTheme.accent]) and switches the label to
  * [NeonTheme.accentText] for legibility on the filled surface. Unselected
  * chips use the standard capsule chrome with [tint] or [NeonTheme.text].
+ *
+ * [leadingIcon] mirrors iOS ConduitUI.Chip's `systemImage` slot: when
+ * non-null a small [Icon] (~11dp) is rendered before the label text.
  */
 @Composable
 fun ConduitChip(
@@ -226,6 +229,7 @@ fun ConduitChip(
     modifier: Modifier = Modifier,
     tint: Color? = null,
     selected: Boolean = false,
+    leadingIcon: ImageVector? = null,
 ) {
     val neon = LocalNeonTheme.current
     val fg = when {
@@ -233,16 +237,101 @@ fun ConduitChip(
         tint != null -> tint
         else -> neon.text
     }
-    Box(
+    Row(
         modifier
             .glassCapsule(tint = if (selected) (tint ?: neon.accent) else tint)
             .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
+        if (leadingIcon != null) {
+            Icon(
+                leadingIcon,
+                contentDescription = null,
+                tint = fg,
+                modifier = Modifier.size(11.dp),
+            )
+        }
         Text(
             label,
             fontFamily = neon.mono,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
+            color = fg,
+            maxLines = 1,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ConduitActionPill
+// ---------------------------------------------------------------------------
+
+/**
+ * Visual variant for [ConduitActionPill]. Mirrors [ConduitUI.ActionPill.Variant] on iOS.
+ *
+ * - [Soft]  — low-opacity tint fill; foreground = tint. Status badge look ("ACTIVE").
+ * - [Solid] — solid tint fill; foreground = [NeonTheme.accentText]. CTA action look
+ *             ("Open guide", "Connect", "Review").
+ */
+enum class ActionPillVariant { Soft, Solid }
+
+/**
+ * Small capsule pill extracted from the hand-rolled pills in the home screen.
+ * Mirrors iOS [ConduitUI.ActionPill] value-for-value.
+ *
+ * Soft:  [RoundedCornerShape](percent=50) background at tint alpha=0.14, foreground = tint,
+ *        mono 10sp bold, padding (h6dp, v2dp). Optional [leadingIcon] at 10dp.
+ * Solid: solid tint background, foreground = [NeonTheme.accentText],
+ *        sans 12sp semibold, padding (h11dp, v6dp). Optional [leadingIcon] at 10dp.
+ *
+ * When [onClick] is non-null the pill is made [clickable]; otherwise it is static.
+ * [tint] defaults to [NeonTheme.accent] when null.
+ */
+@Composable
+fun ConduitActionPill(
+    label: String,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+    leadingIcon: ImageVector? = null,
+    variant: ActionPillVariant = ActionPillVariant.Soft,
+    tint: Color? = null,
+) {
+    val neon = LocalNeonTheme.current
+    val (fill, fg) = resolveActionPillColors(
+        variant = variant,
+        tint = tint,
+        accent = neon.accent,
+        accentText = neon.accentText,
+    )
+    val hPad = if (variant == ActionPillVariant.Soft) 6.dp else 11.dp
+    val vPad = if (variant == ActionPillVariant.Soft) 2.dp else 6.dp
+    val shape = RoundedCornerShape(percent = 50)
+    Row(
+        modifier
+            .clip(shape)
+            .background(fill)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = hPad, vertical = vPad),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (leadingIcon != null) {
+            Icon(
+                leadingIcon,
+                contentDescription = null,
+                tint = fg,
+                modifier = Modifier.size(10.dp),
+            )
+        }
+        val fontSize = if (variant == ActionPillVariant.Soft) 10.sp else 12.sp
+        val fontWeight = if (variant == ActionPillVariant.Soft) FontWeight.Bold else FontWeight.SemiBold
+        val fontFamily = if (variant == ActionPillVariant.Soft) neon.mono else neon.sans
+        Text(
+            label,
+            fontFamily = fontFamily,
+            fontSize = fontSize,
+            fontWeight = fontWeight,
             color = fg,
             maxLines = 1,
         )
@@ -352,6 +441,29 @@ fun ConduitButton(
 // ---------------------------------------------------------------------------
 // Pure logic helpers (unit-testable without Compose runtime)
 // ---------------------------------------------------------------------------
+
+/**
+ * Resolve the fill and foreground [Color] for a [ConduitActionPill].
+ * Extracted so tests can pin the logic without a Compose runtime.
+ *
+ * @param variant    the requested [ActionPillVariant]
+ * @param tint       caller-supplied color override (null = use [accent])
+ * @param accent     the resolved [NeonTheme.accent] value
+ * @param accentText the resolved [NeonTheme.accentText] value
+ * @return Pair of (fill, foreground)
+ */
+fun resolveActionPillColors(
+    variant: ActionPillVariant,
+    tint: Color?,
+    accent: Color,
+    accentText: Color,
+): Pair<Color, Color> {
+    val resolvedTint = tint ?: accent
+    return when (variant) {
+        ActionPillVariant.Soft  -> resolvedTint.copy(alpha = 0.14f) to resolvedTint
+        ActionPillVariant.Solid -> resolvedTint to accentText
+    }
+}
 
 /**
  * Resolve the foreground [Color] for a [ConduitChip] given the [selected]
