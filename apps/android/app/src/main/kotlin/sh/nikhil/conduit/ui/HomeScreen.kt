@@ -42,7 +42,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
+import sh.nikhil.conduit.ui.components.ConduitChip
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -1363,21 +1363,9 @@ private fun SessionMetaRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         // Agent chip — neon-tinted capsule with the agent name.
+        // Migrated to ConduitChip (ui/components) for design-library parity.
         val tint = neonAgentColor(agent, neon)
-        Surface(
-            shape = RoundedCornerShape(50),
-            color = tint.copy(alpha = 0.18f),
-        ) {
-            Text(
-                agent,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = neon.mono,
-                fontWeight = FontWeight.SemiBold,
-                color = tint,
-                maxLines = 1,
-            )
-        }
+        ConduitChip(label = agent, tint = tint)
         // Status word with a small dot: green (live) / amber (starting) /
         // dim (idle / exited).
         Box(
