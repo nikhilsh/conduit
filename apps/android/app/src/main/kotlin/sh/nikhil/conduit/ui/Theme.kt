@@ -159,8 +159,8 @@ object ConduitTheme {
     @Composable @ReadOnlyComposable fun warning()       : Color = ConduitPalette.warning.color()
     @Composable @ReadOnlyComposable fun background()    : Color = ConduitPalette.background.color()
 
-    /** iOS: 22. Use a [androidx.compose.foundation.shape.RoundedCornerShape] of this radius. */
-    const val cardCornerRadiusDp: Float = 22f
+    /** iOS: 14. Use a [androidx.compose.foundation.shape.RoundedCornerShape] of this radius. */
+    const val cardCornerRadiusDp: Float = 14f
     const val smallCornerRadiusDp: Float = 14f
 }
 

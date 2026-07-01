@@ -72,7 +72,7 @@ class NeonThemeTest {
         assertEquals(Color(0x0E22D3EE), t.grid)
         // codeText defaults to text in dark
         assertEquals(t.text, t.codeText)
-        assertEquals(20f, t.radiusDp)
+        assertEquals(14f, t.radiusDp)
     }
 
     @Test
