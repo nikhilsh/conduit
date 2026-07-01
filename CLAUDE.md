@@ -173,19 +173,18 @@ Every screen is built from the shared component library — never raw
   built on `Glass.kt` (`glass*` modifiers) + `LocalNeonTheme`. No consolidated
   `Card`/`ListRow`/`Chip` existed before — screens re-rolled them inline; that is
   the drift this rule kills.
-- **Never hardcode a hex/size/radius.** Read the token (iOS: `ConduitUI.Palette` /
-  `neon.*`; Android: `LocalNeonTheme`). If you type `#` or `Color(0x…)` in a
+- **Never hardcode a hex/size/radius.** Read the token (iOS `ConduitUI.Palette` /
+  `neon.*`; Android `LocalNeonTheme`). If you type `#` or `Color(0x…)` in a
   screen, stop — the token exists.
 - **A component close-but-not-right → EXTEND the library**, don't fork a variant
   inside a screen. A new recurring shape becomes a new component in
   `ConduitUI/Components` AND the Android `ui/components` mirror (keep them
   value-for-value; the cross-platform ARGB unit tests must stay green).
-- Card radius is **14** on both platforms. Chips are mono capsules. Rows lead with a
-  bare tinted SF Symbol / icon, not a filled tile.
+- Card radius is **14** on both platforms (owner-decided; iOS `ConduitUI.Card` + HTML are
+  already 14, Android drops `ConduitTheme.cardCornerRadiusDp` 20→14). Chips are mono capsules. Rows lead with a bare tinted symbol, not
+  a filled tile.
 
-Design reference lives in the "SWE Kitty" design project (claude.ai/design) — that
-project is **read-only to GitHub; it never pushes.** Design changes reach the app via
-Claude Code. iOS `ConduitUI/Components/` is the source of truth; Android mirrors
-value-for-value; the design project's `conduit-primitives.jsx` mirrors both. **Three
-in lockstep** — a component change touches all three. When the HTML primitive and the
-shipped native component disagree, the **native app wins** — fix the HTML, not the app.
+Design reference lives outside the repo (the "SWE Kitty" design project:
+`conduit-kit.jsx` tokens + `conduit-primitives.jsx` + rendered `Conduit.html`).
+When the HTML primitive and the shipped native component disagree, the **native
+app wins** — fix the HTML, not the app.
