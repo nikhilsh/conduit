@@ -5355,6 +5355,12 @@ final class SessionStore {
 
         statusBySession[status.session] = status
         if let p = status.preview { preview[status.session] = p }
+        // Mirror turn_phase from the status frame so reconnecting clients show
+        // the correct indicator immediately without waiting for a view_event
+        // replay (view_events are not buffered/replayed on reconnect).
+        if let tp = status.turnPhase {
+            turnPhaseBySession[status.session] = tp
+        }
 
         // Flush one queued-turn entry now that the agent is idle.
         if turnJustCompleted {

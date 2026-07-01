@@ -5647,6 +5647,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
     override fun onStatus(status: SessionStatus) {
         _statusBySession.value = _statusBySession.value + (status.session to status)
         status.preview?.let { _previews.value = _previews.value + (status.session to it) }
+        // Mirror turn_phase from the status frame so reconnecting clients show
+        // the correct indicator immediately without waiting for a view_event
+        // replay (view_events are not buffered/replayed on reconnect).
+        status.turnPhase?.let { phase ->
+            _turnPhaseBySession.update { it + (status.session to phase) }
+        }
         // Promote lifecycle from the phase the broker actually reported —
         // NOT a blanket `Live` (iOS PR #214). A status frame for a
         // recovered/exited session carries `phase: "exited…"`; that must

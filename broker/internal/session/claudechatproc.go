@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os/exec"
@@ -21,6 +22,10 @@ import (
 type chatProcess struct {
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
+	// publish routes view_events to session subscribers. Stored so Send can
+	// emit turn_phase:"thinking" the moment a turn starts (before the first
+	// token arrives from the CLI, which may take seconds on large contexts).
+	publish func([]byte)
 
 	mu     sync.Mutex
 	closed bool
@@ -87,7 +92,7 @@ func startChatProcess(
 		return nil, err
 	}
 
-	cp := &chatProcess{cmd: cmd, stdin: stdin}
+	cp := &chatProcess{cmd: cmd, stdin: stdin, publish: publish}
 	// Control-protocol dispatch (--permission-prompt-tool stdio):
 	// AskUserQuestion goes to the session's bridge (which holds it for
 	// the user's answer); every other can_use_tool is auto-allowed with
@@ -180,11 +185,23 @@ func (c *chatProcess) Send(text string) error {
 	// Latch the turn as in flight; the stream pump clears it on the
 	// turn-end `result` (see startChatProcess's onTurnEnd) or on EOF/Close.
 	c.turnActive = true
+	// Signal "thinking" immediately so the indicator transitions from the
+	// default three-dot animation before the first token arrives. On large
+	// contexts the pre-first-token wait can last many seconds; without this
+	// the phase stays "" (cleared at the previous turn's end) and the UI
+	// shows "typing" the whole time. The scan loop will overwrite to
+	// "writing" / "working" / "thinking" (extended) as events arrive.
+	c.turnPhase = "thinking"
 	startHook := c.onTurnStart
+	pub := c.publish
 	c.mu.Unlock()
 	// Fire turn-start hook outside the lock so it doesn't nest under c.mu.
 	if startHook != nil {
 		startHook()
+	}
+	// Publish view_event so connected clients update their indicator now.
+	if pub != nil {
+		publishTurnPhaseViewEvent(pub, "thinking")
 	}
 	return nil
 }
@@ -202,6 +219,20 @@ func (c *chatProcess) TurnActive() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.turnActive
+}
+
+// publishTurnPhaseViewEvent marshals and publishes a turn_phase view_event.
+// Shared by Send (turn-start "thinking" emit) and the emitPhase closure inside
+// processClaudeStreamOutput (per-token phase transitions).
+func publishTurnPhaseViewEvent(publish func([]byte), phase string) {
+	b, err := json.Marshal(map[string]any{
+		"type":  "view_event",
+		"view":  "turn_phase",
+		"event": map[string]any{"turn_phase": phase},
+	})
+	if err == nil {
+		publish(b)
+	}
 }
 
 // markTurnPhase sets the current turn sub-phase under c.mu. Called from the
