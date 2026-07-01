@@ -1,7 +1,9 @@
 # In Progress
 
-Items currently being built. On merge, move each to
-[VERIFY-CHECKLIST.md](VERIFY-CHECKLIST.md) under its release version.
+Items currently being built. On merge, move each to the single **Next release
+(pending)** section at the top of [VERIFY-CHECKLIST.md](VERIFY-CHECKLIST.md) —
+do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
+`/cut-release` cuts the tag.
 
 ---
 

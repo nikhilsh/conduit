@@ -38,10 +38,11 @@ fi
 ```
 
 After merge, run the Definition of Done: pipeline docs updated (move
-IN-PROGRESS.md entry → VERIFY-CHECKLIST.md under the release version),
-memory updated, shared checkout clean (no leaked files / stale worktrees),
-broker redeployed IF broker/ changed (/broker-redeploy — tagging does NOT
-deploy the broker).
+IN-PROGRESS.md entry → the single **Next release (pending)** section at the top
+of VERIFY-CHECKLIST.md — do NOT mint a new `vX.Y.Z` heading; merges accumulate
+there until `/cut-release` cuts the tag), memory updated, shared checkout clean
+(no leaked files / stale worktrees), broker redeployed IF broker/ changed
+(/broker-redeploy — tagging does NOT deploy the broker).
 
 Remove the merged worktree + branch explicitly — `gh pr merge
 --delete-branch` succeeds but silently leaves the local branch when a

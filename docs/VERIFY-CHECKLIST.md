@@ -1,23 +1,30 @@
 # Verify Checklist
 
-Merged and released features awaiting the owner's on-device verification,
-grouped by release version (newest first). Each item notes whether it needs
-app testing on a device or broker-behavior confirmation.
+Merged features awaiting the owner's on-device verification. The top section,
+**Next release (pending)**, accumulates every merge that has NOT yet shipped —
+they all go out together in the next tag, so they share ONE heading (do NOT mint
+a new `vX.Y.Z` per merge). Sections below it are already-released tags, newest
+first. Each item notes whether it needs app testing on a device or
+broker-behavior confirmation.
 
-When an item is verified, move it to [DONE.md](DONE.md). When cutting a
-release, the section for that version is the device-test punch list.
+When an item is verified, move it to [DONE.md](DONE.md). When `/cut-release`
+cuts the next tag, rename **Next release (pending)** to that version and open a
+fresh empty pending section above it; the just-stamped section is that release's
+device-test punch list.
 
 ---
 
-## v0.0.211
+## Next release (pending)
+
+_Merged but NOT yet released — these all ship together in the next tag.
+`/cut-release` stamps this section with the real version and opens a fresh empty
+pending section above it. Newest merge first._
 
 **Drop multi-question AskUserQuestion echo bubbles — iOS + Android. PR #789.**
 
 - **iOS + Android**: When a user answers a multi-question `AskUserQuestion`, the app joins per-question answers with `\n`. `dropPendingInputEchoes` previously only matched single-option echoes (`c in pendingOptionSet`), so the newline-joined answer slipped through as a plain user bubble alongside the collapsed chip. Fix: split by `\n` and drop if every non-empty line is in `pendingOptionSet`. Unit tests added on both platforms. [iOS + Android, **needs on-device verify**: trigger a multi-question AskUserQuestion, answer it — confirm no duplicate plain bubble appears next to the chip]
 
 ---
-
-## v0.0.210
 
 **Streaming assistant turn on the spine + typed-step tool ledger — iOS + Android. PRs #790, #791.**
 
@@ -28,16 +35,12 @@ _Diff-chip follow-up: `ViewEventFile` in core carries only `path+rev` — no add
 
 ---
 
-## v0.0.209
-
 **Credential source subtitle in box readiness checklist — iOS + Android + broker. PR #788.**
 
 - **Broker**: `AgentReadiness` now includes `credential_source` (`"env"` / `"box"` / `"app"`) in `/api/capabilities`. Old brokers omit the field; clients handle nil gracefully.
 - **iOS + Android**: readiness row shows a small dim subtitle when signed in — `"API key on box"`, `"Signed in on box"`, or `"Via Conduit app"`. [iOS + Android, **needs on-device verify**: open New Session → Box Readiness — each signed-in agent should show the source line below its name]
 
 ---
-
-## v0.0.208
 
 **Long-press user bubble copies whole message — iOS + Android. PR #786.**
 
@@ -51,15 +54,11 @@ _Diff-chip follow-up: `ViewEventFile` in core carries only `path+rev` — no add
 
 ---
 
-## v0.0.207
-
 **Restore --resume after broker restart when CONDUIT_SHARED_AGENT_CREDS is on. PR #785.**
 
 - **`chatConversationOnDisk` didn't check the shared config dir** — when `CONDUIT_SHARED_AGENT_CREDS` is on, Claude writes conversations to `CLAUDE_CONFIG_DIR=<conduitRoot>/agent-cred/.claude/` not the per-session `agent-home/.claude/`. Recovery was checking the (always-empty) per-session dir, clearing `resumeID`, and Claude spawned amnesiac — transcript rendered fine in UI but Claude had no memory. Fixed by also globbing the broker-owned config dir for the specific latched session id. [broker, **redeploy required**; verify: restart broker mid-session, send a new message — Claude should continue with context]
 
 ---
-
-## v0.0.206
 
 **Thinking vs typing indicator fix — broker + iOS + Android. PR #784.**
 
@@ -67,8 +66,6 @@ _Diff-chip follow-up: `ViewEventFile` in core carries only `path+rev` — no add
 - **iOS + Android mirror `turn_phase` from status frame** — `ingestStatus` now propagates `status.turnPhase` into `turnPhaseBySession` so reconnecting clients show the correct indicator immediately without waiting for a view_event replay. [iOS + Android, needs-device-verify: send a message, background the app mid-think, reopen — should show "thinking" dot not three dots]
 
 ---
-
-## v0.0.205
 
 **Command run block — collapse threshold + checkmark exit (iOS + Android). PR #779.**
 

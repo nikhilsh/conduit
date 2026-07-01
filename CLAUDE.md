@@ -137,12 +137,19 @@ Re-run the job before touching either.
 
 1. **ROADMAP.md** — backlog only. When starting work: cut from backlog, add an
    entry to **IN-PROGRESS.md** with branch + PR#.
-2. **IN-PROGRESS.md** — actively building. On merge: move the entry to
-   **VERIFY-CHECKLIST.md** under its release version. Remove the merged
-   worktree + branch (`git worktree remove --force`, `git branch -D`, `git
-   worktree prune`).
-3. **VERIFY-CHECKLIST.md** — merged + released, awaiting owner on-device
-   verification. When the owner verifies: move to **DONE.md**.
+2. **IN-PROGRESS.md** — actively building. On merge: move the entry to the
+   single **Next release (pending)** section at the top of
+   **VERIFY-CHECKLIST.md** — do NOT mint a new `vX.Y.Z` heading. Merged ≠
+   released: everything merged between two tags ships together in the next tag,
+   so it accumulates under that one pending heading (minting a version per merge
+   is what produced the phantom v0.0.205–211 headings while only v0.0.204 was
+   live). The real version is stamped only when `/cut-release` cuts the tag —
+   it renames **Next release (pending)** to `vX.Y.Z` and opens a fresh empty
+   pending section. Remove the merged worktree + branch (`git worktree remove
+   --force`, `git branch -D`, `git worktree prune`).
+3. **VERIFY-CHECKLIST.md** — **Next release (pending)** holds merged-not-yet-
+   released items; the versioned sections below it are released, awaiting owner
+   on-device verification. When the owner verifies: move to **DONE.md**.
 4. **DONE.md** — verified complete. Nothing moves backwards.
 
 Do the doc move as part of the work (ship playbook, merge-when-green, or
