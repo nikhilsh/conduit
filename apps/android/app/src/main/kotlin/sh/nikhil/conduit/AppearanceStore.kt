@@ -519,6 +519,49 @@ class AppearanceStore : ViewModel() {
         prefs?.edit()?.putBoolean(KEY_NEON_GLOW, value)?.apply()
     }
 
+    // ── Demo snapshot/restore ────────────────────────────────────────────────
+    //
+    // Captures all user-visible appearance properties so the demo mode shell
+    // can restore them when the reviewer exits — mirroring iOS
+    // `AppearanceStore.Snapshot` / `snapshot()` / `apply(_:)`.
+
+    /** Value-type capture of all persisted appearance properties. */
+    data class Snapshot(
+        val fontFamily: FontFamily,
+        val themeMode: ThemeMode,
+        val neonPalette: NeonPalette,
+        val neonGlow: Boolean,
+        val bodyPointSize: Float,
+        val terminalTheme: TerminalTheme,
+        val terminalFont: TerminalFont,
+    )
+
+    /** Capture the current appearance state as a [Snapshot]. */
+    fun snapshot(): Snapshot = Snapshot(
+        fontFamily = _fontFamily.value,
+        themeMode = _themeMode.value,
+        neonPalette = _neonPalette.value,
+        neonGlow = _neonGlow.value,
+        bodyPointSize = _bodyPointSize.value,
+        terminalTheme = _terminalTheme.value,
+        terminalFont = _terminalFont.value,
+    )
+
+    /**
+     * Restore all persisted appearance properties from a [Snapshot].
+     * Each setter persists to SharedPreferences — intentional: the
+     * pre-demo values are the real ones that must survive.
+     */
+    fun applySnapshot(s: Snapshot) {
+        setFontFamily(s.fontFamily)
+        setThemeMode(s.themeMode)
+        setNeonPalette(s.neonPalette)
+        setNeonGlow(s.neonGlow)
+        setBodyPointSize(s.bodyPointSize)
+        setTerminalTheme(s.terminalTheme)
+        setTerminalFont(s.terminalFont)
+    }
+
     companion object {
         /** Clamp range for [bodyPointSize] (matches iOS 12...20). */
         val BODY_POINT_SIZE_RANGE: ClosedFloatingPointRange<Float> = 12f..20f
