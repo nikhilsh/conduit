@@ -592,6 +592,8 @@ fun ChatPage(
     val showCommandDetail by appearanceStore.showCommandDetail.collectAsState()
     // §10 / §10b command-run Mono block flag (chat.commandRunBlock, default OFF).
     val commandRunBlock by appearanceStore.commandRunBlock.collectAsState()
+    // Working indicator style (debug.workingIndicatorStyle, default "Spine").
+    val workingIndicatorStyleRaw by appearanceStore.workingIndicatorStyle.collectAsState()
     // Fix 10: arm-B (Signature) coalesces consecutive tool turns into clusters.
     val chatStylePref by appearanceStore.chatStylePreference.collectAsState()
     val chatExperimentKilled by appearanceStore.chatExperimentKilled.collectAsState()
@@ -971,7 +973,14 @@ fun ChatPage(
                 // Show indicator only when there is no streaming overlay
                 // content (i.e. the pre-first-token thinking phase).
                 if (showTyping && streamingOverlayContent == null) {
-                    item { TypingIndicatorRow(session.assistant, agentAccent, turnPhase) }
+                    item {
+                        TypingIndicatorRow(
+                            session.assistant,
+                            agentAccent,
+                            turnPhase,
+                            workingIndicatorStyleRaw,
+                        )
+                    }
                 }
                 item { Spacer(Modifier.height(1.dp)) }
             }
@@ -2551,92 +2560,43 @@ private fun SendStatusFooter(ev: ConversationItem) {
  * while the agent is busy (Bug 3 / iOS `isAgentWorking` parity).
  *
  * [turnPhase] drives distinct visual states:
- *   "working" = tool executing (gear icon + "Working...")
- *   "writing" or null = pre-first-token thinking (three animated dots)
- *   ""        = thinking/waiting (three animated dots)
+ *   "working"  = pre-output tool execution -> ConduitWorkingIndicator (new 4-style indicator).
+ *   "thinking" = pre-output thinking       -> ConduitWorkingIndicator.
+ *   "writing" / null / "" -> three animated bouncing dots (active streaming, unchanged).
  */
 @Composable
 private fun TypingIndicatorRow(
-    @Suppress("UNUSED_PARAMETER") assistant: String,
+    assistant: String,
     @Suppress("UNUSED_PARAMETER") accent: Color,
     turnPhase: String? = null,
+    workingIndicatorStyleRaw: String = "Spine",
 ) {
     val neon = LocalNeonTheme.current
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val reduceMotion = remember {
-        android.provider.Settings.Global.getFloat(
-            context.contentResolver,
-            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
-            1f,
-        ) == 0f
-    }
-    // Shared infinite transition for three-dot writing state.
-    val writingTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "typing")
-    // iOS ConduitTypingIndicator: VStack (label above dots), no avatar icon.
-    // Label: mono bold uppercase ~11sp. Dots: neon.accent (writing) or
-    // neon.textDim/neon.accent (thinking/working). Dot size 7dp.
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        val label = when (turnPhase) {
-            "working" -> "WORKING..."
-            "thinking" -> "THINKING..."
-            else -> "ASSISTANT"
-        }
-        Text(
-            label,
-            fontFamily = neon.mono,
-            fontWeight = FontWeight.Bold,
-            fontSize = 11.sp,
-            color = neon.textDim,
+    if (turnPhase == "working" || turnPhase == "thinking") {
+        // Pre-output phases: the new four-style working indicator (debug-toggle driven);
+        // supersedes the legacy WORKING.../THINKING... label + single dot. status=null lets
+        // the component cycle its neutral verb set; reduce-motion is handled internally.
+        sh.nikhil.conduit.ui.components.ConduitWorkingIndicator(
+            style = sh.nikhil.conduit.ui.components.ConduitWorkingStyle.from(workingIndicatorStyleRaw),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            agent = assistant,
+            status = null,
         )
-        if (turnPhase == "working" || turnPhase == "thinking") {
-            // Single pulsing dot: smooth 800ms ease-in-out on both scale and alpha.
-            // Under reduceMotion: static dot, no animation.
-            val dotColor = if (turnPhase == "thinking") neon.textDim else neon.accent
-            if (reduceMotion) {
-                // Static dot — no animation under reduceMotion.
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .background(dotColor, CircleShape),
-                )
-            } else {
-                val pulseTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "singleDotPulse")
-                val dotScale by pulseTransition.animateFloat(
-                    initialValue = 0.55f,
-                    targetValue = 1.0f,
-                    animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-                        animation = androidx.compose.animation.core.tween(
-                            durationMillis = 800,
-                            easing = androidx.compose.animation.core.FastOutSlowInEasing,
-                        ),
-                        repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
-                    ),
-                    label = "singleDotScale",
-                )
-                val dotAlpha by pulseTransition.animateFloat(
-                    initialValue = 0.4f,
-                    targetValue = 1.0f,
-                    animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-                        animation = androidx.compose.animation.core.tween(
-                            durationMillis = 800,
-                            easing = androidx.compose.animation.core.FastOutSlowInEasing,
-                        ),
-                        repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
-                    ),
-                    label = "singleDotAlpha",
-                )
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .graphicsLayer { scaleX = dotScale; scaleY = dotScale; alpha = dotAlpha }
-                        .background(dotColor, CircleShape),
-                )
-            }
-        } else {
-            // Three staggered bouncing dots for writing/default state (neon.accent mirrors iOS)
+    } else {
+        // "writing" / null -> three bouncing dots under the ASSISTANT label (no robot icon,
+        // #828 parity). Active streaming — unchanged by the working-indicator handoff.
+        val writingTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "typing")
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                "ASSISTANT",
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp,
+                color = neon.textDim,
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 repeat(3) { i ->
                     val dotAlpha by writingTransition.animateFloat(

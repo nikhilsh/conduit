@@ -27,9 +27,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
+import sh.nikhil.conduit.ui.components.ConduitWorkingStyle
 
 /**
  * Staff-only Debug menu. Not reachable from regular Settings UI; the
@@ -57,6 +62,7 @@ fun DebugMenuScreen(
     val showSubagentPanel by appearance.showSubagentPanel.collectAsState()
     val experimentalNativeTerminal by appearance.experimentalNativeTerminal.collectAsState()
     val commandRunBlock by appearance.commandRunBlock.collectAsState()
+    val workingIndicatorStyleRaw by appearance.workingIndicatorStyle.collectAsState()
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -174,6 +180,48 @@ fun DebugMenuScreen(
                         appearance.setCommandRunBlock(enabled)
                     },
                 )
+            }
+
+            Spacer(Modifier.height(18.dp))
+
+            // Working indicator style selector (debug.workingIndicatorStyle).
+            // Rows of tappable chips — one per ConduitWorkingStyle.
+            SettingsSection("Working indicator") {
+                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Text(
+                        "Style (debug.workingIndicatorStyle)",
+                        fontFamily = neon.sans,
+                        fontSize = 13.sp,
+                        color = neon.textDim,
+                        modifier = Modifier.padding(bottom = 10.dp),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ConduitWorkingStyle.entries.forEach { s ->
+                            val selected = s.name == workingIndicatorStyleRaw
+                            Text(
+                                s.displayName,
+                                fontFamily = neon.mono,
+                                fontSize = 11.sp,
+                                color = if (selected) neon.accent else neon.textFaint,
+                                modifier = Modifier
+                                    .border(
+                                        width = 1.dp,
+                                        color = if (selected) neon.accent else neon.border,
+                                        shape = RoundedCornerShape(6.dp),
+                                    )
+                                    .clickable {
+                                        Telemetry.breadcrumb(
+                                            "debug_menu",
+                                            "working_indicator_style changed",
+                                            mapOf("style" to s.name),
+                                        )
+                                        appearance.setWorkingIndicatorStyle(s.name)
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                            )
+                        }
+                    }
+                }
             }
 
             Spacer(Modifier.height(18.dp))

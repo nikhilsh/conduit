@@ -762,7 +762,7 @@ extension ConduitUI {
                         // (pre-first-token thinking phase).
                         if isAgentWorking && !isReadOnly
                             && (streamingOverlayContent?.isEmpty ?? true) {
-                            ConduitTypingIndicator(turnPhase: turnPhase)
+                            ConduitTypingIndicator(turnPhase: turnPhase, agent: session.assistant)
                                 .padding(.horizontal, 16)
                                 .transition(.opacity)
                         }
@@ -2445,106 +2445,50 @@ private struct ConduitStructuredMarkdownView: View {
 // or "thinking". Falls back to three dots when turnPhase is nil (unknown).
 private struct ConduitTypingIndicator: View {
     var turnPhase: String? // "writing" | "working" | "thinking" | nil
+    var agent: String = "claude"
     @State private var phase = 0
-    // Dedicated smooth pulse for the single working/thinking dot.
-    @State private var pulse = false
     @Environment(\.neonTheme) private var neon
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let timer = Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()
 
-    private var isWorking: Bool { turnPhase == "working" }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(labelText)
-                .font(neon.mono(11).weight(.bold))
-                .foregroundStyle(neon.textDim)
-                .textCase(.uppercase)
-            indicatorDots
+        Group {
+            switch turnPhase {
+            case "working", "thinking":
+                // Pre-output phases: replaced by the new four-style WorkingIndicator.
+                // Style driven by the debug toggle (debug.workingIndicatorStyle, default .spine).
+                // status: nil lets the component cycle its neutral verb set; no live-activity
+                // string is threaded here (it would require plumbing through many layers).
+                ConduitUI.WorkingIndicator(
+                    style: ConduitWorkingDebug.current,
+                    agent: agent,
+                    status: nil
+                )
+            default:
+                // "writing" / nil — three bouncing dots (active streaming, unchanged).
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("assistant")
+                        .font(neon.mono(11).weight(.bold))
+                        .foregroundStyle(neon.textDim)
+                        .textCase(.uppercase)
+                    HStack(spacing: 5) {
+                        ForEach(0..<3, id: \.self) { i in
+                            Circle()
+                                .fill(neon.accent)
+                                .frame(width: 7, height: 7)
+                                .scaleEffect(phase == i ? 1.0 : 0.6)
+                                .opacity(phase == i ? 1.0 : 0.4)
+                                .neonGlowBox(phase == i ? neon.glowBox?.tinted(neon.accent) : nil)
+                                .animation(.easeInOut(duration: 0.3), value: phase)
+                        }
+                    }
+                }
+                .accessibilityLabel("Assistant is typing")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityLabel(accessibilityLabel)
         .onReceive(timer) { _ in
             phase = (phase + 1) % 3
-        }
-        .onAppear {
-            startPulseIfNeeded()
-        }
-        .onChange(of: turnPhase) { _, newPhase in
-            // Restart pulse when phase transitions to working/thinking
-            // (e.g. writing -> working). Reset first so the animation
-            // re-triggers cleanly.
-            pulse = false
-            if newPhase == "working" || newPhase == "thinking" {
-                startPulseIfNeeded()
-            }
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
-        ) { _ in
-            // Core Animation suspends repeatForever animations when the
-            // app is backgrounded; they never resume on their own when the
-            // view stays mounted. Re-kick the pulse whenever the app
-            // returns to the foreground.
-            guard turnPhase == "working" || turnPhase == "thinking" else { return }
-            guard !reduceMotion else { return }
-            pulse = false
-            startPulseIfNeeded()
-        }
-    }
-
-    /// Start the pulse animation when in working/thinking phase and
-    /// motion is not reduced. Extracted so onAppear, onChange, and the
-    /// foreground-restart all share one path.
-    private func startPulseIfNeeded() {
-        guard !reduceMotion else { return }
-        guard turnPhase == "working" || turnPhase == "thinking" else { return }
-        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
-            pulse = true
-        }
-    }
-
-    private var labelText: String {
-        switch turnPhase {
-        case "working": return "working..."
-        case "thinking": return "thinking..."
-        default: return "assistant"
-        }
-    }
-
-    private var accessibilityLabel: String {
-        switch turnPhase {
-        case "working": return "Agent is working"
-        case "thinking": return "Agent is thinking"
-        default: return "Assistant is typing"
-        }
-    }
-
-    @ViewBuilder
-    private var indicatorDots: some View {
-        switch turnPhase {
-        case "working", "thinking":
-            // Single pulsing dot: smooth continuous pulse independent of the 3-phase timer.
-            // Under reduceMotion: static dot, no animation.
-            Circle()
-                .fill(turnPhase == "thinking" ? neon.textDim : neon.accent)
-                .frame(width: 7, height: 7)
-                .scaleEffect(pulse ? 1.0 : 0.55)
-                .opacity(pulse ? 1.0 : 0.4)
-        default:
-            // Three bouncing dots for writing (current behavior)
-            HStack(spacing: 5) {
-                ForEach(0..<3, id: \.self) { i in
-                    Circle()
-                        .fill(neon.accent)
-                        .frame(width: 7, height: 7)
-                        .scaleEffect(phase == i ? 1.0 : 0.6)
-                        .opacity(phase == i ? 1.0 : 0.4)
-                        .neonGlowBox(phase == i ? neon.glowBox?.tinted(neon.accent) : nil)
-                        .animation(.easeInOut(duration: 0.3), value: phase)
-                }
-            }
         }
     }
 }
