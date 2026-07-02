@@ -3877,10 +3877,15 @@ final class SessionStore {
     func hasPendingAsk(sessionID: String) -> Bool {
         let items = conversationLog[sessionID] ?? []
         // Find the last non-user pending_input item, skipping trailing
-        // assistant/tool/system items of other kinds.
-        guard let last = items.last(where: {
+        // assistant/tool/system items that stream in after the question.
+        guard let idx = items.lastIndex(where: {
             $0.role.lowercased() != "user" && $0.kind.lowercased() == "pending_input"
         }) else { return false }
+        let last = items[idx]
+        // A user message AFTER the prompt means the answer was already sent (the
+        // broker consumes the pending ask on the first user turn), so the next
+        // message is a normal turn, not an answer.
+        if items[items.index(after: idx)...].contains(where: { $0.role.lowercased() == "user" }) { return false }
         // Optimistic client-side resolution flag.
         if resolvedPendingInputIDs.contains(last.id) { return false }
         // Belt-and-suspenders: if the item carries a persisted resolution marker

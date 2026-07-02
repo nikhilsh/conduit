@@ -323,10 +323,9 @@ struct SessionStoreTests {
         store.conversationLog[sessionID] = [pendingItem]
         #expect(store.hasPendingAsk(sessionID: sessionID))
 
-        // After a user message follows, it should be false (last non-user is still pending_input,
-        // but the user already answered -- the user echo is last overall).
-        // hasPendingAsk looks at last NON-user item, so it stays true until
-        // the pending_input is replaced by a normal assistant item.
+        // After the user answers, hasPendingAsk clears immediately: a user
+        // message following the prompt means the broker already consumed the
+        // ask, so the next message is a normal turn (not an answer).
         let userEcho = ConversationItem(
             id: "local-1", role: "user", kind: "message",
             status: "pending", content: "Yes",
@@ -337,10 +336,9 @@ struct SessionStoreTests {
             resultSummary: nil, planSteps: []
         )
         store.conversationLog[sessionID] = [pendingItem, userEcho]
-        // Last non-user is still the pending_input item -- turnActive=false would
-        // mean it's resolved; in practice the broker removes it. For the test:
-        // the predicate only looks at the last non-user kind.
-        #expect(store.hasPendingAsk(sessionID: sessionID))
+        // The user echo after the prompt clears it: the answer was sent, so a
+        // further message is a new turn, not an answer to the (consumed) ask.
+        #expect(!store.hasPendingAsk(sessionID: sessionID))
 
         // Replace the pending_input with a normal assistant response.
         let reply = ConversationItem(

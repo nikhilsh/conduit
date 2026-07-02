@@ -3761,10 +3761,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
     fun hasPendingAsk(sessionId: String): Boolean {
         val items = _conversationLog.value[sessionId] ?: return false
         // Find the last non-user pending_input item, skipping trailing
-        // assistant/tool/system items of other kinds.
-        val last = items.lastOrNull {
+        // assistant/tool/system items that stream in after the question.
+        val idx = items.indexOfLast {
             it.role.lowercase() != "user" && it.kind.lowercase() == "pending_input"
-        } ?: return false
+        }
+        if (idx < 0) return false
+        val last = items[idx]
+        // A user message AFTER the prompt means the answer was already sent (the
+        // broker consumes the pending ask on the first user turn), so the next
+        // message is a normal turn, not an answer.
+        if (items.drop(idx + 1).any { it.role.lowercase() == "user" }) return false
         // Optimistic client-side resolution flag.
         if (last.id in _resolvedPendingInputIDs.value) return false
         // Belt-and-suspenders: a resolved pending_input from the transcript carries
