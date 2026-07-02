@@ -277,148 +277,27 @@ private struct DemoSessionRow: View {
 }
 
 // MARK: - Demo chat view
+//
+// Routes the transcript body through the REAL read-only ConduitUI.ChatView so
+// the demo shows authentic chat rendering (code blocks, diff cards, handoff
+// cards, pending-input cards, plan checklists, subagent cards) rather than the
+// hand-rolled approximation that was here before.
+// The shell chrome (nav title, Exit-Demo button) lives in the parent
+// NavigationStack/DemoPhoneShell; only the transcript body is replaced.
 
 struct DemoChatView: View {
-    @Environment(\.neonTheme) private var neon
     let session: ProjectSession
 
-    private var items: [ConversationItem] {
-        DemoData.conversationBySession[session.id] ?? []
-    }
-
-    private var displayTitle: String {
-        session.displayName ?? session.name
-    }
-
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(items, id: \.id) { item in
-                        DemoChatRow(item: item)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 6)
-                    }
-                }
-                .padding(.bottom, 8)
-            }
-            disabledComposer
-        }
-        .background(neon.appBg)
-        .navigationTitle(displayTitle)
+        ConduitUI.ChatView(
+            session: session,
+            readOnlyItems: DemoData.conversationBySession[session.id] ?? [],
+            forceReadOnly: true
+        )
+        .navigationTitle(session.displayName ?? session.name)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             Telemetry.breadcrumb("demo", "chat_appeared", data: ["session": session.id])
         }
-    }
-
-    private var disabledComposer: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "lock")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(neon.textFaint)
-            Text("Connect a real server to start a session")
-                .font(neon.sans(14))
-                .foregroundStyle(neon.textFaint)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background(neon.surface)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(neon.border)
-                .frame(height: 1)
-        }
-    }
-}
-
-// MARK: - Demo chat row
-
-private struct DemoChatRow: View {
-    @Environment(\.neonTheme) private var neon
-    let item: ConversationItem
-
-    var body: some View {
-        switch item.role.lowercased() {
-        case "user":
-            userRow
-        case "tool":
-            toolRow
-        default:
-            assistantRow
-        }
-    }
-
-    private var userRow: some View {
-        HStack {
-            Spacer(minLength: 60)
-            Text(item.content)
-                .font(neon.sans(14))
-                .foregroundStyle(neon.text)
-                .multilineTextAlignment(.trailing)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(neon.codex.opacity(0.12))
-                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(neon.codex.opacity(0.25), lineWidth: 1))
-                )
-        }
-    }
-
-    private var assistantRow: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Circle()
-                .fill(neon.claude.opacity(0.18))
-                .frame(width: 22, height: 22)
-                .overlay(
-                    Text("C")
-                        .font(neon.mono(10).weight(.bold))
-                        .foregroundStyle(neon.claude)
-                )
-                .padding(.top, 2)
-            Text(item.content)
-                .font(neon.sans(14))
-                .foregroundStyle(neon.text)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-        }
-    }
-
-    private var toolRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "terminal")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(neon.green)
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 2) {
-                if let toolName = item.toolName {
-                    Text(toolName)
-                        .font(neon.mono(11).weight(.bold))
-                        .foregroundStyle(neon.green)
-                }
-                if let cmd = item.command {
-                    Text(cmd)
-                        .font(neon.mono(11))
-                        .foregroundStyle(neon.textDim)
-                        .lineLimit(2)
-                }
-                if let code = item.exitCode {
-                    Text("exit \(code)")
-                        .font(neon.mono(10))
-                        .foregroundStyle(code == 0 ? neon.green : neon.accent)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(neon.codeBg)
-                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(neon.border, lineWidth: 1))
-        )
     }
 }
