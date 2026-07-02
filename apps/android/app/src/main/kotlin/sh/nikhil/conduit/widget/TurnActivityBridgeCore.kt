@@ -109,6 +109,20 @@ class TurnActivityBridgeCore(
                         lastActivityAt[sid] = item.timestampMillis
                         endedSessions.remove(sid)
                     }
+                    TurnActivityItem.Kind.PENDING_INPUT -> {
+                        // Surface pending-input items so the model can flip the
+                        // card to "needs you" (or back to "running" when resolved).
+                        intents.add(TurnActivityIntent.Observe(sid, session.agentName, item))
+                        if (!item.pendingResolved) {
+                            // An unresolved ask does NOT count as "activity" for the
+                            // idle-timeout clock -- the card should live until answered,
+                            // not until 5 s after the question appeared.
+                        } else {
+                            // Resolved: count as activity so the idle clock can fire.
+                            lastActivityAt[sid] = item.timestampMillis
+                        }
+                        endedSessions.remove(sid)
+                    }
                     TurnActivityItem.Kind.EXIT -> {
                         if (sid !in endedSessions) {
                             intents.add(TurnActivityIntent.End(sid))

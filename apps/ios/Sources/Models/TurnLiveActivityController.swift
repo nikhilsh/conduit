@@ -576,20 +576,28 @@ public enum TurnLiveActivityMapping {
         var interruptKind: TurnInterruptKind?
         var prompt: String?
         var optionCount = 0
+        var pendingResolved = false
         if kind == .pendingInput {
-            // Handoff Part B: distinguish an n-way question (choice) from a
-            // binary tool gate (permission) so the lock screen can show the
-            // honest CTA. The data is heuristic — the core surfaces the same
-            // `pending_input` kind for both — but `content` + `pendingOptions`
-            // carry enough to classify.
-            let classified = classifyPending(
-                content: item.content,
-                options: item.pendingOptions,
-                command: item.command
-            )
-            interruptKind = classified.kind
-            prompt = classified.prompt
-            optionCount = item.pendingOptions.count
+            // Check resolution first: if the broker persisted a resolution
+            // marker in content, the "needs you" moment is over regardless of
+            // whether the question was answered or timed out.
+            let resolution = ConduitUI.ChatViewModel.parsePendingResolution(item.content)
+            pendingResolved = resolution != nil
+            if !pendingResolved {
+                // Handoff Part B: distinguish an n-way question (choice) from a
+                // binary tool gate (permission) so the lock screen can show the
+                // honest CTA. The data is heuristic -- the core surfaces the same
+                // `pending_input` kind for both -- but `content` + `pendingOptions`
+                // carry enough to classify.
+                let classified = classifyPending(
+                    content: item.content,
+                    options: item.pendingOptions,
+                    command: item.command
+                )
+                interruptKind = classified.kind
+                prompt = classified.prompt
+                optionCount = item.pendingOptions.count
+            }
         }
         return TurnActivityItem(
             id: item.id,
@@ -601,13 +609,19 @@ public enum TurnLiveActivityMapping {
             timestamp: timestamp,
             interruptKind: interruptKind,
             prompt: prompt,
-            optionCount: optionCount
+            optionCount: optionCount,
+            pendingResolved: pendingResolved
         )
     }
 
     /// Sentinel the Rust core prepends to a pending-input message
     /// (`core/src/conversation.rs`); stripped before display.
     private static let pendingSentinel = "[[conduit:needs-input]]"
+
+    /// Prefix of the resolution marker the broker appends to an answered
+    /// pending-input card's content. A line starting with this token must
+    /// never render as question prose.
+    private static let resolvedMarkerPrefix = "[[conduit:resolved]]"
 
     /// Classify a `pending_input` item as a binary permission gate or an
     /// n-way choice, and extract a concise prompt. Heuristic, biased toward
@@ -650,16 +664,17 @@ public enum TurnLiveActivityMapping {
         return (.choice, prompt)
     }
 
-    /// Concise one-line prompt for the card: sentinel stripped, first
-    /// non-empty line, capped. Falls back to the command, then a generic
-    /// label.
+    /// Concise one-line prompt for the card: sentinel stripped, resolved-
+    /// marker lines dropped, first non-empty line, capped. Falls back to
+    /// the command, then a generic label. Defense-in-depth: even a live-
+    /// but-not-yet-resolved card never shows the `[[conduit:resolved]]`
+    /// marker on the lock screen.
     static func pendingPrompt(content: String, command: String?) -> String {
-        let stripped = content.replacingOccurrences(of: pendingSentinel, with: "")
-        let firstLine = stripped
+        let lines = content
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map { $0.trimmingCharacters(in: .whitespaces) }
-            .first(where: { !$0.isEmpty })
-        if let firstLine, !firstLine.isEmpty {
+            .filter { !$0.isEmpty && $0 != pendingSentinel && !$0.hasPrefix(resolvedMarkerPrefix) }
+        if let firstLine = lines.first, !firstLine.isEmpty {
             return String(firstLine.prefix(140))
         }
         if let command, !command.isEmpty { return command }

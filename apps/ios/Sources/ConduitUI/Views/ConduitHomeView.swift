@@ -526,23 +526,21 @@ extension ConduitUI {
         }
 
         /// The Home "needs you" banner state, or nil when no session is
-        /// awaiting the user. A session needs the user when the LAST item in
-        /// its transcript is a non-user `pending_input` (approval prompt /
-        /// options menu) — the same signal the chat view uses for its pending
-        /// card. The detection lives in the pure `HomeViewModel` so it's
-        /// unit-testable; here we just resolve each session's last item.
+        /// awaiting the user. Routes through `store.hasPendingAsk` (the same
+        /// resolution-aware gate used for answer routing) so a resolved
+        /// pending_input no longer keeps the banner up. Pure string-based
+        /// `HomeViewModel.isAwaitingInput`/`needsYouBanner` are kept for
+        /// unit tests; here we use the richer store gate.
         private var needsYouBanner: ConduitUI.NeedsYouBanner? {
-            let candidates = store.sessions.map { s -> (id: String, title: String, agent: String, lastItemRole: String?, lastItemKind: String?) in
-                let last = store.conversationLog[s.id]?.last
-                return (
+            let items = store.sessions.compactMap { s -> ConduitUI.NeedsYouBanner.Item? in
+                guard store.hasPendingAsk(sessionID: s.id) else { return nil }
+                return ConduitUI.NeedsYouBanner.Item(
                     id: s.id,
                     title: store.displayName(for: s),
-                    agent: s.assistant,
-                    lastItemRole: last?.role,
-                    lastItemKind: last?.kind
+                    agent: s.assistant
                 )
             }
-            let banner = ConduitUI.HomeViewModel.needsYouBanner(candidates)
+            let banner = ConduitUI.NeedsYouBanner(sessions: items)
             return banner.count > 0 ? banner : nil
         }
 

@@ -323,10 +323,9 @@ struct SessionStoreTests {
         store.conversationLog[sessionID] = [pendingItem]
         #expect(store.hasPendingAsk(sessionID: sessionID))
 
-        // After a user message follows, it should be false (last non-user is still pending_input,
-        // but the user already answered -- the user echo is last overall).
-        // hasPendingAsk looks at last NON-user item, so it stays true until
-        // the pending_input is replaced by a normal assistant item.
+        // After the user answers, hasPendingAsk clears immediately: a user
+        // message following the prompt means the broker already consumed the
+        // ask, so the next message is a normal turn (not an answer).
         let userEcho = ConversationItem(
             id: "local-1", role: "user", kind: "message",
             status: "pending", content: "Yes",
@@ -337,10 +336,9 @@ struct SessionStoreTests {
             resultSummary: nil, planSteps: []
         )
         store.conversationLog[sessionID] = [pendingItem, userEcho]
-        // Last non-user is still the pending_input item -- turnActive=false would
-        // mean it's resolved; in practice the broker removes it. For the test:
-        // the predicate only looks at the last non-user kind.
-        #expect(store.hasPendingAsk(sessionID: sessionID))
+        // The user echo after the prompt clears it: the answer was sent, so a
+        // further message is a new turn, not an answer to the (consumed) ask.
+        #expect(!store.hasPendingAsk(sessionID: sessionID))
 
         // Replace the pending_input with a normal assistant response.
         let reply = ConversationItem(
@@ -354,6 +352,62 @@ struct SessionStoreTests {
         )
         store.conversationLog[sessionID] = [pendingItem, userEcho, reply]
         #expect(!store.hasPendingAsk(sessionID: sessionID))
+    }
+
+    // MARK: hasPendingAsk scanning fix (Bug A)
+
+    private func makeConversationItem(
+        id: String, role: String, kind: String, content: String = ""
+    ) -> ConversationItem {
+        ConversationItem(
+            id: id, role: role, kind: kind,
+            status: "done", content: content,
+            ts: "2026-06-12T10:00:00Z", files: [],
+            toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+            diffSummary: nil, pendingOptions: [],
+            sourceAgent: nil, targetAgent: nil, taskText: nil,
+            resultSummary: nil, planSteps: []
+        )
+    }
+
+    /// pending_input followed by an assistant message should still be pending
+    /// (the old strict-last-non-user check would return false here).
+    @Test func hasPendingAskIgnoresTrailingAssistantItems() {
+        let store = SessionStore()
+        let sid = "test-trailing-\(UUID().uuidString)"
+        let pi = makeConversationItem(id: "pi-1", role: "assistant", kind: "pending_input",
+                                      content: "Approve?")
+        let followUp = makeConversationItem(id: "msg-1", role: "assistant", kind: "message",
+                                            content: "Thinking...")
+        store.conversationLog[sid] = [pi, followUp]
+        #expect(store.hasPendingAsk(sessionID: sid),
+                "pending_input with trailing assistant msg should still be pending")
+    }
+
+    /// A resolved pending_input (broker marker present) followed by chatter
+    /// must NOT be pending -- the answer is already done.
+    @Test func hasPendingAskFalseWhenResolvedPendingInputFollowedByChatter() {
+        let store = SessionStore()
+        let sid = "test-resolved-trailing-\(UUID().uuidString)"
+        let resolvedContent = "[[conduit:needs-input]]\n[[conduit:resolved]]{\"answered\":true,\"answer\":\"Yes\"}\nApprove?"
+        let pi = makeConversationItem(id: "pi-1", role: "assistant", kind: "pending_input",
+                                      content: resolvedContent)
+        let followUp = makeConversationItem(id: "msg-1", role: "assistant", kind: "message",
+                                            content: "Done!")
+        store.conversationLog[sid] = [pi, followUp]
+        #expect(!store.hasPendingAsk(sessionID: sid),
+                "resolved pending_input with trailing chatter must NOT be pending")
+    }
+
+    /// No pending_input in the log at all: must return false.
+    @Test func hasPendingAskFalseWhenNoPendingInput() {
+        let store = SessionStore()
+        let sid = "test-no-pi-\(UUID().uuidString)"
+        let msg = makeConversationItem(id: "m1", role: "assistant", kind: "message",
+                                       content: "Hello")
+        store.conversationLog[sid] = [msg]
+        #expect(!store.hasPendingAsk(sessionID: sid),
+                "no pending_input means not pending")
     }
 
     /// `answerPendingInput` must create an optimistic echo and register a

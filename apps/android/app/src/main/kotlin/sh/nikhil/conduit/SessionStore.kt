@@ -3766,15 +3766,26 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     /**
-     * True when the session is blocked on a pending AskUserQuestion: the last
-     * non-user item in the typed conversation log is an unanswered
-     * `pending_input` kind. Used to bypass the turn-queue gate so the answer
-     * reaches the broker immediately instead of deadlocking in the queue.
+     * True when the session is blocked on a pending AskUserQuestion. Finds
+     * the LAST non-user `pending_input` item, ignoring trailing assistant/
+     * tool/system items that stream in after the question, and returns true
+     * only if that item is unresolved. Used to bypass the turn-queue gate so
+     * the answer reaches the broker immediately instead of deadlocking.
      */
     fun hasPendingAsk(sessionId: String): Boolean {
         val items = _conversationLog.value[sessionId] ?: return false
-        val last = items.lastOrNull { it.role.lowercase() != "user" } ?: return false
-        if (last.kind.lowercase() != "pending_input") return false
+        // Find the last non-user pending_input item, skipping trailing
+        // assistant/tool/system items that stream in after the question.
+        val idx = items.indexOfLast {
+            it.role.lowercase() != "user" && it.kind.lowercase() == "pending_input"
+        }
+        if (idx < 0) return false
+        val last = items[idx]
+        // A user message AFTER the prompt means the answer was already sent (the
+        // broker consumes the pending ask on the first user turn), so the next
+        // message is a normal turn, not an answer.
+        if (items.drop(idx + 1).any { it.role.lowercase() == "user" }) return false
+        // Optimistic client-side resolution flag.
         if (last.id in _resolvedPendingInputIDs.value) return false
         // Belt-and-suspenders: a resolved pending_input from the transcript carries
         // the [[conduit:resolved]] marker in content even after close+reopen.

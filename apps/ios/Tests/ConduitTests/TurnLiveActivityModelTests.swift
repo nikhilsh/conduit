@@ -446,6 +446,105 @@ struct TurnLiveActivityModelTests {
             Issue.record("expected .update for stale item on live activity, got \(effect)")
         }
     }
+
+    // MARK: - Resolved pending-input (Bug B2)
+
+    /// A resolved pending-input on an already-active card must flip status
+    /// back to "running" so the idle tick can close the card.
+    @Test func resolvedPendingInputFlipsStatusToRunning() {
+        var model = TurnActivityModel(idleTimeout: 5)
+        let t0 = Date()
+        // Start: unresolved pending question.
+        _ = model.apply(
+            item: TurnActivityItem(id: "p1", kind: .pendingInput, timestamp: t0,
+                                   interruptKind: .choice, prompt: "Which version?",
+                                   pendingResolved: false),
+            sessionID: "s1", agentName: "claude"
+        )
+        #expect(model.contentState?.status == "pending")
+
+        // Broker persists resolution: same item but now pendingResolved = true.
+        let effect = model.apply(
+            item: TurnActivityItem(id: "p1", kind: .pendingInput, timestamp: t0,
+                                   pendingResolved: true),
+            sessionID: "s1", agentName: "claude"
+        )
+
+        // Should flip to update with status "running".
+        guard case let .update(state) = effect else {
+            Issue.record("expected .update for resolved pending-input, got \(effect)")
+            return
+        }
+        #expect(state.status == "running", "resolved pending-input must set status=running")
+        #expect(state.interruptKind == nil, "interrupt payload must be cleared")
+        #expect(state.prompt == nil, "prompt must be cleared")
+    }
+
+    /// After a resolved pending-input flips status to running, idle tick
+    /// must be able to close the card.
+    @Test func resolvedPendingInputAllowsIdleClose() {
+        var model = TurnActivityModel(idleTimeout: 5)
+        let t0 = Date()
+        _ = model.apply(
+            item: TurnActivityItem(id: "p1", kind: .pendingInput, timestamp: t0,
+                                   pendingResolved: false),
+            sessionID: "s1", agentName: "claude"
+        )
+        // Resolve it.
+        _ = model.apply(
+            item: TurnActivityItem(id: "p1", kind: .pendingInput, timestamp: t0,
+                                   pendingResolved: true),
+            sessionID: "s1", agentName: "claude"
+        )
+        // Past idle timeout now -- card should close.
+        let tickEffect = model.tick(now: t0.addingTimeInterval(10))
+        if case .end = tickEffect { } else {
+            Issue.record("expected idle .end after resolved pending-input, got \(tickEffect)")
+        }
+    }
+
+    /// A resolved pending-input with NO active card must not open a new one.
+    @Test func resolvedPendingInputDoesNotStartNewActivity() {
+        var model = TurnActivityModel(idleTimeout: 5)
+        let effect = model.apply(
+            item: TurnActivityItem(id: "p1", kind: .pendingInput, timestamp: Date(),
+                                   pendingResolved: true),
+            sessionID: "s1", agentName: "claude"
+        )
+        #expect(effect == .noop, "resolved pending-input must not open a new card")
+        #expect(!model.isActive)
+    }
+}
+
+// MARK: - pendingPrompt resolved-marker filtering (Bug B2)
+
+@Suite("TurnLiveActivityMapping prompt filtering")
+struct TurnLiveActivityMappingPromptTests {
+
+    /// pendingPrompt must strip the [[conduit:resolved]] line and never
+    /// return it as the displayed prompt.
+    @Test func pendingPromptStripsResolvedMarker() {
+        let content = "[[conduit:needs-input]]\n[[conduit:resolved]]{\"answered\":true,\"answer\":\"Yes\"}\nApprove the push?"
+        let prompt = TurnLiveActivityMapping.pendingPrompt(content: content, command: nil)
+        #expect(!prompt.contains("[[conduit:resolved]]"),
+                "resolved marker must never appear in the prompt")
+        #expect(prompt == "Approve the push?",
+                "first non-sentinel, non-marker line must be the prompt")
+    }
+
+    /// A fully resolved card with no prose lines must fall back to the command.
+    @Test func pendingPromptFallsBackToCommandWhenOnlyMarkerLines() {
+        let content = "[[conduit:needs-input]]\n[[conduit:resolved]]{\"answered\":false}"
+        let prompt = TurnLiveActivityMapping.pendingPrompt(content: content, command: "git push")
+        #expect(prompt == "git push")
+    }
+
+    /// Without command either, must return generic label.
+    @Test func pendingPromptGenericFallback() {
+        let content = "[[conduit:needs-input]]\n[[conduit:resolved]]{\"answered\":false}"
+        let prompt = TurnLiveActivityMapping.pendingPrompt(content: content, command: nil)
+        #expect(prompt == "Needs your input")
+    }
 }
 
 /// Round-3 §2 helpers around the bridge shell.

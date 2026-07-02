@@ -177,4 +177,98 @@ class TurnActivityModelTest {
         // (or vanishes) at a different point in the conversation.
         assertEquals(5_000L, TurnActivityModel.DEFAULT_IDLE_TIMEOUT_MILLIS)
     }
+
+    // --- PENDING_INPUT + pendingResolved (Bug B2 Android mirror) ---
+
+    @Test
+    fun pendingInput_startsActivityWithPendingStatus() {
+        val model = TurnActivityModel()
+        val effect = model.apply(
+            item = item("p1", TurnActivityItem.Kind.PENDING_INPUT, timestampMillis = 1_000L),
+            sessionID = "s1",
+            agentName = "claude",
+        )
+        assertTrue("expected Start for PENDING_INPUT, got $effect", effect is TurnActivityEffect.Start)
+        effect as TurnActivityEffect.Start
+        assertEquals("pending", effect.state.status)
+    }
+
+    @Test
+    fun pendingInput_flipsRunningActivityToPending() {
+        val model = TurnActivityModel()
+        model.apply(item("a", TurnActivityItem.Kind.TOOL, toolName = "bash", timestampMillis = 1_000L), "s1", "claude")
+        val effect = model.apply(
+            item = item("p1", TurnActivityItem.Kind.PENDING_INPUT, timestampMillis = 2_000L),
+            sessionID = "s1",
+            agentName = "claude",
+        )
+        assertTrue("expected Update for PENDING_INPUT on active, got $effect", effect is TurnActivityEffect.Update)
+        effect as TurnActivityEffect.Update
+        assertEquals("pending", effect.state.status)
+    }
+
+    @Test
+    fun idleTickSparesPendingActivity() {
+        // An approval can wait minutes -- the idle timeout must not reap
+        // a "needs you" card; only a fresh item or a session exit may.
+        val model = TurnActivityModel(idleTimeoutMillis = 5_000L)
+        model.apply(item("p1", TurnActivityItem.Kind.PENDING_INPUT, timestampMillis = 1_000L), "s1", "claude")
+        // Well past idle timeout.
+        assertEquals(TurnActivityEffect.Noop, model.tick(600_000L))
+        assertTrue(model.isActive)
+    }
+
+    @Test
+    fun resolvedPendingInput_flipsStatusToRunning() {
+        // A resolved pending-input (pendingResolved=true) on an active card
+        // must flip status back to "running" so the idle tick can close it.
+        val model = TurnActivityModel(idleTimeoutMillis = 5_000L)
+        model.apply(item("p1", TurnActivityItem.Kind.PENDING_INPUT, timestampMillis = 1_000L), "s1", "claude")
+        assertEquals("pending", model.contentState?.status)
+
+        val effect = model.apply(
+            item = TurnActivityItem(
+                id = "p1",
+                kind = TurnActivityItem.Kind.PENDING_INPUT,
+                timestampMillis = 1_000L,
+                pendingResolved = true,
+            ),
+            sessionID = "s1",
+            agentName = "claude",
+        )
+        assertTrue("expected Update for resolved, got $effect", effect is TurnActivityEffect.Update)
+        effect as TurnActivityEffect.Update
+        assertEquals("running", effect.state.status)
+        assertNull("prompt must be cleared", effect.state.prompt)
+    }
+
+    @Test
+    fun resolvedPendingInput_allowsIdleClose() {
+        // After a resolved pending-input flips to "running", idle tick must
+        // close the card (mirrors iOS test).
+        val model = TurnActivityModel(idleTimeoutMillis = 5_000L)
+        model.apply(item("p1", TurnActivityItem.Kind.PENDING_INPUT, timestampMillis = 1_000L), "s1", "claude")
+        // Resolve it.
+        model.apply(
+            TurnActivityItem(id = "p1", kind = TurnActivityItem.Kind.PENDING_INPUT,
+                timestampMillis = 1_000L, pendingResolved = true),
+            "s1", "claude",
+        )
+        // 10 s past last activity -- should close.
+        val tickEffect = model.tick(11_000L)
+        assertTrue("expected End after resolved+idle, got $tickEffect", tickEffect is TurnActivityEffect.End)
+    }
+
+    @Test
+    fun resolvedPendingInput_doesNotStartNewActivity() {
+        // A resolved pending-input with no active card must not open one.
+        val model = TurnActivityModel(idleTimeoutMillis = 5_000L)
+        val effect = model.apply(
+            TurnActivityItem(id = "p1", kind = TurnActivityItem.Kind.PENDING_INPUT,
+                timestampMillis = 1_000L, pendingResolved = true),
+            "s1", "claude",
+        )
+        assertEquals(TurnActivityEffect.Noop, effect)
+        assertFalse(model.isActive)
+    }
 }

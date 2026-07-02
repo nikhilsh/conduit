@@ -406,10 +406,28 @@ internal data class NeedsYouBanner(val sessions: List<NeedsYouItem>) {
     val primaryId: String? get() = sessions.firstOrNull()?.id
 }
 
-/** True when [conversation]'s last item is an unanswered non-user `pending_input`. */
+/**
+ * True when [conversation] contains an unanswered `pending_input` item.
+ * Finds the LAST non-user `pending_input` item (ignoring trailing assistant/
+ * tool/system items that stream in after the question), then confirms it is
+ * unresolved. Mirrors [SessionStore.hasPendingAsk] and the iOS banner fix.
+ */
 internal fun isAwaitingInput(conversation: List<ConversationItem>?): Boolean {
-    val last = conversation?.lastOrNull() ?: return false
-    return last.role.lowercase() != "user" && last.kind.lowercase() == "pending_input"
+    val items = conversation ?: return false
+    // Find the last non-user pending_input item, skipping trailing
+    // assistant/tool/system items of other kinds (Bug A: a streamed assistant
+    // message must not mask an unanswered question).
+    val lastIdx = items.indexOfLast {
+        it.role.lowercase() != "user" && it.kind.lowercase() == "pending_input"
+    }
+    if (lastIdx < 0) return false
+    // A user reply AFTER the prompt means the user has acted — this display
+    // surface (home banner / approvals queue) clears. Routing keys off the
+    // resolution marker / resolvedPendingInputIDs instead (SessionStore).
+    if (items.drop(lastIdx + 1).any { it.role.lowercase() == "user" }) return false
+    // Belt-and-suspenders: the broker's resolution marker in content.
+    if (sh.nikhil.conduit.ui.PendingQuestions.parsePendingResolution(items[lastIdx].content)?.answered == true) return false
+    return true
 }
 
 /**
