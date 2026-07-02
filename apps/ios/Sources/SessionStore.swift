@@ -11,12 +11,64 @@ import UIKit
 // place. Parse to epoch seconds instead; empty/unparseable sorts as the NEWEST
 // so an in-flight reply stays BELOW the user echo that triggered it (device
 // bug: agent reply rendered above the user's prompt).
+//
+// Normalization: the broker stamps user-prompt transcript entries with Go's
+// time.RFC3339Nano (nanosecond precision, 1-9 fractional digits, trailing
+// zeros trimmed). iOS ISO8601DateFormatter only handles exactly 3 fractional
+// digits (withFractionalSeconds) or zero. Everything else parses as nil and
+// was sorting to .greatestFiniteMagnitude (newest slot), placing the user
+// answer BELOW the agent reply. Fix: normalize the fractional-seconds
+// component to exactly 3 digits before handing to the formatter.
+// Android's Instant.parse handles nanoseconds natively, so Android is fine.
 private let conduitTsFractional: ISO8601DateFormatter = {
     let f = ISO8601DateFormatter()
     f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     return f
 }()
 private let conduitTsPlain = ISO8601DateFormatter()
+
+// Matches the fractional-seconds group immediately before the timezone
+// designator in an RFC3339 string: e.g. ".123456789" in
+// "2026-07-02T14:49:00.123456789Z" or ".5" in "...T10:00:00.5+09:00".
+// The timezone portion is captured (group 2) so we can reassemble the string.
+private let conduitTsFractionalRegex: NSRegularExpression = {
+    // Pattern: literal dot, one-or-more digits (group 1), then the tz (group 2).
+    // Timezone is Z or +/-HH:MM (RFC3339 only allows these two forms).
+    // Raw string: \. = literal dot in regex; \d = digit class; [+-] = char class.
+    try! NSRegularExpression(pattern: #"\.(\d+)(Z|[+-]\d{2}:\d{2})$"#)
+}()
+
+/// Normalizes fractional seconds to exactly 3 digits (truncating or
+/// zero-padding) so ISO8601DateFormatter withFractionalSeconds can parse
+/// RFC3339 strings with any number of fractional digits (1-9).
+/// Returns the original string unchanged if there are no fractional seconds.
+private func conduitNormalizeFractionalSeconds(_ ts: String) -> String {
+    let nsTs = ts as NSString
+    let range = NSRange(location: 0, length: nsTs.length)
+    guard let match = conduitTsFractionalRegex.firstMatch(in: ts, range: range) else {
+        return ts // no fractional component — return as-is for plain formatter
+    }
+    let fracRange = match.range(at: 1)
+    let tzRange = match.range(at: 2)
+    guard fracRange.location != NSNotFound, tzRange.location != NSNotFound else {
+        return ts
+    }
+    let frac = nsTs.substring(with: fracRange) // e.g. "123456789" or "5"
+    let tz = nsTs.substring(with: tzRange)     // e.g. "Z" or "+09:00"
+
+    // Truncate to 3 digits or pad with trailing zeros to reach 3.
+    let normalized: String
+    if frac.count >= 3 {
+        normalized = String(frac.prefix(3))
+    } else {
+        normalized = frac + String(repeating: "0", count: 3 - frac.count)
+    }
+
+    // Reassemble: everything before the "." + "." + normalized + timezone.
+    let dotPos = match.range(at: 0).location // start of whole match (the ".")
+    let prefix = nsTs.substring(to: dotPos)
+    return "\(prefix).\(normalized)\(tz)"
+}
 
 // Thread-safe memoization cache for conduitConversationTsEpoch.
 // The same ts strings re-appear on every refresh (every streamed delta
@@ -34,10 +86,13 @@ func conduitConversationTsEpoch(_ ts: String) -> Double {
     conduitTsEpochCacheLock.lock()
     defer { conduitTsEpochCacheLock.unlock() }
     if let cached = conduitTsEpochCache[ts] { return cached }
+    // Normalize fractional seconds to exactly 3 digits so the fractional
+    // formatter can handle Go's RFC3339Nano output (1-9 variable digits).
+    let normalized = conduitNormalizeFractionalSeconds(ts)
     let epoch: Double
-    if let d = conduitTsFractional.date(from: ts) {
+    if let d = conduitTsFractional.date(from: normalized) {
         epoch = d.timeIntervalSince1970
-    } else if let d = conduitTsPlain.date(from: ts) {
+    } else if let d = conduitTsPlain.date(from: normalized) {
         epoch = d.timeIntervalSince1970
     } else {
         epoch = .greatestFiniteMagnitude

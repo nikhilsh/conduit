@@ -1155,3 +1155,120 @@ struct SessionStoreAITitleTests {
         #expect(chipIdx < laterIdx, "answered chip must sort before the later assistant reply")
     }
 }
+
+// MARK: - conduitConversationTsEpoch — nanosecond RFC3339 parsing (bug fix)
+
+/// Pins the nanosecond-RFC3339 parse fix: the broker stamps user-prompt
+/// transcript entries with Go's time.RFC3339Nano (1-9 fractional digits,
+/// trailing zeros trimmed). Before this fix, iOS ISO8601DateFormatter parsed
+/// only exactly-0 or exactly-3 fractional digits; anything else returned nil
+/// and sorted as .greatestFiniteMagnitude (newest/bottom), placing the user
+/// answer BELOW the agent reply. The fix normalizes to exactly 3 digits first.
+@Suite("conduitConversationTsEpoch — nanosecond RFC3339")
+struct ConversationTsNanosecondTests {
+
+    // Millisecond-precision reference for "2026-07-02T14:49:00.123Z".
+    private let referenceEpoch: Double = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: "2026-07-02T14:49:00.123Z")!.timeIntervalSince1970
+    }()
+
+    // 1. Nanosecond ts parses to a FINITE epoch equal (within 1ms) to
+    //    the millisecond-truncated form.
+    @Test func nanosecondTsIsParseable() {
+        let epoch = conduitConversationTsEpoch("2026-07-02T14:49:00.123456789Z")
+        #expect(epoch < Double.greatestFiniteMagnitude, "nanosecond ts must parse finite")
+        #expect(abs(epoch - referenceEpoch) < 0.001, "must be within 1ms of the ms-precision equivalent")
+    }
+
+    // 2a. 1-digit fractional (.5Z) parses finite and equals .500 reference.
+    @Test func oneDigitFractionalParses() {
+        let ref = conduitConversationTsEpoch("2026-07-02T14:49:00.500Z")
+        let got = conduitConversationTsEpoch("2026-07-02T14:49:00.5Z")
+        #expect(got < Double.greatestFiniteMagnitude, "1-digit fractional must parse finite")
+        #expect(abs(got - ref) < 0.001)
+    }
+
+    // 2b. 2-digit fractional (.50Z) parses finite.
+    @Test func twoDigitFractionalParses() {
+        let ref = conduitConversationTsEpoch("2026-07-02T14:49:00.500Z")
+        let got = conduitConversationTsEpoch("2026-07-02T14:49:00.50Z")
+        #expect(got < Double.greatestFiniteMagnitude, "2-digit fractional must parse finite")
+        #expect(abs(got - ref) < 0.001)
+    }
+
+    // 2c. 6-digit fractional parses finite and truncates to ms precision.
+    @Test func sixDigitFractionalParses() {
+        let ref = conduitConversationTsEpoch("2026-07-02T14:49:00.500Z")
+        let got = conduitConversationTsEpoch("2026-07-02T14:49:00.500000Z")
+        #expect(got < Double.greatestFiniteMagnitude, "6-digit fractional must parse finite")
+        #expect(abs(got - ref) < 0.001)
+    }
+
+    // 2d. 9-digit fractional parses finite.
+    @Test func nineDigitFractionalParses() {
+        let got = conduitConversationTsEpoch("2026-07-02T14:49:00.123456789Z")
+        #expect(got < Double.greatestFiniteMagnitude, "9-digit fractional must parse finite")
+    }
+
+    // 2e. All fractional lengths order correctly relative to each other.
+    @Test func variableFractionalLengthsOrderCorrectly() {
+        let t1 = conduitConversationTsEpoch("2026-07-02T14:49:00.1Z")    // 100ms
+        let t2 = conduitConversationTsEpoch("2026-07-02T14:49:00.50Z")   // 500ms
+        let t3 = conduitConversationTsEpoch("2026-07-02T14:49:00.500000Z") // 500ms
+        let t4 = conduitConversationTsEpoch("2026-07-02T14:49:00.999999999Z") // 999ms
+        #expect(t1 < t2)
+        #expect(abs(t2 - t3) < 0.001, "2-digit and 6-digit same value must be equal")
+        #expect(t3 < t4)
+    }
+
+    // 2f. Plain (no-fractional) ts still parses correctly.
+    @Test func noFractionalTsParses() {
+        let got = conduitConversationTsEpoch("2026-07-02T14:49:00Z")
+        #expect(got < Double.greatestFiniteMagnitude, "no-fractional ts must parse finite")
+        // Must be earlier than the same second with fractional digits.
+        let withFrac = conduitConversationTsEpoch("2026-07-02T14:49:00.5Z")
+        #expect(got < withFrac)
+    }
+
+    // 3. Numeric-offset form parses finite.
+    @Test func numericOffsetFractionalParses() {
+        let got = conduitConversationTsEpoch("2026-07-02T14:49:00.123456+09:00")
+        #expect(got < Double.greatestFiniteMagnitude, "numeric-offset nanosecond ts must parse finite")
+    }
+
+    // 4. Empty string still returns .greatestFiniteMagnitude (live-item invariant).
+    @Test func emptyStringReturnsGreatestFiniteMagnitude() {
+        let epoch = conduitConversationTsEpoch("")
+        #expect(epoch == Double.greatestFiniteMagnitude, "empty ts must sort as newest")
+    }
+
+    // 5. The actual bug: user message with nanosecond broker ts sorts BEFORE
+    //    an agent reply whose ts is 1 second later.
+    @Test func userNanosecondTsSortsBeforeAgentReply() {
+        // Simulate a broker-stamped user answer (nanosecond precision) and a
+        // later agent reply (3-digit fractional, as typical for other paths).
+        let userItem = ConversationItem(
+            id: "user-ans", role: "user", kind: "message",
+            status: "done", content: "My free-text answer",
+            ts: "2026-07-02T14:49:00.123456789Z", files: [],
+            toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+            diffSummary: nil, pendingOptions: [],
+            sourceAgent: nil, targetAgent: nil, taskText: nil,
+            resultSummary: nil, planSteps: []
+        )
+        let agentReply = ConversationItem(
+            id: "agent-rep", role: "assistant", kind: "message",
+            status: "done", content: "Here is my response",
+            ts: "2026-07-02T14:49:01.000Z", files: [],
+            toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+            diffSummary: nil, pendingOptions: [],
+            sourceAgent: nil, targetAgent: nil, taskText: nil,
+            resultSummary: nil, planSteps: []
+        )
+        let sorted = [agentReply, userItem].sortedByConversationTs { $0.ts }
+        #expect(sorted.map(\.id) == ["user-ans", "agent-rep"],
+            "user answer (nanosecond ts) must sort BEFORE the later agent reply")
+    }
+}
