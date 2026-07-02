@@ -78,6 +78,15 @@ extension ConduitUI {
                 .padding(.bottom, 4)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            // Height must track the prose column's intrinsic height, NOT grow
+            // greedily: `railLine` uses `.frame(maxHeight: .infinity)` (there is
+            // no SwiftUI equivalent of Android's Height(IntrinsicSize.Max)), which
+            // makes the whole spine vertically greedy. Placed directly in the chat
+            // transcript VStack, a greedy row eats all leftover viewport space and
+            // the rail shoots far below the last line of prose. `fixedSize` pins
+            // the spine to its ideal (prose) height so the rail matches the message
+            // and stops there. horizontal:false keeps the width flexible.
+            .fixedSize(horizontal: false, vertical: true)
             .task(id: reduceMotion) {
                 breatheTask?.cancel()
                 caretTask?.cancel()
