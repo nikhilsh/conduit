@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.outlined.Difference
 import sh.nikhil.conduit.AppearanceStore
 import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SessionStore
@@ -531,6 +532,7 @@ private fun DemoProjectScreen(store: SessionStore, session: ProjectSession) {
     val neon = LocalNeonTheme.current
     var tab by remember { mutableStateOf(0) }
     var showInfo by remember { mutableStateOf(false) }
+    var showChanges by remember { mutableStateOf(false) }
     val segments = listOf(
         NeonPillSegment("Chat", Icons.AutoMirrored.Outlined.Chat),
         NeonPillSegment("Terminal", Icons.Outlined.Terminal),
@@ -548,7 +550,22 @@ private fun DemoProjectScreen(store: SessionStore, session: ProjectSession) {
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Spacer(Modifier.size(32.dp))
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clickable {
+                        showChanges = true
+                        Telemetry.breadcrumb("demo", "changes_opened", mapOf("session" to session.id))
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Outlined.Difference,
+                    contentDescription = "Changes",
+                    tint = neon.textDim,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
             Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.Center) {
                 NeonSegmentedPill(
                     segments = segments,
@@ -599,6 +616,14 @@ private fun DemoProjectScreen(store: SessionStore, session: ProjectSession) {
             store = store,
             session = session,
             onDismiss = { showInfo = false },
+            readOnly = true,
+        )
+    }
+    if (showChanges) {
+        DiffReviewScreen(
+            store = store,
+            session = session,
+            onDismiss = { showChanges = false },
             readOnly = true,
         )
     }
