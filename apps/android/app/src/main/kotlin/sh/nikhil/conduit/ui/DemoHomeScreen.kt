@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.filled.Info
 import sh.nikhil.conduit.AppearanceStore
 import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SessionStore
@@ -529,6 +530,7 @@ private fun DemoSessionRow(
 private fun DemoProjectScreen(store: SessionStore, session: ProjectSession) {
     val neon = LocalNeonTheme.current
     var tab by remember { mutableStateOf(0) }
+    var showInfo by remember { mutableStateOf(false) }
     val segments = listOf(
         NeonPillSegment("Chat", Icons.AutoMirrored.Outlined.Chat),
         NeonPillSegment("Terminal", Icons.Outlined.Terminal),
@@ -538,26 +540,45 @@ private fun DemoProjectScreen(store: SessionStore, session: ProjectSession) {
         Telemetry.breadcrumb("demo", "project_appeared", mapOf("session" to session.id))
     }
     Column(modifier = Modifier.fillMaxSize()) {
-        // Tab pill centred above the content, matching iOS placement.
+        // Tab pill centred above the content; info icon at the trailing edge.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(neon.surfaceSolid)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            NeonSegmentedPill(
-                segments = segments,
-                selected = tab,
-                onSelect = { i ->
-                    tab = i
-                    Telemetry.breadcrumb(
-                        "demo",
-                        "tab_switched",
-                        mapOf("tab" to i.toString(), "session" to session.id),
-                    )
-                },
-            )
+            Spacer(Modifier.size(32.dp))
+            Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.Center) {
+                NeonSegmentedPill(
+                    segments = segments,
+                    selected = tab,
+                    onSelect = { i ->
+                        tab = i
+                        Telemetry.breadcrumb(
+                            "demo",
+                            "tab_switched",
+                            mapOf("tab" to i.toString(), "session" to session.id),
+                        )
+                    },
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clickable {
+                        showInfo = true
+                        Telemetry.breadcrumb("demo", "session_info_opened", mapOf("session" to session.id))
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.Info,
+                    contentDescription = "Session Info",
+                    tint = neon.textDim,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(neon.border))
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -572,6 +593,14 @@ private fun DemoProjectScreen(store: SessionStore, session: ProjectSession) {
                 else -> DemoBrowserPage()
             }
         }
+    }
+    if (showInfo) {
+        SessionInfoScreen(
+            store = store,
+            session = session,
+            onDismiss = { showInfo = false },
+            readOnly = true,
+        )
     }
 }
 

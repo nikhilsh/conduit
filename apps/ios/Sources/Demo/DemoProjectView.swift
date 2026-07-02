@@ -14,6 +14,7 @@ struct DemoProjectView: View {
     let session: ProjectSession
     @Environment(\.neonTheme) private var neon
     @State private var tab: DemoTab = .chat
+    @State private var showInfo = false
 
     enum DemoTab: String, Hashable {
         case chat, terminal, browser
@@ -81,6 +82,20 @@ struct DemoProjectView: View {
         }
         .navigationTitle(session.displayName ?? session.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showInfo = true
+                    Telemetry.breadcrumb("demo", "session_info_opened", data: ["session": session.id])
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 17, weight: .regular))
+                }
+            }
+        }
+        .sheet(isPresented: $showInfo) {
+            ConduitUI.SessionInfoView(session: session, readOnly: true)
+        }
         .onChange(of: tab) { _, newTab in
             Telemetry.breadcrumb("demo", "tab_switched", data: [
                 "tab": newTab.rawValue,
