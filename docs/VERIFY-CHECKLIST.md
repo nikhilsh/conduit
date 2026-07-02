@@ -20,7 +20,20 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
-_(nothing yet)_
+**Model-catalog probe uses the shared-agent-creds account — broker. PR #830.**
+
+- Under `CONDUIT_SHARED_AGENT_CREDS`, the dynamic model-catalog probe
+  (`modelcatalog.go`) spawned `claude`/`codex` with the broker's bare env (no
+  `CLAUDE_CONFIG_DIR`/`CODEX_HOME`), so it authenticated as the box-owner host
+  login `~/.claude` instead of the `agent-cred/.claude` account that sessions
+  actually run under. Those are different accounts with different model
+  entitlements — the picker omitted models the sessions can run (e.g. Claude
+  **Fable** / `claude-fable-5[1m]`). Fix threads `extraEnv []string` through the
+  `AgentBackend.CatalogProbe` interface and computes it via
+  `resolveSharedCred` + `sharedCredEnvFrom`, gated on `sharedAgentCredsEnabled()`
+  (nil/unchanged when the flag is off). [broker, **needs broker redeploy + confirm**:
+  after redeploy, `/api/capabilities` claude models include `claude-fable-5[1m]`
+  and the app model picker shows Fable]
 
 ---
 
