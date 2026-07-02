@@ -8,6 +8,40 @@ import Foundation
 
 enum DemoData {
 
+    // MARK: - Terminal lines
+    //
+    // Canned faux-terminal output for DemoTerminalView. Each entry is a
+    // (isPrompt: Bool, text: String) pair; prompts render in neon.green,
+    // output in neon.textDim. Content matches the todo.py narrative so
+    // Chat / Terminal / Browser all tell the same story.
+
+    struct TerminalLine {
+        let isPrompt: Bool
+        let text: String
+    }
+
+    static let terminalLines: [TerminalLine] = [
+        TerminalLine(isPrompt: true,  text: "python todo.py list"),
+        TerminalLine(isPrompt: false, text: "1. [ ] Buy groceries"),
+        TerminalLine(isPrompt: false, text: "2. [x] Ship the release"),
+        TerminalLine(isPrompt: false, text: "3. [ ] Call the dentist"),
+        TerminalLine(isPrompt: true,  text: "python todo.py add \"Review the PR\""),
+        TerminalLine(isPrompt: false, text: "Added: Review the PR"),
+        TerminalLine(isPrompt: true,  text: "python todo.py list"),
+        TerminalLine(isPrompt: false, text: "1. [ ] Buy groceries"),
+        TerminalLine(isPrompt: false, text: "2. [x] Ship the release"),
+        TerminalLine(isPrompt: false, text: "3. [ ] Call the dentist"),
+        TerminalLine(isPrompt: false, text: "4. [ ] Review the PR"),
+        TerminalLine(isPrompt: true,  text: "pytest -q"),
+        TerminalLine(isPrompt: false, text: "........  [100%]"),
+        TerminalLine(isPrompt: false, text: "8 passed in 0.42s"),
+        TerminalLine(isPrompt: true,  text: "python todo.py complete 2"),
+        TerminalLine(isPrompt: false, text: "Completed: Ship the release"),
+        TerminalLine(isPrompt: true,  text: "git add todo.py && git commit -m \"feat: add todo CLI\""),
+        TerminalLine(isPrompt: false, text: "[main 4f2a1c3] feat: add todo CLI"),
+        TerminalLine(isPrompt: false, text: " 1 file changed, 47 insertions(+)"),
+    ]
+
     // MARK: - Sessions
 
     static let sessions: [ProjectSession] = [
