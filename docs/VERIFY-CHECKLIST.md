@@ -20,7 +20,40 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
-_(nothing yet)_
+**Answered questions no longer stick as "needs answer"; answers deliver instead of queueing — iOS + Android. PR #843.**
+
+- Three linked pending-ask bugs. (A) `hasPendingAsk` required the `pending_input`
+  to be the strict last non-user transcript item, so any streamed assistant text
+  after the question made a tapped answer fall through to the "Queued Next" gate
+  — where it was sent as a NEW turn and never resolved the blocked question
+  (root cause of the stuck "needs answer"). Now it finds the last non-user
+  `pending_input`, ignoring trailing assistant/tool items, and clears once a user
+  reply follows. (B1) the Home "needs you" banner and (B2) the lock-screen Live
+  Activity ignored the `[[conduit:resolved]]` marker — the banner stayed lit and
+  the card showed the raw marker text as the prompt while remaining "pending"
+  forever. Both are now resolution-aware; the Live Activity flips out of pending
+  and idle-closes. [iOS + Android, **needs on-device verify**: (1) answer an
+  AskUserQuestion — the answer sends immediately (not "Queued Next") and the
+  question resolves; (2) an already-answered question shows NO home banner and NO
+  lock-screen "CLAUDE IS ASKING"; (3) the lock-screen card never shows
+  `[[conduit:resolved]]…` text]
+
+**`/clear` works for Claude and Codex — broker. PR #844.**
+
+- `/clear` previously reached Claude but returned a stray "(no content)" bubble
+  and did nothing visible; Codex had no handling. Now: Claude pass-through resets
+  context (the CLI rotates to a fresh `session_id`, already re-latched by the
+  broker for `--resume`), the synthetic "(no content)" line is suppressed, and a
+  "✓ Context cleared — starting fresh." confirmation is posted. Codex has no
+  `/clear` RPC, so the broker starts a fresh thread (`thread/start`) and drops
+  the old `codex_thread_id`. History stays on screen; only the agent's memory
+  resets. Also exposes a `supports.clear` capability and clears the lock-screen
+  Live Activity the instant an ask is answered. **Needs broker redeploy to go
+  live.** [**broker-behavior confirm**: `/clear` on a Claude session → agent
+  forgets prior turns, confirmation shown, no stray bubble; `/clear` on a Codex
+  app-server session → fresh thread, agent forgets prior turns; codex
+  same-process `thread/start` reset behaves (capture-flagged: not previously
+  live-verified)]
 
 ---
 
