@@ -3869,18 +3869,23 @@ final class SessionStore {
         return agentDescriptors[assistant.lowercased()]?.supports.steer ?? false
     }
 
-    /// True when the session is blocked on a pending AskUserQuestion: the last
-    /// non-user item in the typed conversation log is an unanswered
-    /// `pending_input` kind. Used to bypass the turn-queue gate so the answer
-    /// reaches the broker immediately instead of deadlocking in the queue.
+    /// True when the session is blocked on a pending AskUserQuestion. Finds
+    /// the LAST non-user `pending_input` item, ignoring trailing assistant/
+    /// tool/system items that stream in after the question, and returns true
+    /// only if that item is unresolved. Used to bypass the turn-queue gate so
+    /// the answer reaches the broker immediately instead of deadlocking.
     func hasPendingAsk(sessionID: String) -> Bool {
         let items = conversationLog[sessionID] ?? []
-        guard let last = items.last(where: { $0.role.lowercased() != "user" }) else { return false }
-        guard last.kind.lowercased() == "pending_input" else { return false }
+        // Find the last non-user pending_input item, skipping trailing
+        // assistant/tool/system items of other kinds.
+        guard let last = items.last(where: {
+            $0.role.lowercased() != "user" && $0.kind.lowercased() == "pending_input"
+        }) else { return false }
+        // Optimistic client-side resolution flag.
         if resolvedPendingInputIDs.contains(last.id) { return false }
         // Belt-and-suspenders: if the item carries a persisted resolution marker
         // (set by the broker on answer, kept in content by mapRemoteItem), the
-        // card is already answered — don't route the next message as an answer.
+        // card is already answered -- don't route the next message as an answer.
         if ConduitUI.ChatViewModel.parsePendingResolution(last.content)?.answered == true { return false }
         return true
     }

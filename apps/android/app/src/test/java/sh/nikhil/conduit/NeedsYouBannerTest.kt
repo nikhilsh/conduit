@@ -52,9 +52,50 @@ class NeedsYouBannerTest {
         )
         // A normal assistant message is not a block.
         assertFalse(isAwaitingInput(listOf(item("assistant", "message"))))
-        // No transcript at all → not waiting.
+        // No transcript at all -> not waiting.
         assertFalse(isAwaitingInput(null))
         assertFalse(isAwaitingInput(emptyList()))
+    }
+
+    // Bug A: pending_input followed by trailing assistant items should still be pending.
+    @Test
+    fun awaitingInputTrueWhenTrailingAssistantItemsAfterPendingInput() {
+        // The old check looked at the LAST item; a trailing assistant message
+        // would mask the pending_input. Fixed by scanning for the last
+        // non-user pending_input item specifically.
+        assertTrue(
+            isAwaitingInput(
+                listOf(
+                    item("assistant", "pending_input"),
+                    item("assistant", "message", content = "Thinking..."),
+                ),
+            ),
+        )
+    }
+
+    // Bug B1: a resolved pending_input (broker marker in content) must not show in banner.
+    @Test
+    fun awaitingInputFalseWhenPendingInputIsResolved() {
+        val resolvedContent = "[[conduit:needs-input]]\n[[conduit:resolved]]{\"answered\":true,\"answer\":\"Yes\"}\nApprove?"
+        assertFalse(
+            isAwaitingInput(
+                listOf(item("assistant", "pending_input", content = resolvedContent)),
+            ),
+        )
+    }
+
+    // Bug A+B1: resolved pending_input with trailing chatter must not show in banner.
+    @Test
+    fun awaitingInputFalseWhenResolvedPendingInputFollowedByChatter() {
+        val resolvedContent = "[[conduit:needs-input]]\n[[conduit:resolved]]{\"answered\":true,\"answer\":\"Yes\"}\nApprove?"
+        assertFalse(
+            isAwaitingInput(
+                listOf(
+                    item("assistant", "pending_input", content = resolvedContent),
+                    item("assistant", "message", content = "Done!"),
+                ),
+            ),
+        )
     }
 
     @Test

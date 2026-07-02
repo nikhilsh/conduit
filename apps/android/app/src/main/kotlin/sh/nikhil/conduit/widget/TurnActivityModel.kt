@@ -44,6 +44,10 @@ data class TurnActivityContentState(
     val tokensIn: Int = 0,
     val tokensOut: Int = 0,
     val status: String = "running",
+    /** For a `pending` turn: question/permission prompt text. Null while running/done. */
+    val prompt: String? = null,
+    /** For a `pending` turn: number of answer options (0 = unknown). */
+    val optionCount: Int = 0,
 )
 
 /**
@@ -59,8 +63,17 @@ data class TurnActivityItem(
     val status: String = "running",
     val exitCode: Int? = null,
     val timestampMillis: Long,
+    /**
+     * For a [Kind.PENDING_INPUT] item: true when the broker has already
+     * persisted a resolution marker (`[[conduit:resolved]]...`) in the
+     * content -- meaning the "needs you" moment is over. When true,
+     * [TurnActivityModel.apply] treats it as a non-interrupt update
+     * (status = "running") so the normal idle tick can close the card.
+     * Mirrors iOS `TurnActivityItem.pendingResolved`.
+     */
+    val pendingResolved: Boolean = false,
 ) {
-    enum class Kind { TOOL, COMMAND, MESSAGE, EXIT, OTHER }
+    enum class Kind { TOOL, COMMAND, MESSAGE, EXIT, PENDING_INPUT, OTHER }
 }
 
 /**
@@ -118,15 +131,24 @@ class TurnActivityModel(
             return endActivity(item.timestampMillis, status = "exited")
         }
 
-        // Only TOOL / COMMAND drive start/update — bare MESSAGE rows
-        // don't justify a widget update.
-        if (item.kind != TurnActivityItem.Kind.TOOL && item.kind != TurnActivityItem.Kind.COMMAND) {
-            return TurnActivityEffect.Noop
-        }
+        // TOOL / COMMAND drive start/update; PENDING_INPUT flips the
+        // activity to "needs you" (lock-screen approval card). A resolved
+        // pending-input (broker persisted the answer) is treated as a
+        // non-interrupt update so the normal idle tick can close the card.
+        // Bare MESSAGE rows don't justify a widget update.
+        val isPending = item.kind == TurnActivityItem.Kind.PENDING_INPUT && !item.pendingResolved
+        val drives = item.kind == TurnActivityItem.Kind.TOOL
+            || item.kind == TurnActivityItem.Kind.COMMAND
+            || item.kind == TurnActivityItem.Kind.PENDING_INPUT
+        if (!drives) return TurnActivityEffect.Noop
 
         lastActivityAtMillis = item.timestampMillis
 
         if (!isActive) {
+            // A resolved pending-input with no active card: nothing to open.
+            if (item.kind == TurnActivityItem.Kind.PENDING_INPUT && item.pendingResolved) {
+                return TurnActivityEffect.Noop
+            }
             val attrs = TurnActivityAttributesData(agentName = agentName, sessionID = sessionID)
             val state = TurnActivityContentState(
                 currentTool = item.toolName,
@@ -134,7 +156,9 @@ class TurnActivityModel(
                 startedAtMillis = item.timestampMillis,
                 tokensIn = 0,
                 tokensOut = 0,
-                status = "running",
+                status = if (isPending) "pending" else "running",
+                prompt = if (isPending) item.command else null,
+                optionCount = 0,
             )
             attributes = attrs
             contentState = state
@@ -144,7 +168,12 @@ class TurnActivityModel(
         val next = contentState!!.copy(
             currentTool = item.toolName ?: contentState!!.currentTool,
             currentCommand = item.command ?: contentState!!.currentCommand,
-            status = "running",
+            status = if (isPending) "pending" else "running",
+            // Carry prompt only while pending; a resuming tool/command or a
+            // resolved pending-input clears it so the card drops to "running"
+            // and the idle tick can close it.
+            prompt = if (isPending) item.command else null,
+            optionCount = 0,
         )
         contentState = next
         return TurnActivityEffect.Update(next)
@@ -164,10 +193,18 @@ class TurnActivityModel(
      * Time-driven step. Called periodically (or on any external
      * nudge) so the model can end the activity after [idleTimeoutMillis]
      * without a new tool. Returns `End` exactly once per active turn.
+     *
+     * A "pending" activity (the agent is blocked on the user) is exempt --
+     * an approval can wait minutes, and the lock-screen card asking for it
+     * is the feature. Only a fresh item or a session exit closes it.
+     * A resolved pending-input sets status="running" so the idle tick
+     * can close the card normally.
      */
     fun tick(nowMillis: Long): TurnActivityEffect {
         val last = lastActivityAtMillis ?: return TurnActivityEffect.Noop
         if (!isActive) return TurnActivityEffect.Noop
+        // Spare genuinely-pending cards from idle timeout.
+        if (contentState?.status == "pending") return TurnActivityEffect.Noop
         return if (nowMillis - last >= idleTimeoutMillis) {
             endActivity(nowMillis, status = "exited")
         } else {

@@ -127,6 +127,12 @@ public struct TurnActivityItem: Equatable, Hashable, Sendable {
     /// For a `.pendingInput` item: number of answer options (drives the
     /// "N options" pill on a choice). 0 when unknown.
     public var optionCount: Int
+    /// For a `.pendingInput` item: true when the broker has already
+    /// persisted a resolution marker (`[[conduit:resolved]]...`) in the
+    /// content -- meaning the "needs you" moment is over. When true,
+    /// `TurnActivityModel.apply` treats it as a non-interrupt update
+    /// (status = "running") so the normal idle tick can close the card.
+    public var pendingResolved: Bool
 
     public init(
         id: String,
@@ -138,7 +144,8 @@ public struct TurnActivityItem: Equatable, Hashable, Sendable {
         timestamp: Date,
         interruptKind: TurnInterruptKind? = nil,
         prompt: String? = nil,
-        optionCount: Int = 0
+        optionCount: Int = 0,
+        pendingResolved: Bool = false
     ) {
         self.id = id
         self.kind = kind
@@ -150,6 +157,7 @@ public struct TurnActivityItem: Equatable, Hashable, Sendable {
         self.interruptKind = interruptKind
         self.prompt = prompt
         self.optionCount = optionCount
+        self.pendingResolved = pendingResolved
     }
 }
 
@@ -244,10 +252,12 @@ public struct TurnActivityModel: Equatable, Sendable {
         // Tool/command items drive start/update; a pending-input item
         // flips the activity to "needs you" (round-3 §2) — and is
         // important enough to START one if none is live (an approval
-        // waiting on the lock screen is the whole point). Plain chat
-        // messages alone don't justify a card.
-        let isPending = item.kind == .pendingInput
-        guard item.kind == .tool || item.kind == .command || isPending else {
+        // waiting on the lock screen is the whole point). A resolved
+        // pending-input (broker persisted the answer) is treated as a
+        // non-interrupt update so the normal idle tick can close the card.
+        // Plain chat messages alone don't justify a card.
+        let isPending = item.kind == .pendingInput && !item.pendingResolved
+        guard item.kind == .tool || item.kind == .command || item.kind == .pendingInput else {
             return .noop
         }
 
@@ -258,6 +268,10 @@ public struct TurnActivityModel: Equatable, Sendable {
             // card for them (a re-surfaced old conversation after a
             // reconnect would otherwise show an hours-long timer).
             if Date().timeIntervalSince(item.timestamp) > Self.maxStartAge {
+                return .noop
+            }
+            // A resolved pending-input with no active card: nothing to open.
+            if item.kind == .pendingInput && item.pendingResolved {
                 return .noop
             }
             let attrs = TurnActivityAttributesData(
@@ -285,7 +299,8 @@ public struct TurnActivityModel: Equatable, Sendable {
         next.currentCommand = item.command ?? next.currentCommand
         next.status = isPending ? "pending" : "running"
         // Carry the interrupt payload only while pending; a resuming
-        // tool/command clears it so the card drops back to "running".
+        // tool/command (or a resolved pending-input) clears it so the
+        // card drops back to "running" and the idle tick can close it.
         if isPending {
             next.interruptKind = item.interruptKind
             next.prompt = item.prompt
