@@ -141,6 +141,10 @@ fun SettingsScreen(
     // Reserved for first-run onboarding gate in AppRoot. Not rendered as a
     // Settings row -- "Add a box" routes directly to the add-server sheet.
     onOpenOnboarding: ((FeatureFlags.OnboardingEntry) -> Unit)? = null,
+    // Called when the user activates demo mode from the Debug menu so the
+    // Settings sheet can also dismiss itself (the demo shell sits behind
+    // ModalBottomSheet overlays — both must close for it to be visible).
+    onEnterDemo: (() -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val appearance = LocalAppearanceStore.current
@@ -625,7 +629,15 @@ fun SettingsScreen(
     }
 
     if (showDebugMenu) {
-        DebugMenuScreen(store = store, onDismiss = { showDebugMenu = false })
+        DebugMenuScreen(
+            store = store,
+            onDismiss = { showDebugMenu = false },
+            onEnterDemo = {
+                showDebugMenu = false
+                onDismiss()
+                onEnterDemo?.invoke()
+            },
+        )
     }
 }
 

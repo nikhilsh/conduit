@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -43,7 +44,11 @@ import sh.nikhil.conduit.Telemetry
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DebugMenuScreen(store: SessionStore, onDismiss: () -> Unit) {
+fun DebugMenuScreen(
+    store: SessionStore,
+    onDismiss: () -> Unit,
+    onEnterDemo: (() -> Unit)? = null,
+) {
     val neon = LocalNeonTheme.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val appearance = LocalAppearanceStore.current
@@ -73,6 +78,26 @@ fun DebugMenuScreen(store: SessionStore, onDismiss: () -> Unit) {
                 color = neon.red,
                 modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
             )
+
+            SettingsSection("Demo") {
+                SettingsRow(
+                    icon = Icons.Filled.PlayArrow,
+                    title = "Enter demo mode",
+                    subtitle = "Open the App Store demo shell — a simulated box, no broker",
+                    onClick = {
+                        Telemetry.breadcrumb(
+                            "debug_menu",
+                            "enter_demo",
+                            mapOf("source" to "debug_menu"),
+                        )
+                        store.activateDemo()
+                        onEnterDemo?.invoke()
+                        onDismiss()
+                    },
+                )
+            }
+
+            Spacer(Modifier.height(18.dp))
 
             SettingsSection("Transport") {
                 ToggleRow(

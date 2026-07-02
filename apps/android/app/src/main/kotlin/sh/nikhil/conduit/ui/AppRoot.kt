@@ -259,6 +259,9 @@ fun AppRoot(
                 showSettings = false
                 showOnboarding = true
             },
+            // Close Settings so the demo shell (rendered behind ModalBottomSheet
+            // overlays in AppRoot) is fully visible once isDemoMode flips true.
+            onEnterDemo = { showSettings = false },
         )
     }
 

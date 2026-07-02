@@ -12,7 +12,9 @@ import SwiftUI
 extension ConduitUI {
     struct DebugMenuView: View {
         @Environment(FeatureFlags.self) private var flags
+        @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
+        @Environment(\.dismiss) private var dismiss
 
         var body: some View {
             @Bindable var flags = flags
@@ -20,6 +22,7 @@ extension ConduitUI {
                 GlassAppBackground()
                 ScrollView {
                     VStack(spacing: 18) {
+                        demoSection
                         experimentSection
                         forceSection(flags: $flags)
                         newSessionSection(flags: $flags)
@@ -34,6 +37,25 @@ extension ConduitUI {
             .navigationTitle("Debug")
             .navigationBarTitleDisplayMode(.inline)
             .tint(neon.accent)
+        }
+
+        // MARK: Demo mode
+
+        private var demoSection: some View {
+            sectionCard(title: "Demo") {
+                Button {
+                    Telemetry.breadcrumb("debug_menu", "enter_demo")
+                    store.activateDemo()
+                    dismiss()
+                } label: {
+                    ConduitUI.navRow(
+                        icon: "theatermasks",
+                        title: "Enter demo mode",
+                        subtitle: "Open the App Store demo shell — a simulated box, no broker"
+                    )
+                }
+                .buttonStyle(.plain)
+            }
         }
 
         // MARK: chat-shell-v2 state (read-only)
