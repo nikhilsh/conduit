@@ -61,8 +61,8 @@ func (acpBackend) Capabilities() BackendCapabilities {
 // reads the embedded models block, and kills the child. The model catalog is a
 // free per-session side effect of session/new (no extra RPC), so the probe is
 // just a truncated handshake.
-func (acpBackend) CatalogProbe(ctx context.Context, bin string) ([]ModelInfo, error) {
-	return probeACPCatalog(ctx, bin)
+func (acpBackend) CatalogProbe(ctx context.Context, bin string, extraEnv []string) ([]ModelInfo, error) {
+	return probeACPCatalog(ctx, bin, extraEnv)
 }
 
 // Usage is unsupported for ACP (Capabilities.Usage=false): there is no
@@ -1094,8 +1094,11 @@ func waitACPResult(resp <-chan json.RawMessage) (json.RawMessage, error) {
 // session/new, reads the embedded models block, and kills the child. The model
 // catalog is a free per-session result of session/new (no extra RPC). ctx bounds
 // the whole probe.
-func probeACPCatalog(ctx context.Context, bin string) ([]ModelInfo, error) {
+func probeACPCatalog(ctx context.Context, bin string, extraEnv []string) ([]ModelInfo, error) {
 	cmd := exec.CommandContext(ctx, bin, "--acp")
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

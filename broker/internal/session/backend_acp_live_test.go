@@ -98,7 +98,7 @@ func TestACPCatalogProbeLive(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	models, err := probeACPCatalog(ctx, "gemini")
+	models, err := probeACPCatalog(ctx, "gemini", nil)
 	if err != nil {
 		t.Fatalf("probeACPCatalog: %v", err)
 	}

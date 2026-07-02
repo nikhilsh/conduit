@@ -93,7 +93,7 @@ func TestOpencodeLiveTEMP(t *testing.T) {
 	// Catalog probe against the real binary.
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
-	models, err := probeOpencodeCatalog(ctx, bin)
+	models, err := probeOpencodeCatalog(ctx, bin, nil)
 	if err != nil {
 		t.Fatalf("catalog probe: %v", err)
 	}
