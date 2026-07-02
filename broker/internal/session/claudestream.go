@@ -101,6 +101,7 @@ type claudeStreamEvent struct {
 
 type claudeStreamMessage struct {
 	Role    string               `json:"role"`
+	Model   string               `json:"model"`
 	Content []claudeContentBlock `json:"content"`
 }
 
@@ -159,6 +160,14 @@ func parseClaudeStreamLine(line []byte) ([]ClaudeChatEvent, bool) {
 		return nil, false
 	}
 	if ev.Type != "assistant" || ev.Message.Role != "assistant" {
+		return nil, false
+	}
+	// Suppress the synthetic assistant event the CLI emits for a /clear
+	// turn. Its model field is literally "<synthetic>" (never a real model
+	// name) and its content is "(no content)" — not useful chat content.
+	// The turn-end onTurnEnd handler publishes the "✓ Context cleared"
+	// system line instead, gated by chatProcess.expectingClear.
+	if ev.Message.Model == "<synthetic>" {
 		return nil, false
 	}
 	var out []ClaudeChatEvent

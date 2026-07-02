@@ -598,6 +598,23 @@ func (s *Session) notifyLATurnEnd() {
 	s.emitLAUpdateImmediate("end")
 }
 
+// notifyLAAnswered is called immediately after the user delivers an answer to
+// a pending AskUserQuestion or codex approval card. It flips the LA card back
+// to "running" (from "pending") so the lock-screen no longer shows "needs your
+// pick" after the user has already answered. No-op when no LA token is
+// registered.
+func (s *Session) notifyLAAnswered() {
+	s.laState.mu.Lock()
+	if s.laState.status == "pending" {
+		s.laState.status = "running"
+	}
+	s.laState.interruptKind = ""
+	s.laState.prompt = ""
+	s.laState.optionCount = 0
+	s.laState.mu.Unlock()
+	s.emitLAUpdateImmediate("update")
+}
+
 // notifyLAPendingInput is called from maybeNotifyPendingInput to emit an LA
 // "update" event reflecting the pending-input state.
 func (s *Session) notifyLAPendingInput() {

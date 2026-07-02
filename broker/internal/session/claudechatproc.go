@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 )
 
@@ -40,6 +41,11 @@ type chatProcess struct {
 	// "writing" (streaming text), "working" (tool executing), "thinking"
 	// (extended reasoning). Empty when idle. Guarded by mu.
 	turnPhase string
+	// expectingClear is set when the outgoing user message was "/clear".
+	// It gates the confirmation system message that is published at turn-end
+	// and suppresses the synthetic "(no content)" assistant line the CLI
+	// emits for a /clear turn. Guarded by mu.
+	expectingClear bool
 	// onTurnIdle, when non-nil, fires after each turn ends (after
 	// markTurnActive(false)). Used by the session to fire push notifications
 	// when no client is attached. Set once at wiring time.
@@ -119,10 +125,19 @@ func startChatProcess(
 				if onTurnPhase != nil {
 					onTurnPhase("")
 				}
-				cp.markTurnActive(false)
+				// If this turn was a /clear, publish the confirmation
+				// system message now (turn-end is the clean moment — the
+				// synthetic assistant line was already suppressed by
+				// parseClaudeStreamLine's model=="<synthetic>" guard).
 				cp.mu.Lock()
+				wasClear := cp.expectingClear
+				cp.expectingClear = false
 				idle := cp.onTurnIdle
 				cp.mu.Unlock()
+				if wasClear {
+					publishChatSystem(publish, "✓ Context cleared — starting fresh.")
+				}
+				cp.markTurnActive(false)
 				if idle != nil {
 					idle()
 				}
@@ -185,6 +200,10 @@ func (c *chatProcess) Send(text string) error {
 	// Latch the turn as in flight; the stream pump clears it on the
 	// turn-end `result` (see startChatProcess's onTurnEnd) or on EOF/Close.
 	c.turnActive = true
+	// Track when the user sends /clear so the turn-end handler can publish
+	// the confirmation and the stream pump suppresses the synthetic assistant
+	// line the CLI emits for that pseudo-turn.
+	c.expectingClear = strings.TrimSpace(text) == "/clear"
 	// Signal "thinking" immediately so the indicator transitions from the
 	// default three-dot animation before the first token arrives. On large
 	// contexts the pre-first-token wait can last many seconds; without this

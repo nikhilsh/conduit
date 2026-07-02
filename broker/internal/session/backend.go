@@ -57,6 +57,11 @@ type BackendCapabilities struct {
 	// summarization) — claude stream-json + codex app-server do; codex-exec
 	// (per-turn) does not.
 	Compact bool
+	// Clear: the protocol supports an in-session /clear (conversation reset
+	// with a fresh context) — claude stream-json (pass-through; new session_id)
+	// + codex app-server (broker-orchestrated thread/start) do; codex-exec
+	// (per-turn, no persistent thread) does not.
+	Clear bool
 	// AskUserQuestion: the protocol surfaces tappable choice/approval cards
 	// that block the turn for the user's answer.
 	AskUserQuestion bool
@@ -92,10 +97,11 @@ type AgentDescriptor struct {
 }
 
 // AgentSupports is the descriptor's feature-flag block, the wire shape the apps
-// read instead of name-switching. compact/ask_user_question/effort/usage/steer
+// read instead of name-switching. compact/clear/ask_user_question/effort/usage/steer
 // come from BackendCapabilities; plan_mode from the manifest's permission_modes.
 type AgentSupports struct {
 	Compact         bool `json:"compact"`
+	Clear           bool `json:"clear"`
 	AskUserQuestion bool `json:"ask_user_question"`
 	Effort          bool `json:"effort"`
 	PlanMode        bool `json:"plan_mode"`

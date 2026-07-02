@@ -340,6 +340,23 @@ func TestIsCodexCompactCommand(t *testing.T) {
 	}
 }
 
+func TestIsCodexClearCommand(t *testing.T) {
+	cases := map[string]bool{
+		"/clear":       true,
+		"  /clear  ":   true,
+		"/clear now":   false,
+		"please clear": false,
+		"":             false,
+		"hello":        false,
+		"/compact":     false,
+	}
+	for in, want := range cases {
+		if got := isCodexClearCommand(in); got != want {
+			t.Fatalf("isCodexClearCommand(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestCodexThreadIDFromStartResult(t *testing.T) {
 	if got := codexThreadIDFromStartResult(json.RawMessage(`{"thread":{"id":"019ea-uuid"}}`)); got != "019ea-uuid" {
 		t.Fatalf("got %q", got)

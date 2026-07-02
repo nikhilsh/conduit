@@ -1201,6 +1201,12 @@ func (s *Session) SendChat(msg string) bool {
 				// Record the user-facing `msg` (the tapped option / typed
 				// text), not the upload-rewritten agentMsg.
 				s.recordPendingResolution(ask, msg, true)
+				// Clear the LA "pending" card immediately so the
+				// lock-screen no longer shows "needs your pick" after
+				// the user has answered (the broker relied on later
+				// tool activity to flip this, which left the card
+				// stale for a window after the answer was delivered).
+				s.notifyLAAnswered()
 				return true
 			}
 			// stdin gone (agent died holding the question) — fall
@@ -1215,6 +1221,8 @@ func (s *Session) SendChat(msg string) bool {
 	// (accept) or ends (deny) — not as a new prompt queued behind a blocked one.
 	if ar, ok := s.chat.(approvalAnswerer); ok {
 		if ar.AnswerApproval(agentMsg) {
+			// Clear the LA "pending" card for codex approval answers too.
+			s.notifyLAAnswered()
 			return true
 		}
 	}
@@ -2237,6 +2245,7 @@ func (m *Manager) AgentDescriptors() map[string]AgentDescriptor {
 			LoginProvider: adapter.LoginProvider,
 			Supports: AgentSupports{
 				Compact:         caps.Compact,
+				Clear:           caps.Clear,
 				AskUserQuestion: caps.AskUserQuestion,
 				Effort:          caps.Effort,
 				PlanMode:        planMode,
