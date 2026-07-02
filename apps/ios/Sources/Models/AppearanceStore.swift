@@ -358,6 +358,52 @@ final class AppearanceStore {
             .flatMap(GhosttyFont.init(rawValue:))) ?? .jetBrainsMono
     }
 
+    // MARK: - Demo snapshot/restore
+
+    /// A value-type capture of all persisted appearance properties. Used
+    /// by the demo mode shell to snapshot on entry and restore on exit so
+    /// theme / font changes made by an App Store reviewer do not leak into
+    /// the real app after they leave the demo.
+    struct Snapshot {
+        var fontFamily: FontFamily
+        var themeMode: ThemeMode
+        var collapseTurns: Bool
+        var bodyPointSize: CGFloat
+        var neonPalette: NeonPaletteChoice
+        var neonGlow: Bool
+        var terminalTheme: GhosttyTheme
+        var terminalFont: GhosttyFont
+    }
+
+    /// Capture the current state as a `Snapshot`.
+    func snapshot() -> Snapshot {
+        Snapshot(
+            fontFamily: fontFamily,
+            themeMode: themeMode,
+            collapseTurns: collapseTurns,
+            bodyPointSize: bodyPointSize,
+            neonPalette: neonPalette,
+            neonGlow: neonGlow,
+            terminalTheme: terminalTheme,
+            terminalFont: terminalFont
+        )
+    }
+
+    /// Restore all persisted properties from a previously captured `Snapshot`.
+    /// Each assignment fires the property's `didSet`, which persists to
+    /// `UserDefaults` — this is intentional: the pre-demo values are the
+    /// real ones that must survive.
+    func apply(_ s: Snapshot) {
+        fontFamily = s.fontFamily
+        themeMode = s.themeMode
+        collapseTurns = s.collapseTurns
+        bodyPointSize = s.bodyPointSize
+        neonPalette = s.neonPalette
+        neonGlow = s.neonGlow
+        terminalTheme = s.terminalTheme
+        terminalFont = s.terminalFont
+    }
+
     /// SwiftUI `.font` value to use for chat body text.
     func bodyFont() -> Font {
         fontFamily.font(textStyle: .body)

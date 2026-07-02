@@ -20,6 +20,16 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+_(nothing yet)_
+
+---
+
+## v0.0.210
+
+**Streaming rail draws downward as the message grows — iOS + Android. PR #829.**
+
+- The working-spine rail's length now eases/draws downward (easeOut ~0.35s) as the streamed message grows, instead of snapping to the new height each token; the flowing gradient runs inside the drawn portion. Reduce-motion snaps to full length. Builds on the full-height fill + fixed-tile no-stutter fixes (v0.0.209). [iOS + Android, **needs on-device verify**: streaming reply → rail draws down smoothly as text arrives, spans full content once settled]
+
 **User AskUserQuestion answers sort below the agent reply — iOS. PR #835.**
 
 - iOS-only chat ordering bug: `conduitConversationTsEpoch` parsed `ts` with

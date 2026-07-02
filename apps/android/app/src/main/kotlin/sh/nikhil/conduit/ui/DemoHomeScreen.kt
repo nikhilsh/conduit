@@ -9,8 +9,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.ui.viewinterop.AndroidView
 import sh.nikhil.conduit.ui.components.NeonPillSegment
 import sh.nikhil.conduit.ui.components.NeonSegmentedPill
@@ -32,6 +34,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +49,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.filled.Info
+import sh.nikhil.conduit.AppearanceStore
+import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.demo.DemoData
@@ -64,6 +69,19 @@ import uniffi.conduit_core.ProjectSession
 fun DemoHomeScreen(store: SessionStore, onExitDemo: () -> Unit) {
     val config = LocalConfiguration.current
     val isTablet = config.smallestScreenWidthDp >= 600
+    val appearance = LocalAppearanceStore.current
+
+    // Snapshot appearance on entry; restore on exit so theme/font changes
+    // made by the App Store reviewer do not persist after leaving demo mode.
+    // Mirrors iOS DemoHomeView.onAppear / onDisappear + AppearanceStore.Snapshot.
+    DisposableEffect(Unit) {
+        val snap = appearance.snapshot()
+        Telemetry.breadcrumb("demo", "appearance_snapshot_captured")
+        onDispose {
+            appearance.applySnapshot(snap)
+            Telemetry.breadcrumb("demo", "appearance_snapshot_restored")
+        }
+    }
 
     LaunchedEffect(Unit) {
         Telemetry.breadcrumb("demo", "home_appeared", mapOf("tablet" to isTablet.toString()))
@@ -83,7 +101,9 @@ fun DemoHomeScreen(store: SessionStore, onExitDemo: () -> Unit) {
 @Composable
 private fun DemoPhoneLayout(store: SessionStore, onExitDemo: () -> Unit) {
     val neon = LocalNeonTheme.current
+    val appearance = LocalAppearanceStore.current
     var selectedSession by remember { mutableStateOf<ProjectSession?>(null) }
+    var showingAppearance by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize().background(neon.appBg)) {
         if (selectedSession == null) {
@@ -99,6 +119,10 @@ private fun DemoPhoneLayout(store: SessionStore, onExitDemo: () -> Unit) {
                     showExitDemo = true,
                     showBack = false,
                     onBack = {},
+                    onAppearance = {
+                        Telemetry.breadcrumb("demo", "appearance_opened")
+                        showingAppearance = true
+                    },
                 )
                 DemoBanner(neon = neon)
                 DemoSessionListContent(
@@ -121,11 +145,19 @@ private fun DemoPhoneLayout(store: SessionStore, onExitDemo: () -> Unit) {
                     showExitDemo = false,
                     showBack = true,
                     onBack = { selectedSession = null },
+                    onAppearance = null,
                 )
                 // Phase-2: route through DemoProjectScreen (Chat/Terminal/Browser tabs).
                 DemoProjectScreen(store = store, session = session)
             }
         }
+    }
+
+    if (showingAppearance) {
+        AppearanceSheet(
+            appearance = appearance,
+            onDismiss = { showingAppearance = false },
+        )
     }
 }
 
@@ -136,7 +168,9 @@ private fun DemoPhoneLayout(store: SessionStore, onExitDemo: () -> Unit) {
 @Composable
 private fun DemoTabletLayout(store: SessionStore, onExitDemo: () -> Unit) {
     val neon = LocalNeonTheme.current
+    val appearance = LocalAppearanceStore.current
     var selectedSession by remember { mutableStateOf(DemoData.sessions.firstOrNull()) }
+    var showingAppearance by remember { mutableStateOf(false) }
 
     Row(modifier = Modifier.fillMaxSize().background(neon.appBg).statusBarsPadding()) {
         // Rail / sidebar
@@ -159,17 +193,36 @@ private fun DemoTabletLayout(store: SessionStore, onExitDemo: () -> Unit) {
                     fontSize = 16.sp,
                     color = neon.text,
                 )
-                Text(
-                    "Exit Demo",
-                    fontFamily = neon.mono,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 11.sp,
-                    color = neon.codex,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(99.dp))
-                        .clickable { onExitDemo() }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    IconButton(
+                        onClick = {
+                            Telemetry.breadcrumb("demo", "appearance_opened")
+                            showingAppearance = true
+                        },
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Settings,
+                            contentDescription = "Appearance",
+                            tint = neon.textDim,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    Text(
+                        "Exit Demo",
+                        fontFamily = neon.mono,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        color = neon.codex,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(99.dp))
+                            .clickable { onExitDemo() }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
             }
             DemoBanner(neon = neon, compact = true)
             DemoSessionListContent(
@@ -204,6 +257,13 @@ private fun DemoTabletLayout(store: SessionStore, onExitDemo: () -> Unit) {
             }
         }
     }
+
+    if (showingAppearance) {
+        AppearanceSheet(
+            appearance = appearance,
+            onDismiss = { showingAppearance = false },
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -218,6 +278,8 @@ private fun DemoTopBar(
     showExitDemo: Boolean,
     showBack: Boolean,
     onBack: () -> Unit,
+    /** Non-null on the home/session-list screen; null inside a chat view. */
+    onAppearance: (() -> Unit)?,
 ) {
     Row(
         modifier = Modifier
@@ -238,6 +300,19 @@ private fun DemoTopBar(
                 contentAlignment = Alignment.Center,
             ) {
                 Text("‹", color = neon.textDim, fontFamily = neon.mono, fontSize = 18.sp)
+            }
+        } else if (onAppearance != null) {
+            // Gear icon on the home bar — mirrors iOS .navigationBarLeading gear button.
+            IconButton(
+                onClick = onAppearance,
+                modifier = Modifier.size(34.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.Settings,
+                    contentDescription = "Appearance",
+                    tint = neon.textDim,
+                    modifier = Modifier.size(18.dp),
+                )
             }
         } else {
             Spacer(modifier = Modifier.size(34.dp))
