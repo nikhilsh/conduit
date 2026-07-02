@@ -21,7 +21,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Icon
@@ -38,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -92,6 +92,7 @@ private fun DemoPhoneLayout(onExitDemo: () -> Unit) {
                     neon = neon,
                     title = ">conduit",
                     onExitDemo = onExitDemo,
+                    showExitDemo = true,
                     showBack = false,
                     onBack = {},
                 )
@@ -112,6 +113,8 @@ private fun DemoPhoneLayout(onExitDemo: () -> Unit) {
                     neon = neon,
                     title = session.displayName ?: session.name,
                     onExitDemo = onExitDemo,
+                    // iOS's chat view has no Exit Demo (it lives on home only).
+                    showExitDemo = false,
                     showBack = true,
                     onBack = { selectedSession = null },
                 )
@@ -218,6 +221,7 @@ private fun DemoTopBar(
     neon: NeonTheme,
     title: String,
     onExitDemo: () -> Unit,
+    showExitDemo: Boolean,
     showBack: Boolean,
     onBack: () -> Unit,
 ) {
@@ -228,18 +232,19 @@ private fun DemoTopBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (showBack) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
-                tint = neon.textDim,
+            // Chevron in a circle — matches iOS's back affordance and the app's
+            // own onboarding back button (not a Material arrow).
+            Box(
                 modifier = Modifier
                     .size(34.dp)
                     .clip(CircleShape)
                     .background(neon.surface)
                     .border(1.dp, neon.border, CircleShape)
-                    .clickable { onBack() }
-                    .padding(7.dp),
-            )
+                    .clickable { onBack() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("‹", color = neon.textDim, fontFamily = neon.mono, fontSize = 18.sp)
+            }
         } else {
             Spacer(modifier = Modifier.size(34.dp))
         }
@@ -254,19 +259,25 @@ private fun DemoTopBar(
             overflow = TextOverflow.Ellipsis,
         )
         Spacer(modifier = Modifier.weight(1f))
-        Text(
-            "Exit Demo",
-            fontFamily = neon.mono,
-            fontWeight = FontWeight.Bold,
-            fontSize = 11.sp,
-            color = neon.codex,
-            modifier = Modifier
-                .clip(RoundedCornerShape(99.dp))
-                .background(neon.codex.copy(alpha = 0.12f))
-                .border(1.dp, neon.codex.copy(alpha = 0.35f), RoundedCornerShape(99.dp))
-                .clickable { onExitDemo() }
-                .padding(horizontal = 10.dp, vertical = 5.dp),
-        )
+        // iOS shows Exit Demo only on the home/session-list, not in the chat
+        // header — keep a 34dp placeholder there so the title stays centered.
+        if (showExitDemo) {
+            Text(
+                "Exit Demo",
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp,
+                color = neon.codex,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(neon.codex.copy(alpha = 0.12f))
+                    .border(1.dp, neon.codex.copy(alpha = 0.35f), RoundedCornerShape(99.dp))
+                    .clickable { onExitDemo() }
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+            )
+        } else {
+            Spacer(modifier = Modifier.size(34.dp))
+        }
     }
 }
 
@@ -496,6 +507,7 @@ private fun DemoUserRow(neon: NeonTheme, item: ConversationItem) {
             fontFamily = neon.sans,
             fontSize = 14.sp,
             color = neon.text,
+            textAlign = TextAlign.End,
             modifier = Modifier
                 .clip(RoundedCornerShape(14.dp))
                 .background(neon.codex.copy(alpha = 0.12f))
