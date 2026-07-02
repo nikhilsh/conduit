@@ -11,19 +11,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.outlined.Terminal
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -34,17 +27,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.demo.DemoData
-import uniffi.conduit_core.ConversationItem
 import uniffi.conduit_core.ProjectSession
 
 // ---------------------------------------------------------------------------
@@ -66,9 +56,9 @@ fun DemoHomeScreen(store: SessionStore, onExitDemo: () -> Unit) {
     }
 
     if (isTablet) {
-        DemoTabletLayout(onExitDemo = onExitDemo)
+        DemoTabletLayout(store = store, onExitDemo = onExitDemo)
     } else {
-        DemoPhoneLayout(onExitDemo = onExitDemo)
+        DemoPhoneLayout(store = store, onExitDemo = onExitDemo)
     }
 }
 
@@ -77,7 +67,7 @@ fun DemoHomeScreen(store: SessionStore, onExitDemo: () -> Unit) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun DemoPhoneLayout(onExitDemo: () -> Unit) {
+private fun DemoPhoneLayout(store: SessionStore, onExitDemo: () -> Unit) {
     val neon = LocalNeonTheme.current
     var selectedSession by remember { mutableStateOf<ProjectSession?>(null) }
 
@@ -118,12 +108,18 @@ private fun DemoPhoneLayout(onExitDemo: () -> Unit) {
                     showBack = true,
                     onBack = { selectedSession = null },
                 )
-                DemoChatContent(
-                    neon = neon,
+                // Route transcript through the real read-only ChatPage so the
+                // demo renders authentic cards (code, diff, handoff, pending-input,
+                // plan, subagent) rather than the hand-rolled approximation.
+                LaunchedEffect(session.id) {
+                    Telemetry.breadcrumb("demo", "chat_appeared", mapOf("session" to session.id))
+                }
+                ChatPage(
+                    store = store,
                     session = session,
-                    modifier = Modifier.weight(1f),
+                    readOnly = true,
+                    readOnlyItems = DemoData.conversationBySession[session.id],
                 )
-                DemoDisabledComposer(neon = neon)
             }
         }
     }
@@ -134,7 +130,7 @@ private fun DemoPhoneLayout(onExitDemo: () -> Unit) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun DemoTabletLayout(onExitDemo: () -> Unit) {
+private fun DemoTabletLayout(store: SessionStore, onExitDemo: () -> Unit) {
     val neon = LocalNeonTheme.current
     var selectedSession by remember { mutableStateOf(DemoData.sessions.firstOrNull()) }
 
@@ -187,17 +183,20 @@ private fun DemoTabletLayout(onExitDemo: () -> Unit) {
                 .background(neon.border),
         )
 
-        // Detail panel
+        // Detail panel — route through real read-only ChatPage so the demo
+        // renders authentic cards (code, diff, handoff, pending-input, plan, subagent).
         Column(modifier = Modifier.weight(1f).fillMaxSize()) {
             val session = selectedSession
             if (session != null) {
-                DemoChatContent(
-                    neon = neon,
+                LaunchedEffect(session.id) {
+                    Telemetry.breadcrumb("demo", "chat_appeared", mapOf("session" to session.id))
+                }
+                ChatPage(
+                    store = store,
                     session = session,
-                    modifier = Modifier.weight(1f),
-                    showHeader = true,
+                    readOnly = true,
+                    readOnlyItems = DemoData.conversationBySession[session.id],
                 )
-                DemoDisabledComposer(neon = neon)
             } else {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
@@ -448,183 +447,3 @@ private fun DemoSessionRow(
     }
 }
 
-@Composable
-private fun DemoChatContent(
-    neon: NeonTheme,
-    session: ProjectSession,
-    modifier: Modifier = Modifier,
-    showHeader: Boolean = false,
-) {
-    val items = DemoData.conversationBySession[session.id] ?: emptyList()
-
-    LaunchedEffect(session.id) {
-        Telemetry.breadcrumb("demo", "chat_appeared", mapOf("session" to session.id))
-    }
-
-    LazyColumn(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(neon.appBg),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            horizontal = 14.dp,
-            vertical = 8.dp,
-        ),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (showHeader) {
-            item {
-                Text(
-                    session.displayName ?: session.name,
-                    fontFamily = neon.sans,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 18.sp,
-                    color = neon.text,
-                    modifier = Modifier.padding(bottom = 4.dp),
-                )
-            }
-        }
-        items(items, key = { it.id }) { item ->
-            DemoChatRow(neon = neon, item = item)
-        }
-    }
-}
-
-@Composable
-private fun DemoChatRow(neon: NeonTheme, item: ConversationItem) {
-    when (item.role.lowercase()) {
-        "user" -> DemoUserRow(neon = neon, item = item)
-        "tool" -> DemoToolRow(neon = neon, item = item)
-        else -> DemoAssistantRow(neon = neon, item = item)
-    }
-}
-
-@Composable
-private fun DemoUserRow(neon: NeonTheme, item: ConversationItem) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        Spacer(modifier = Modifier.weight(0.15f))
-        Text(
-            item.content,
-            fontFamily = neon.sans,
-            fontSize = 14.sp,
-            color = neon.text,
-            textAlign = TextAlign.End,
-            modifier = Modifier
-                .clip(RoundedCornerShape(14.dp))
-                .background(neon.codex.copy(alpha = 0.12f))
-                .border(1.dp, neon.codex.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
-                .padding(horizontal = 12.dp, vertical = 9.dp),
-        )
-    }
-}
-
-@Composable
-private fun DemoAssistantRow(neon: NeonTheme, item: ConversationItem) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(22.dp)
-                .clip(CircleShape)
-                .background(neon.claude.copy(alpha = 0.18f))
-                .padding(top = 2.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                "C",
-                fontFamily = neon.mono,
-                fontWeight = FontWeight.Bold,
-                fontSize = 10.sp,
-                color = neon.claude,
-            )
-        }
-        Text(
-            item.content,
-            fontFamily = neon.sans,
-            fontSize = 14.sp,
-            color = neon.text,
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
-@Composable
-private fun DemoToolRow(neon: NeonTheme, item: ConversationItem) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(neon.codeBg)
-            .border(1.dp, neon.border, RoundedCornerShape(10.dp))
-            .padding(horizontal = 12.dp, vertical = 9.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = Icons.Outlined.Terminal,
-            contentDescription = null,
-            tint = neon.green,
-            modifier = Modifier.size(14.dp),
-        )
-        Column(modifier = Modifier.weight(1f)) {
-            item.toolName?.let { name ->
-                Text(
-                    name,
-                    fontFamily = neon.mono,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 11.sp,
-                    color = neon.green,
-                )
-            }
-            item.command?.let { cmd ->
-                Text(
-                    cmd,
-                    fontFamily = neon.mono,
-                    fontSize = 11.sp,
-                    color = neon.textDim,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            item.exitCode?.let { code ->
-                Text(
-                    "exit $code",
-                    fontFamily = neon.mono,
-                    fontSize = 10.sp,
-                    color = if (code == 0) neon.green else neon.accent,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DemoDisabledComposer(neon: NeonTheme) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(neon.surface)
-            .navigationBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Icon(
-            imageVector = Icons.Filled.Lock,
-            contentDescription = null,
-            tint = neon.textFaint,
-            modifier = Modifier.size(16.dp),
-        )
-        Text(
-            "Connect a real server to start a session",
-            fontFamily = neon.sans,
-            fontSize = 14.sp,
-            color = neon.textFaint,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
