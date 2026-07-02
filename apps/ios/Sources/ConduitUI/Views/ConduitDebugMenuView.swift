@@ -15,6 +15,7 @@ extension ConduitUI {
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
+        @AppStorage("debug.workingIndicatorStyle") private var workingIndicatorStyleRaw: String = ConduitWorkingStyle.spine.rawValue
 
         var body: some View {
             @Bindable var flags = flags
@@ -28,6 +29,7 @@ extension ConduitUI {
                         newSessionSection(flags: $flags)
                         transportSection(flags: $flags)
                         agentPanelSection(flags: $flags)
+                        workingIndicatorSection
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 18)
@@ -168,6 +170,29 @@ extension ConduitUI {
                     subtitle: "Agents roster in the Information tab (debug only, default OFF)",
                     isOn: flags.showSubagentPanel
                 )
+            }
+        }
+
+        // MARK: Working indicator style
+
+        private var workingIndicatorSection: some View {
+            sectionCard(title: "Working indicator") {
+                VStack(alignment: .leading, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Style (debug.workingIndicatorStyle)")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(neon.text)
+                        Picker("Working indicator style", selection: $workingIndicatorStyleRaw) {
+                            ForEach(ConduitWorkingStyle.allCases) { s in
+                                Text(s.displayName).tag(s.rawValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .tint(neon.accent)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                }
             }
         }
 

@@ -284,6 +284,16 @@ class AppearanceStore : ViewModel() {
     val commandRunBlock: StateFlow<Boolean> = _commandRunBlock.asStateFlow()
 
     /**
+     * Debug: working-indicator style. One of the [ConduitWorkingStyle] enum
+     * names (e.g. "Spine"). Default "Spine". Persisted under
+     * [KEY_WORKING_INDICATOR_STYLE] (matches iOS `debug.workingIndicatorStyle`).
+     * Surfaced in the Debug menu so the team can live-evaluate each style
+     * on-device before picking a winner.
+     */
+    private val _workingIndicatorStyle = MutableStateFlow("Spine")
+    val workingIndicatorStyle: StateFlow<String> = _workingIndicatorStyle.asStateFlow()
+
+    /**
      * Agents enabled in the new-session picker (§ declutter). claude + codex
      * ship on; gemini / opencode are opt-in. Persisted as a string set; the
      * picker filters its candidate list to this set via
@@ -337,6 +347,7 @@ class AppearanceStore : ViewModel() {
         _onboardingGuide.value = p.getBoolean(KEY_ONB_GUIDE, true)
         _showSubagentPanel.value = p.getBoolean(KEY_SHOW_SUBAGENT_PANEL, FeatureFlags.showSubagentPanel)
         _commandRunBlock.value = p.getBoolean(KEY_COMMAND_RUN_BLOCK, false)
+        _workingIndicatorStyle.value = p.getString(KEY_WORKING_INDICATOR_STYLE, "Spine") ?: "Spine"
         _enabledAgents.value =
             p.getStringSet(KEY_ENABLED_AGENTS, null)?.toSet() ?: FeatureFlags.defaultEnabledAgents.toSet()
 
@@ -416,6 +427,12 @@ class AppearanceStore : ViewModel() {
     fun setCommandRunBlock(value: Boolean) {
         _commandRunBlock.value = value
         prefs?.edit()?.putBoolean(KEY_COMMAND_RUN_BLOCK, value)?.apply()
+    }
+
+    /** Set the working-indicator style (debug.workingIndicatorStyle). Default "Spine". */
+    fun setWorkingIndicatorStyle(value: String) {
+        _workingIndicatorStyle.value = value
+        prefs?.edit()?.putString(KEY_WORKING_INDICATOR_STYLE, value)?.apply()
     }
 
     /** Enable/disable an agent in the new-session picker. Default agents
@@ -548,6 +565,7 @@ class AppearanceStore : ViewModel() {
         private const val KEY_SHOW_SUBAGENT_PANEL = "debug.showSubagentPanel"
         private const val KEY_ENABLED_AGENTS = "newSession.enabledAgents"
         private const val KEY_COMMAND_RUN_BLOCK = "chat.commandRunBlock"
+        private const val KEY_WORKING_INDICATOR_STYLE = "debug.workingIndicatorStyle"
     }
 }
 

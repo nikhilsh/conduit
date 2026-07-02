@@ -20,6 +20,10 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**App-themed working indicator — iOS + Android. PR #827.**
+
+- **Four working-indicator styles behind a debug toggle (#827, iOS + Android)** — the legacy pre-output `WORKING…` label + single pulsing dot at the head of an assistant turn is replaced by `ConduitUI.WorkingIndicator` (iOS, source of truth) / `ConduitWorkingIndicator` (Android mirror), rendering one of four app-themed styles: **A · spine** (breathing mark + flowing cyan→green rail + agent names the step + caret), **B · packets** (agent avatar + capsule pipe with packets flowing), **C · mark** (breathing mark + shimmer sweep), **D · prompt** (shell-prompt card). All four ship at once, switchable at runtime from the debug menu (`debug.workingIndicatorStyle`, default `spine`) so each can be lived-with on-device before a default is picked. Animation periods pinned identical across platforms; every color via `neon.*`; reduce-motion shows the calm end-state; the streaming/typing (3-dot) branch is unchanged. [iOS + Android, **needs on-device verify**: chat head shows the new indicator (no `WORKING…` label); debug-menu picker switches all four styles and the choice persists across launch; reduce-motion → calm/static]
+
 **Model-catalog probe uses the shared-agent-creds account — broker. PR #830.**
 
 - Under `CONDUIT_SHARED_AGENT_CREDS`, the dynamic model-catalog probe
