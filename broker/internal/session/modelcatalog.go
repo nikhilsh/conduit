@@ -229,7 +229,9 @@ const catalogScanBuf = 4 << 20
 // control protocol for its model list. The probe never sends a user message,
 // so no turn (and no token spend) happens; the process is killed as soon as
 // the control_response arrives.
-func probeClaudeCatalog(ctx context.Context, bin string) ([]ModelInfo, error) {
+// extraEnv is appended to os.Environ() before the process is started; nil
+// means inherit the broker's environment unchanged (flag-off / default).
+func probeClaudeCatalog(ctx context.Context, bin string, extraEnv []string) ([]ModelInfo, error) {
 	const reqID = "conduit-model-catalog"
 	cmd := exec.CommandContext(ctx, bin,
 		"-p", "--verbose",
@@ -238,6 +240,9 @@ func probeClaudeCatalog(ctx context.Context, bin string) ([]ModelInfo, error) {
 	// Neutral cwd: don't pay for (or get confused by) some repo's project
 	// config, MCP servers, or hooks.
 	cmd.Dir = os.TempDir()
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -276,9 +281,14 @@ func probeClaudeCatalog(ctx context.Context, bin string) ([]ModelInfo, error) {
 // probeCodexCatalog spawns a throwaway `codex app-server`, performs the
 // initialize handshake, and calls model/list. Decoupled from the per-session
 // app-server clients on purpose: the probe must work with zero sessions open.
-func probeCodexCatalog(ctx context.Context, bin string) ([]ModelInfo, error) {
+// extraEnv is appended to os.Environ() before the process is started; nil
+// means inherit the broker's environment unchanged (flag-off / default).
+func probeCodexCatalog(ctx context.Context, bin string, extraEnv []string) ([]ModelInfo, error) {
 	cmd := exec.CommandContext(ctx, bin, "app-server")
 	cmd.Dir = os.TempDir()
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -348,13 +358,13 @@ func probeCodexCatalog(ctx context.Context, bin string) ([]ModelInfo, error) {
 // assistants with no registered backend (e.g. the hidden shell adapter, or a
 // legacy TUI-scrape adapter), so maybeRefreshCatalog skips them. reg is the
 // Manager's registry — needed to map assistant name → protocol.
-func catalogProbeFor(reg *agents.Registry, assistant string) func(context.Context, string) ([]ModelInfo, error) {
+func catalogProbeFor(reg *agents.Registry, assistant string) func(context.Context, string, []string) ([]ModelInfo, error) {
 	backend, err := backendForAssistant(reg, assistant)
 	if err != nil {
 		return nil
 	}
-	return func(ctx context.Context, bin string) ([]ModelInfo, error) {
-		return backend.CatalogProbe(ctx, bin)
+	return func(ctx context.Context, bin string, extraEnv []string) ([]ModelInfo, error) {
+		return backend.CatalogProbe(ctx, bin, extraEnv)
 	}
 }
 
@@ -386,8 +396,9 @@ type modelCatalogCache struct {
 	fetched      map[string]time.Time // last probe success
 	busy         map[string]bool
 	fingerprints map[string]string // per-assistant binary fingerprint at last successful probe
-	// probe is a test seam; nil = catalogProbeFor.
-	probe func(ctx context.Context, assistant, bin string) ([]ModelInfo, error)
+	// probe is a test seam; nil = catalogProbeFor. The extraEnv slice is
+	// forwarded from maybeRefreshCatalog (shared-agent-creds env or nil).
+	probe func(ctx context.Context, assistant, bin string, extraEnv []string) ([]ModelInfo, error)
 	// fingerprintFn is a test seam; nil = binFingerprint.
 	fingerprintFn func(bin string) string
 }
@@ -451,6 +462,40 @@ func (m *Manager) ModelCatalog() map[string][]ModelInfo {
 	return snap
 }
 
+// catalogExtraEnv computes the extra env vars to inject into a catalog probe
+// when CONDUIT_SHARED_AGENT_CREDS is on. Under the flag the probe must query
+// the same account that real sessions run under (the broker-owned agent-cred
+// dir, not the host-login ~/.claude / ~/.codex). Returns nil when the flag is
+// off — behavior is byte-identical to before this fix.
+func (m *Manager) catalogExtraEnv() []string {
+	if !sharedAgentCredsEnabled() {
+		return nil
+	}
+	res := resolveSharedCred(m.conduitRoot, m.credStore)
+	envMap, _ := sharedCredEnvFrom(res)
+	if len(envMap) == 0 {
+		return nil
+	}
+	// Flatten to sorted "K=V" strings for a deterministic, reproducible env.
+	keys := make([]string, 0, len(envMap))
+	for k := range envMap {
+		keys = append(keys, k)
+	}
+	// Sort for determinism (order matters for test assertions).
+	for i := 0; i < len(keys); i++ {
+		for j := i + 1; j < len(keys); j++ {
+			if keys[i] > keys[j] {
+				keys[i], keys[j] = keys[j], keys[i]
+			}
+		}
+	}
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, k+"="+envMap[k])
+	}
+	return out
+}
+
 // maybeRefreshCatalog starts a background probe for the assistant when the
 // cached entry is stale (or has never been fetched) and no probe is already
 // running. A fingerprint change (e.g. the CLI symlink was upgraded in place)
@@ -464,8 +509,8 @@ func (m *Manager) maybeRefreshCatalog(assistant string) {
 		if std == nil {
 			return
 		}
-		probe = func(ctx context.Context, _ string, bin string) ([]ModelInfo, error) {
-			return std(ctx, bin)
+		probe = func(ctx context.Context, _ string, bin string, extraEnv []string) ([]ModelInfo, error) {
+			return std(ctx, bin, extraEnv)
 		}
 	}
 	adapter, err := m.registry.Get(assistant)
@@ -473,6 +518,10 @@ func (m *Manager) maybeRefreshCatalog(assistant string) {
 		return
 	}
 	bin := adapter.Command[0]
+
+	// Compute the shared-agent-creds env override BEFORE taking the catalog
+	// lock; resolveSharedCred is pure (no writes) and cheap.
+	extraEnv := m.catalogExtraEnv()
 
 	// Resolve the current binary fingerprint before taking the lock so the
 	// stat syscalls don't extend the critical section.
@@ -511,7 +560,7 @@ func (m *Manager) maybeRefreshCatalog(assistant string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), catalogProbeTimeout)
 		defer cancel()
-		models, err := probe(ctx, assistant, bin)
+		models, err := probe(ctx, assistant, bin, extraEnv)
 		m.catalog.mu.Lock()
 		m.catalog.busy[assistant] = false
 		if err == nil && len(models) > 0 {

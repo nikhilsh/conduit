@@ -33,7 +33,10 @@ type AgentBackend interface {
 	// CatalogProbe returns the live model catalog by probing the agent CLI.
 	// A backend whose protocol has no discovery probe returns a non-nil error;
 	// maybeRefreshCatalog treats any probe error as "leave the cache untouched".
-	CatalogProbe(ctx context.Context, bin string) ([]ModelInfo, error)
+	// extraEnv is a slice of "KEY=VALUE" strings appended to os.Environ() before
+	// spawning the probe process; nil means inherit the broker's environment
+	// unchanged (flag-off / default behaviour).
+	CatalogProbe(ctx context.Context, bin string, extraEnv []string) ([]ModelInfo, error)
 
 	// Usage fetches account-level subscription usage for the identity whose
 	// credentials live under homeDir. ok=false means the protocol has no

@@ -60,8 +60,8 @@ func (opencodeBackend) Capabilities() BackendCapabilities {
 // maps it to ModelInfo (providerID/modelID). It runs the server because the
 // structured catalog lives behind the HTTP surface; the server is killed when
 // the probe returns.
-func (opencodeBackend) CatalogProbe(ctx context.Context, bin string) ([]ModelInfo, error) {
-	return probeOpencodeCatalog(ctx, bin)
+func (opencodeBackend) CatalogProbe(ctx context.Context, bin string, extraEnv []string) ([]ModelInfo, error) {
+	return probeOpencodeCatalog(ctx, bin, extraEnv)
 }
 
 // Usage is unsupported for opencode (Capabilities.Usage=false), so the session
@@ -830,13 +830,16 @@ func (c *opencodeServerProcess) stderrString() string {
 // The server is always killed before returning (success or failure). ctx bounds
 // the whole probe; the server is launched with the broker's own env (the
 // catalog is provider-independent — the built-in zen provider always lists).
-func probeOpencodeCatalog(ctx context.Context, bin string) ([]ModelInfo, error) {
+func probeOpencodeCatalog(ctx context.Context, bin string, extraEnv []string) ([]ModelInfo, error) {
 	port, err := allocFreeTCPPort()
 	if err != nil {
 		return nil, fmt.Errorf("opencode catalog probe: alloc port: %w", err)
 	}
 	args := []string{"serve", "--hostname", "127.0.0.1", "--port", strconv.Itoa(port)}
 	cmd := exec.CommandContext(ctx, bin, args...)
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	if err := cmd.Start(); err != nil {

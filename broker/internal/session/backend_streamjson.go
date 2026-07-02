@@ -29,8 +29,8 @@ func (streamjsonBackend) Capabilities() BackendCapabilities {
 	}
 }
 
-func (streamjsonBackend) CatalogProbe(ctx context.Context, bin string) ([]ModelInfo, error) {
-	return probeClaudeCatalog(ctx, bin)
+func (streamjsonBackend) CatalogProbe(ctx context.Context, bin string, extraEnv []string) ([]ModelInfo, error) {
+	return probeClaudeCatalog(ctx, bin, extraEnv)
 }
 
 func (streamjsonBackend) Usage(ctx context.Context, do httpDoFunc, homeDir string) (AccountUsage, bool, error) {

@@ -89,8 +89,8 @@ func (codexAppServerBackend) Capabilities() BackendCapabilities {
 	}
 }
 
-func (codexAppServerBackend) CatalogProbe(ctx context.Context, bin string) ([]ModelInfo, error) {
-	return probeCodexCatalog(ctx, bin)
+func (codexAppServerBackend) CatalogProbe(ctx context.Context, bin string, extraEnv []string) ([]ModelInfo, error) {
+	return probeCodexCatalog(ctx, bin, extraEnv)
 }
 
 func (codexAppServerBackend) Usage(ctx context.Context, do httpDoFunc, homeDir string) (AccountUsage, bool, error) {
@@ -146,8 +146,8 @@ func (codexExecBackend) Capabilities() BackendCapabilities {
 	}
 }
 
-func (codexExecBackend) CatalogProbe(ctx context.Context, bin string) ([]ModelInfo, error) {
-	return probeCodexCatalog(ctx, bin)
+func (codexExecBackend) CatalogProbe(ctx context.Context, bin string, extraEnv []string) ([]ModelInfo, error) {
+	return probeCodexCatalog(ctx, bin, extraEnv)
 }
 
 func (codexExecBackend) Usage(ctx context.Context, do httpDoFunc, homeDir string) (AccountUsage, bool, error) {
