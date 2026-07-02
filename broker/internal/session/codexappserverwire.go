@@ -918,6 +918,14 @@ func isCodexCompactCommand(text string) bool {
 	return strings.TrimSpace(text) == "/compact"
 }
 
+// isCodexClearCommand reports whether the user's composer text is exactly the
+// `/clear` slash command (trimmed). Codex has no native clear/reset; the broker
+// starts a brand-new thread/start on the same app-server process, which has no
+// memory of the previous thread.
+func isCodexClearCommand(text string) bool {
+	return strings.TrimSpace(text) == "/clear"
+}
+
 // codexMessageCap bounds a surfaced error message so a verbose codex error
 // doesn't blow up the chat bubble (mirrors firstMeaningfulLine's 200-char cap).
 const codexMessageCap = 200

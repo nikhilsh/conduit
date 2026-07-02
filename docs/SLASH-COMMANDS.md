@@ -24,12 +24,31 @@ leading `/`:
 
 ## What the CLIs accept
 
-| Command | Claude (stream-json headless) | Codex (`codex exec`) |
-|---|---|---|
-| `/compact`, `/clear`, `/context`, `/usage` | **Yes** — the CLI intercepts a leading `/` in the user message; `system/init` lists available `slash_commands` | **No** — slash commands are not supported in `exec` mode (openai/codex#3641) |
-| `/model`, `/effort` | No — interactive TUI picker only (model is a spawn-time `--model` flag) | No |
-| custom `.claude/commands/*` | **Yes** — SDK-dispatchable | n/a |
-| `/loop`, `/help` | n/a — not a CLI concept | n/a |
+| Command | Claude (stream-json headless) | Codex (`codex exec`) | Codex app-server |
+|---|---|---|---|
+| `/compact` | **Yes** — CLI intercepts; broker surfaces compaction events | **No** (exec mode, openai/codex#3641) | **Yes** — broker routes to `thread/compact/start` |
+| `/clear` | **Yes** — CLI intercepts; emits new `session_id` on `system/init`, synthetic assistant event suppressed by broker, "✓ Context cleared" system line published | **No** (exec mode) | **Yes** — broker orchestrates fresh `thread/start` on same app-server process; new thread has no memory of old one |
+| `/context`, `/usage` | **Yes** — CLI pass-through | **No** | No equivalent |
+| `/model`, `/effort` | No — spawn-time only | No | No |
+| custom `.claude/commands/*` | **Yes** — SDK-dispatchable | n/a | n/a |
+| `/loop`, `/help` | n/a — not a CLI concept | n/a | n/a |
+
+## `/clear` implementation details (shipped)
+
+**Claude stream-json backend** (PR feat/clear-command):
+- The CLI intercepts `/clear` from stdin and emits exactly three lines:
+  1. `{"type":"system","subtype":"init","session_id":"<NEW-UUID>"}` — new session id; broker re-latches via existing `latchChatSessionID`.
+  2. Synthetic assistant: `{"type":"assistant","message":{"model":"<synthetic>",...,"content":[{"type":"text","text":"(no content)"}]}}` — suppressed by `parseClaudeStreamLine` (`model=="<synthetic>"` guard).
+  3. `{"type":"result","subtype":"success","num_turns":0}` — turn end; `chatProcess.expectingClear` flag causes `publishChatSystem("✓ Context cleared — starting fresh.")`.
+- `supports.clear = true` in `/api/capabilities` for this backend.
+
+**Codex app-server backend** (PR feat/clear-command):
+- Codex 0.141.0 has no native clear/reset. The broker sends a new `thread/start` on the SAME running `codex app-server` process.
+- Live-verified: a second `thread/start` on the same process returns a distinct thread id with no context from the prior thread.
+- `codexAppServerProcess.clearThread()`: allocates a fresh JSON-RPC id, sets `clearReqID + clearRespCh`, writes `thread/start`, waits for result, calls `forceLatchThread(newID)`, publishes "✓ Context cleared".
+- `supports.clear = true` in `/api/capabilities` for this backend.
+
+**Capability flag**: `BackendCapabilities.Clear bool` → `AgentSupports.Clear bool` → `supports.clear` JSON field. Apps gate the `/clear` composer action on this flag (separate PR).
 
 Sources: Claude Code SDK slash-commands & CLI reference (code.claude.com),
 Codex non-interactive docs (developers.openai.com), openai/codex#3641.

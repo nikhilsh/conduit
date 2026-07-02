@@ -80,6 +80,7 @@ func init() { registerBackend("codex-app-server", codexAppServerBackend{}) }
 func (codexAppServerBackend) Capabilities() BackendCapabilities {
 	return BackendCapabilities{
 		Compact:         true, // persistent thread → /compact
+		Clear:           true, // broker-orchestrated thread/start → fresh context
 		AskUserQuestion: true, // on-request approval cards
 		Effort:          true,
 		Resume:          true, // thread/resume across restarts

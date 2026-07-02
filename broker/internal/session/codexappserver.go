@@ -173,6 +173,13 @@ type codexAppServerProcess struct {
 
 	// --- codex multi-agent / sub-agent tracking ---
 
+	// clearReqID, when non-zero, is the JSON-RPC id of an in-flight
+	// thread/start for a /clear operation. The reader goroutine routes the
+	// matching response to clearRespCh rather than the regular turn path.
+	// Protected by c.mu.
+	clearReqID  int
+	clearRespCh chan json.RawMessage
+
 	// subagentH is the session-level roster handle (borrows Session.mu + the
 	// subagentRegistry). Set once at construction; nil on the exec-path fallback
 	// and in unit tests that don't need roster output. All roster mutations go
@@ -391,6 +398,65 @@ func (c *codexAppServerProcess) latchThread(tid string) {
 	}
 }
 
+// forceLatchThread unconditionally replaces the stored thread id and fires
+// onThread so the session persists the new id. Used only by clearThread (/clear)
+// where we intentionally replace the old thread with a fresh one.
+func (c *codexAppServerProcess) forceLatchThread(tid string) {
+	if tid == "" {
+		return
+	}
+	c.mu.Lock()
+	c.threadID = tid
+	c.mu.Unlock()
+	if c.onThread != nil {
+		c.onThread(tid)
+	}
+}
+
+// clearThread starts a fresh codex thread on the SAME app-server process,
+// replacing the current thread id. The old thread's history is not accessible
+// from the new thread — the app-server has no memory of it. The new thread id
+// is latched via forceLatchThread so the session persists it for recovery.
+// Publishes the "✓ Context cleared" system line on success.
+//
+// Live-verified (2026-07-02): codex app-server 0.141.0 accepts a second
+// thread/start on the same process and returns a distinct thread id with no
+// context from the prior thread. No subprocess respawn is required.
+func (c *codexAppServerProcess) clearThread() {
+	ch := make(chan json.RawMessage, 1)
+
+	c.mu.Lock()
+	id := c.allocIDLocked()
+	c.clearReqID = id
+	c.clearRespCh = ch
+	c.mu.Unlock()
+
+	fmt.Fprintf(os.Stderr, "codex app-server: /clear — starting new thread (id %d)\n", id)
+	if err := c.writeRequest(id, "thread/start", codexThreadStartParams(c.dir, c.override)); err != nil {
+		c.mu.Lock()
+		c.clearReqID = 0
+		c.clearRespCh = nil
+		c.mu.Unlock()
+		publishChatSystem(c.publish, "⚠️ codex: /clear failed: "+err.Error())
+		return
+	}
+	// The readLoop routes the thread/start RESULT (full raw line) to ch.
+	// waitCodexResult decodes the result and returns an error for RPC errors.
+	raw, err := waitCodexResult(ch)
+	if err != nil {
+		publishChatSystem(c.publish, "⚠️ codex: /clear failed: "+err.Error())
+		return
+	}
+	tid := codexThreadIDFromStartResult(raw)
+	if tid == "" {
+		publishChatSystem(c.publish, "⚠️ codex: /clear: no thread id in result")
+		return
+	}
+	c.forceLatchThread(tid)
+	fmt.Fprintf(os.Stderr, "codex app-server: /clear — new thread %s\n", tid)
+	publishChatSystem(c.publish, "✓ Context cleared — starting fresh.")
+}
+
 // Send runs one codex turn (or a compaction) for the user's message. It
 // returns immediately; notifications stream via publish from the reader
 // goroutine. A bare "/compact" triggers thread/compact/start instead of a
@@ -420,12 +486,19 @@ func (c *codexAppServerProcess) Send(text string) error {
 	if c.turnActive {
 		// A turn is in flight. If the turn id has been latched (turn/started
 		// was seen), steer the running turn rather than rejecting the message.
-		if c.turnID != "" && !isCodexCompactCommand(text) {
+		if c.turnID != "" && !isCodexCompactCommand(text) && !isCodexClearCommand(text) {
 			c.mu.Unlock()
 			return c.Steer(text)
 		}
 		c.mu.Unlock()
 		return errCodexTurnInFlight
+	}
+	// /clear is handled BEFORE the turnActive latch so we never set up a
+	// fake turn that would surface a spurious "no reply" notice when cleared.
+	if isCodexClearCommand(text) {
+		c.mu.Unlock()
+		go c.clearThread()
+		return nil
 	}
 	tid := c.threadID
 	id := c.allocIDLocked()
@@ -655,6 +728,30 @@ func (c *codexAppServerProcess) readLoop(stdout io.Reader, resp chan<- json.RawM
 		// otherwise forward a copy — the scanner reuses its buffer — to the
 		// handshake waiter.
 		if env.ID != nil && env.Method == "" {
+			// /clear path: a thread/start response mid-session is routed
+			// directly to clearRespCh (not the now-closed handshake resp).
+			// Check before routeTurnResponse so the clear id is not
+			// confused with a stale turn id.
+			var rawID int
+			if json.Unmarshal(env.ID, &rawID) == nil {
+				c.mu.Lock()
+				isClear := c.clearReqID != 0 && rawID == c.clearReqID
+				clearCh := c.clearRespCh
+				if isClear {
+					c.clearReqID = 0
+					c.clearRespCh = nil
+				}
+				c.mu.Unlock()
+				if isClear && clearCh != nil {
+					cp := make(json.RawMessage, len(line))
+					copy(cp, line)
+					select {
+					case clearCh <- cp:
+					default:
+					}
+					continue
+				}
+			}
 			if c.routeTurnResponse(env.ID, env.Error) {
 				continue
 			}

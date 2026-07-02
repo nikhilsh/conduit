@@ -143,7 +143,7 @@ chat_mode = "codex-exec"
 	if claude.LoginProvider != "anthropic" {
 		t.Errorf("claude login_provider = %q, want anthropic", claude.LoginProvider)
 	}
-	if !claude.Supports.Compact || !claude.Supports.AskUserQuestion || !claude.Supports.Effort ||
+	if !claude.Supports.Compact || !claude.Supports.Clear || !claude.Supports.AskUserQuestion || !claude.Supports.Effort ||
 		!claude.Supports.PlanMode || !claude.Supports.Usage {
 		t.Errorf("claude supports = %+v, want all true", claude.Supports)
 	}
@@ -167,6 +167,9 @@ chat_mode = "codex-exec"
 	}
 	if codex.Supports.Compact {
 		t.Errorf("codex-exec must not support compact")
+	}
+	if codex.Supports.Clear {
+		t.Errorf("codex-exec must not support clear")
 	}
 	if codex.Supports.AskUserQuestion {
 		t.Errorf("codex-exec must not support ask_user_question")

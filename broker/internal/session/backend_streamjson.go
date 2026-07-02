@@ -21,6 +21,7 @@ func init() { registerBackend("stream-json", streamjsonBackend{}) }
 func (streamjsonBackend) Capabilities() BackendCapabilities {
 	return BackendCapabilities{
 		Compact:         true,
+		Clear:           true, // /clear pass-through → new session_id, confirmation
 		AskUserQuestion: true, // stdio control bridge → tappable cards
 		Effort:          true,
 		Resume:          true, // --resume / --continue across respawns
