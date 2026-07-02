@@ -3815,6 +3815,18 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // through to the normal send below; app-handled ones are handled
         // here and we return early. See docs/SLASH-COMMANDS.md.
         if (handleSlashCommand(sessionId, msg)) return
+        // Diagnostic: capture the routing-decision inputs for EVERY delivered
+        // send so a message that silently gets queued behind a stuck turn, or
+        // consumed as an answer to a stale pending-ask, is reconstructable from
+        // Sentry without a repro (the "no replies after /clear" device report,
+        // #844 verification — the reply path is proven healthy, so a failure is
+        // a mis-route here). Cheap ring-buffered breadcrumb. Mirror of iOS.
+        Telemetry.breadcrumb("chat", "send routing", mapOf(
+            "session" to sessionId,
+            "turn_active" to (_statusBySession.value[sessionId]?.turnActive == true).toString(),
+            "pending_ask" to hasPendingAsk(sessionId).toString(),
+            "is_slash" to msg.startsWith("/").toString(),
+        ))
         // ELICITATION BYPASS: if the session is blocked on a pending
         // AskUserQuestion, the answer MUST bypass the turn-queue gate and
         // reach the broker immediately. Routing through the turnActive queue
@@ -4245,10 +4257,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // When we have live descriptors, pass the explicit supportsCompact flag so
         // the registry uses the broker's answer rather than the static name check.
         // null = fall back to the static "agent == claude" check (old broker).
-        val supportsCompact = _agentDescriptors.value
+        val liveDescriptor = _agentDescriptors.value
             .takeIf { it.isNotEmpty() }
-            ?.let { descriptorFor(agent, it).supportsCompact }
-        val match = SlashCommandRegistry.classify(msg, agent, supportsCompact) ?: return false
+            ?.let { descriptorFor(agent, it) }
+        val supportsCompact = liveDescriptor?.supportsCompact
+        val supportsClear = liveDescriptor?.supportsClear
+        val match = SlashCommandRegistry.classify(msg, agent, supportsCompact, supportsClear) ?: return false
         if (match.command.clazz == SlashCommandClass.PASS_THROUGH) {
             if (match.supported) return false // deliver verbatim to the agent
             postSystemMessage(sessionId, "“/${match.command.name}” only works with Claude — this session is running $agent.")

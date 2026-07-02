@@ -75,8 +75,19 @@ enum SlashCommandRegistry {
         let supported: Bool
         if cmd.clazz == .passThrough, cmd.claudeOnly {
             if let descriptor {
-                // Descriptor present: /compact is supported iff supports.compact.
-                supported = descriptor.supports.compact
+                // Descriptor present: gate each pass-through on ITS OWN
+                // capability, not a shared one. /clear reads supports.clear
+                // (falling back to supports.compact when the broker is too old
+                // to state it — any backend with compact almost certainly also
+                // clears); /compact reads supports.compact. Previously both
+                // gated on compact, so a backend that supports one but not the
+                // other was mis-judged.
+                switch cmd.name {
+                case "clear":
+                    supported = descriptor.supports.clear ?? descriptor.supports.compact
+                default:
+                    supported = descriptor.supports.compact
+                }
             } else {
                 // Fallback: legacy name-based gate (old broker / no descriptor).
                 supported = agent.lowercased() == "claude"

@@ -70,6 +70,15 @@ data class AgentDescriptor(
      * Mirror of iOS `AgentDescriptor.supportsSteer`.
      */
     val supportsSteer: Boolean = false,
+    /**
+     * Agent supports `/clear` (in-session context reset). Nullable: `null`
+     * means the broker is too old to state it, so callers fall back to
+     * [supportsCompact] as a proxy (any backend with compact almost certainly
+     * also clears). Distinct because a backend can support one without the
+     * other (broker `BackendCapabilities.Clear`, PR #844).
+     * Mirror of iOS `AgentDescriptorSupports.clear`.
+     */
+    val supportsClear: Boolean? = null,
 )
 
 /**
@@ -86,6 +95,7 @@ internal val staticAgentDescriptors: Map<String, AgentDescriptor> = mapOf(
         supportsEffort = true,
         supportsPlanMode = true,
         supportsUsage = true,
+        supportsClear = true,
     ),
     "codex" to AgentDescriptor(
         displayName = "Codex",
@@ -119,6 +129,9 @@ internal fun parseAgentDescriptors(raw: String): Map<String, AgentDescriptor> {
             supportsPlanMode = supports.optBoolean("plan_mode", false),
             supportsUsage = supports.optBoolean("usage", false),
             supportsSteer = supports.optBoolean("steer", false),
+            // Nullable: preserve "absent" (old broker) as null so the /clear
+            // gate can fall back to compact rather than mis-reading a default.
+            supportsClear = if (supports.has("clear")) supports.optBoolean("clear", false) else null,
         )
     }
     return out
