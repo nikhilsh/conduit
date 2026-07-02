@@ -2556,7 +2556,7 @@ private fun SendStatusFooter(ev: ConversationItem) {
  */
 @Composable
 private fun TypingIndicatorRow(
-    assistant: String,
+    @Suppress("UNUSED_PARAMETER") assistant: String,
     @Suppress("UNUSED_PARAMETER") accent: Color,
     turnPhase: String? = null,
 ) {
@@ -2571,26 +2571,29 @@ private fun TypingIndicatorRow(
     }
     // Shared infinite transition for three-dot writing state.
     val writingTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "typing")
-    Row(
+    // iOS ConduitTypingIndicator: VStack (label above dots), no avatar icon.
+    // Label: mono bold uppercase ~11sp. Dots: neon.accent (writing) or
+    // neon.textDim/neon.accent (thinking/working). Dot size 7dp.
+    Column(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Icon(
-            Icons.Outlined.SmartToy,
-            contentDescription = null,
-            tint = neon.accent2,
-            modifier = Modifier.size(14.dp),
-        )
         val label = when (turnPhase) {
-            "working" -> "working..."
-            "thinking" -> "thinking..."
-            else -> "$assistant is typing..."
+            "working" -> "WORKING..."
+            "thinking" -> "THINKING..."
+            else -> "ASSISTANT"
         }
+        Text(
+            label,
+            fontFamily = neon.mono,
+            fontWeight = FontWeight.Bold,
+            fontSize = 11.sp,
+            color = neon.textDim,
+        )
         if (turnPhase == "working" || turnPhase == "thinking") {
             // Single pulsing dot: smooth 800ms ease-in-out on both scale and alpha.
             // Under reduceMotion: static dot, no animation.
-            val dotColor = if (turnPhase == "thinking") neon.textDim else neon.accent2
+            val dotColor = if (turnPhase == "thinking") neon.textDim else neon.accent
             if (reduceMotion) {
                 // Static dot — no animation under reduceMotion.
                 Box(
@@ -2632,7 +2635,7 @@ private fun TypingIndicatorRow(
                 )
             }
         } else {
-            // Three staggered bouncing dots for writing/default state
+            // Three staggered bouncing dots for writing/default state (neon.accent mirrors iOS)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 repeat(3) { i ->
                     val dotAlpha by writingTransition.animateFloat(
@@ -2649,19 +2652,13 @@ private fun TypingIndicatorRow(
                     )
                     Box(
                         modifier = Modifier
-                            .size(6.dp)
+                            .size(7.dp)
                             .graphicsLayer { alpha = dotAlpha }
-                            .background(neon.accent2, CircleShape),
+                            .background(neon.accent, CircleShape),
                     )
                 }
             }
         }
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = neon.sans,
-            color = neon.textDim,
-        )
     }
 }
 
@@ -3803,7 +3800,7 @@ private fun toolTileIcon(kind: NeonToolKind, neon: NeonTheme): Pair<ImageVector,
     NeonToolKind.READ -> Icons.Outlined.Visibility to neon.blue
     NeonToolKind.EDIT -> Icons.Outlined.Create to neon.claude
     NeonToolKind.BASH -> Icons.Outlined.Terminal to neon.green
-    NeonToolKind.GENERIC -> Icons.Outlined.Build to neon.accent2
+    NeonToolKind.GENERIC -> Icons.Outlined.Build to neon.accent
 }
 
 /** Human label for a tool family, used as the §4.5 header. */

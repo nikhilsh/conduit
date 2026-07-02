@@ -9,13 +9,15 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.automirrored.outlined.Chat
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.*
+import sh.nikhil.conduit.ui.components.NeonPillSegment
+import sh.nikhil.conduit.ui.components.NeonSegmentedPill
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -453,11 +455,12 @@ private fun ControlsRow(
         // 2026-06-16) — Home is the canonical session list now.
         if (!chatOnly && onBack != null) {
             // Fix 1: leading back chevron on phone — mirrors iOS NavigationStack
-            // back button. Tapping returns to Home (store.select(null)).
+            // back button (chevron.left tinted neon.text). Tapping returns to Home.
             HeaderCircleButton(
-                icon = Icons.AutoMirrored.Filled.ArrowBack,
+                icon = Icons.Filled.ChevronLeft,
                 contentDescription = "Back",
                 onClick = onBack,
+                tint = neon.text,
             )
         }
 
@@ -632,78 +635,47 @@ private fun IdentityBlock(
 }
 
 /**
- * Row 3 — Terminal / Chat / Browser tab picker, wrapped in its own
- * glass surface so it reads as the dominant affordance in the header
- * (plan: "this is the main idea per chat window").
+ * Segmented pill tab switcher — Android mirror of iOS `NeonSegmentedPill`
+ * (ConduitProjectView.swift ~545-567). A glass-capsule container with the
+ * active segment filled accent; inactive segments use textDim. Labels are
+ * mono 12sp semibold with a small leading icon. Centred in the header row.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TabPickerRow(
     tabs: List<ProjectTab>,
     selected: Int,
     onSelect: (Int) -> Unit,
 ) {
-    // Neon underlined top tabs (Android idiom): a transparent TabRow over
-    // the header surface, an accent-glow underline indicator on the
-    // active tab, and neon-token text/icon tints. The default M3 divider
-    // is replaced by a faint neon hairline so the strip reads as one rail.
-    // Neon underlined top tabs (Android idiom): a transparent TabRow over
-    // the header surface, the default M3 indicator recolored to
-    // `neon.accent` (glow on the accent line is approximated by the
-    // accent fill + the dark-mode wash behind it — Compose can't easily
-    // glow the default indicator), and a faint neon hairline divider so
-    // the strip reads as one rail.
-    // The default M3 indicator already positions + animates itself under
-    // the selected tab; we recolor it (and the tab content) to
-    // `neon.accent` via `contentColor`, and replace the default divider
-    // with a faint neon hairline so the strip reads as one rail. A
-    // hand-rolled offset indicator needs `tabIndicatorOffset`, which isn't
-    // exposed in this Compose Material3 version — fidelity gap: the neon
-    // glow halo on the underline is not rendered (the accent fill + dark
-    // wash behind it approximate the lit underline).
-    val neon = LocalNeonTheme.current
-    TabRow(
-        selectedTabIndex = selected,
-        containerColor = androidx.compose.ui.graphics.Color.Transparent,
-        contentColor = neon.accent,
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        divider = {
-            androidx.compose.material3.HorizontalDivider(color = neon.border, thickness = 1.dp)
-        },
+        horizontalArrangement = Arrangement.Center,
     ) {
-        tabs.forEachIndexed { i, t ->
-            val active = selected == i
-            Tab(
-                selected = active,
-                onClick = { onSelect(i) },
-                selectedContentColor = neon.accent,
-                unselectedContentColor = neon.textDim,
-                text = {
-                    Text(
-                        t.label,
-                        fontFamily = neon.sans,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (active) neon.accent else neon.textDim,
-                    )
-                },
-                icon = {
-                    Icon(
-                        when (t) {
-                            ProjectTab.Terminal -> Icons.Outlined.Terminal
-                            ProjectTab.Chat     -> Icons.AutoMirrored.Outlined.Chat
-                            ProjectTab.Browser  -> Icons.Outlined.Public
-                        },
-                        contentDescription = null,
-                        tint = if (active) neon.accent else neon.textDim,
-                    )
-                },
-            )
-        }
+        NeonSegmentedPill(
+            segments = tabs.map { t ->
+                NeonPillSegment(
+                    label = t.label,
+                    icon = when (t) {
+                        ProjectTab.Terminal -> Icons.Outlined.Terminal
+                        ProjectTab.Chat     -> Icons.AutoMirrored.Outlined.Chat
+                        ProjectTab.Browser  -> Icons.Outlined.Public
+                    },
+                )
+            },
+            selected = selected,
+            onSelect = onSelect,
+        )
     }
 }
 
 @Composable
-private fun HeaderCircleButton(icon: ImageVector, contentDescription: String, onClick: () -> Unit) {
+private fun HeaderCircleButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    // Optional per-button tint — defaults to neon.accent (existing behaviour).
+    // Pass neon.text for the back chevron to match iOS (chevron.left tinted neon.text).
+    tint: androidx.compose.ui.graphics.Color? = null,
+) {
     // `glassCircle` already clips to CircleShape; we add `clickable`
     // after so the ripple respects the rounded edge.
     val neon = LocalNeonTheme.current
@@ -718,7 +690,7 @@ private fun HeaderCircleButton(icon: ImageVector, contentDescription: String, on
             icon,
             contentDescription = contentDescription,
             modifier = Modifier.size(16.dp),
-            tint = neon.accent,
+            tint = tint ?: neon.accent,
         )
     }
 }
