@@ -53,6 +53,12 @@ extension ConduitUI {
         private let railTileCount: Int = 48
         @State private var railOffset: CGFloat = 0
 
+        // Drawing growth animation: the visible clipped rail length eases toward the
+        // content-driven height `h`. Starts at 0 so the rail draws downward on first
+        // appear; each streamed token retargets the animation smoothly. Under
+        // reduceMotion the length snaps directly to h (no draw animation).
+        @State private var railDrawnHeight: CGFloat = 0
+
         var body: some View {
             HStack(alignment: .top, spacing: 13) {
                 // MARK: Rail column (fixed 24pt)
@@ -141,15 +147,25 @@ extension ConduitUI {
         // re-clip the stack cheaply and do NOT restart the animation because railOffset is
         // started ONCE in .task(id: reduceMotion) in body, not here.
         //
-        // While streaming: tile count = ceil(h / railTile) + 2 (wrap margin). The stack
-        // sits at railOffset (animated -railTile -> 0, looping), seamlessly flowing down.
+        // Drawing growth: the VISIBLE clip uses railDrawnHeight (the animated length), not h
+        // directly. `h` is the full content-driven target; railDrawnHeight eases toward it
+        // so the rail appears to draw downward as the message grows. The column/GeometryReader
+        // height is still `h` so layout is unaffected (the column simply clips shorter while
+        // animating). Under reduceMotion: railDrawnHeight snaps to h (no draw animation).
+        //
+        // While streaming: the FIXED-size tile stack (railTileCount tiles) sits at railOffset
+        // (animated -railTile -> 0, looping), seamlessly flowing down.
         // Under reduceMotion: static accent->green gradient spanning h, opacity 0.5.
         private var railLine: some View {
             GeometryReader { geo in
                 let h = max(geo.size.height, railTile)
+                // Use railDrawnHeight (the animated length) for the visible clip.
+                // Clamp to h so we never show more than the actual content height.
+                let drawn = min(railDrawnHeight, h)
                 Group {
                     if reduceMotion {
                         // Calm end-state: static full-height accent->green at opacity 0.5.
+                        // railDrawnHeight is snapped to h immediately (no draw animation).
                         LinearGradient(
                             colors: [neon.accentBright, neon.green],
                             startPoint: .top,
@@ -160,8 +176,8 @@ extension ConduitUI {
                     } else {
                         // FIXED-size tile stack (railTileCount tiles) — constant across
                         // streamed-message growth so it never rebuilds. It's taller than
-                        // any realistic rail; the outer `.frame(height: h)` + `.clipped()`
-                        // trims it to the actual height. Animation is driven by railOffset
+                        // any realistic rail; the outer `.frame(height: drawn)` + `.clipped()`
+                        // trims it to the animated drawn length. Animation is driven by railOffset
                         // (started once in body/.task), untouched by height changes.
                         VStack(spacing: 0) {
                             ForEach(0..<railTileCount, id: \.self) { _ in
@@ -178,9 +194,34 @@ extension ConduitUI {
                         .opacity(0.95)
                     }
                 }
-                .frame(width: 2, height: h, alignment: .top)
+                // Clip to the animated drawn length (not h) so the rail visually grows.
+                // The outer GeometryReader still occupies h, keeping layout stable.
+                .frame(width: 2, height: drawn, alignment: .top)
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
+                // Drive the growth animation whenever the content height changes.
+                // On first appear railDrawnHeight is 0 and this fires immediately to
+                // kick the draw-down. Each streamed token retargets the ease smoothly.
+                .onChange(of: h) { _, newH in
+                    if reduceMotion {
+                        railDrawnHeight = newH
+                    } else {
+                        withAnimation(.easeOut(duration: 0.35)) {
+                            railDrawnHeight = newH
+                        }
+                    }
+                }
+                .onAppear {
+                    // First appear: start at 0 (or snap if reduceMotion) then animate to h.
+                    if reduceMotion {
+                        railDrawnHeight = h
+                    } else {
+                        railDrawnHeight = 0
+                        withAnimation(.easeOut(duration: 0.35)) {
+                            railDrawnHeight = h
+                        }
+                    }
+                }
             }
             .frame(width: 2)
             .frame(maxHeight: .infinity)
