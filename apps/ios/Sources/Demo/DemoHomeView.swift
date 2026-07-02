@@ -13,14 +13,32 @@ extension ConduitUI {
 
     struct DemoHomeView: View {
         @Environment(SessionStore.self) private var store
+        @Environment(AppearanceStore.self) private var appearance
         @Environment(\.horizontalSizeClass) private var horizontalSizeClass
         @Environment(\.neonTheme) private var neon
 
+        /// Captured on `.onAppear`; restored on `.onDisappear` so any
+        /// theme/font changes made in the demo do not persist after the
+        /// reviewer exits demo mode.
+        @State private var appearanceSnapshot: AppearanceStore.Snapshot?
+
         var body: some View {
-            if horizontalSizeClass == .regular {
-                DemoTabletShell()
-            } else {
-                DemoPhoneShell()
+            Group {
+                if horizontalSizeClass == .regular {
+                    DemoTabletShell()
+                } else {
+                    DemoPhoneShell()
+                }
+            }
+            .onAppear {
+                appearanceSnapshot = appearance.snapshot()
+                Telemetry.breadcrumb("demo", "appearance_snapshot_captured")
+            }
+            .onDisappear {
+                if let snap = appearanceSnapshot {
+                    appearance.apply(snap)
+                    Telemetry.breadcrumb("demo", "appearance_snapshot_restored")
+                }
             }
         }
     }
@@ -30,8 +48,10 @@ extension ConduitUI {
 
 private struct DemoPhoneShell: View {
     @Environment(SessionStore.self) private var store
+    @Environment(AppearanceStore.self) private var appearance
     @Environment(\.neonTheme) private var neon
     @State private var selectedSessionID: String?
+    @State private var showingAppearance = false
 
     private var selectedSession: ProjectSession? {
         guard let id = selectedSessionID else { return nil }
@@ -51,6 +71,17 @@ private struct DemoPhoneShell: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        Telemetry.breadcrumb("demo", "appearance_opened")
+                        showingAppearance = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(neon.textDim)
+                    }
+                    .buttonStyle(.plain)
+                }
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 8) {
                         ConduitUI.AnimatedBrandMark(size: 22)
@@ -85,6 +116,10 @@ private struct DemoPhoneShell: View {
                     DemoProjectView(session: session)
                 }
             }
+            .sheet(isPresented: $showingAppearance) {
+                ConduitUI.AppearanceSheet()
+                    .environment(appearance)
+            }
         }
         .onAppear {
             Telemetry.breadcrumb("demo", "home_appeared")
@@ -96,8 +131,10 @@ private struct DemoPhoneShell: View {
 
 private struct DemoTabletShell: View {
     @Environment(SessionStore.self) private var store
+    @Environment(AppearanceStore.self) private var appearance
     @Environment(\.neonTheme) private var neon
     @State private var selectedSession: ProjectSession? = DemoData.sessions.first
+    @State private var showingAppearance = false
 
     var body: some View {
         NavigationSplitView {
@@ -108,6 +145,16 @@ private struct DemoTabletShell: View {
                     (Text(">").foregroundStyle(neon.codex) + Text("conduit").foregroundStyle(neon.text))
                         .font(neon.mono(14).weight(.bold))
                     Spacer()
+                    Button {
+                        Telemetry.breadcrumb("demo", "appearance_opened")
+                        showingAppearance = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(neon.textDim)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 8)
                     Button {
                         Telemetry.breadcrumb("demo", "exit_tapped")
                         store.deactivateDemo()
@@ -135,6 +182,10 @@ private struct DemoTabletShell: View {
             } else {
                 ConduitUI.EmptyDetail()
             }
+        }
+        .sheet(isPresented: $showingAppearance) {
+            ConduitUI.AppearanceSheet()
+                .environment(appearance)
         }
         .onAppear {
             Telemetry.breadcrumb("demo", "home_appeared_tablet")
