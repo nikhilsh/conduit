@@ -86,7 +86,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -2663,24 +2662,29 @@ private fun StreamingSpineRow(content: String) {
         mapOf("contentLen" to content.length.toString(), "reduceMotion" to reduceMotion.toString()),
     )
 
-    // Drawing growth animation: track the measured row height (px) and animate
-    // the drawn rail length toward it. Starts at 0 so the rail draws downward
-    // on first composition; each streamed token retargets the ease smoothly.
-    // Under reduceMotion (animator scale == 0) the spring/tween is instant (Compose
-    // respects ANIMATOR_DURATION_SCALE = 0 natively for animateFloatAsState).
-    var targetRowHeightPx by remember { mutableStateOf(0f) }
-    val drawnHeightPx by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = targetRowHeightPx,
-        animationSpec = if (reduceMotion) {
-            androidx.compose.animation.core.snap()
-        } else {
-            androidx.compose.animation.core.tween(
-                durationMillis = 350,
-                easing = androidx.compose.animation.core.FastOutSlowInEasing,
-            )
-        },
-        label = "railDrawnHeight",
-    )
+    // Continuous draw-down: drawFraction loops 0 -> 1 so the rail perpetually
+    // redraws itself downward from the mark head (not just once as prose grows).
+    // The Canvas maps this to railEndY = railStartY + (fullHeight - railStartY) * f,
+    // so the drawn endpoint sweeps down, snaps back to the head, and repeats. Under
+    // reduceMotion the fraction is pinned to 1 (static full-height rail).
+    val drawTransition = if (!reduceMotion) {
+        androidx.compose.animation.core.rememberInfiniteTransition(label = "railDraw")
+    } else null
+    val drawFraction = if (drawTransition != null) {
+        val d by drawTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                animation = androidx.compose.animation.core.tween(
+                    durationMillis = 1300,
+                    easing = androidx.compose.animation.core.FastOutSlowInEasing,
+                ),
+                repeatMode = androidx.compose.animation.core.RepeatMode.Restart,
+            ),
+            label = "railDrawFraction",
+        )
+        d
+    } else 1f
 
     // Breathe: mark head glow pulsing accent <-> green, 2.1s ease-in-out.
     val breatheTransition = if (!reduceMotion) {
@@ -2746,11 +2750,7 @@ private fun StreamingSpineRow(content: String) {
         modifier = Modifier
             .fillMaxWidth()
             .height(androidx.compose.foundation.layout.IntrinsicSize.Max)
-            .padding(vertical = 4.dp)
-            // Capture the measured row height so we can animate the drawn rail length.
-            // onSizeChanged fires after layout; setting targetRowHeightPx here feeds
-            // animateFloatAsState which drives drawnHeightPx toward the new height.
-            .onSizeChanged { size -> targetRowHeightPx = size.height.toFloat() },
+            .padding(vertical = 4.dp),
     ) {
         // Rail column: fixed 24dp wide, centered. Stretches to full Row height via
         // fillMaxHeight() which works because the Row uses IntrinsicSize.Max.
@@ -2785,13 +2785,14 @@ private fun StreamingSpineRow(content: String) {
                         style = Stroke(width = 1.dp.toPx()),
                     )
 
-                    // Rail: 2dp wide from 6dp below mark top to the ANIMATED drawn height
-                    // (not the full row height). drawnHeightPx eases from 0 toward the
-                    // full row height so the rail appears to draw downward as prose streams
-                    // in. The flow brush and tile logic are unchanged; only the drawn
-                    // endpoint moves. Clamp to size.height to never exceed the Box.
+                    // Rail: 2dp wide from 6dp below mark top to the LOOPING drawn
+                    // endpoint. drawFraction sweeps 0 -> 1 continuously, so railEndY
+                    // draws downward from the head to the full row height, snaps back,
+                    // and repeats. The flow brush and tile logic are unchanged; only the
+                    // drawn endpoint moves. Clamp to size.height to never exceed the Box.
                     val railStartY = headSize + 6.dp.toPx()
-                    val railEndY = drawnHeightPx.coerceAtMost(size.height)
+                    val railEndY = (railStartY + (size.height - railStartY) * drawFraction)
+                        .coerceIn(railStartY, size.height)
                     if (railEndY > railStartY) {
                         val railH = railEndY - railStartY
                         val tilePx = 46.dp.toPx()

@@ -41,6 +41,7 @@ extension ConduitUI {
         @State private var breatheTask: Task<Void, Never>? = nil
         @State private var caretTask: Task<Void, Never>? = nil
         @State private var flowTask: Task<Void, Never>? = nil
+        @State private var drawTask: Task<Void, Never>? = nil
 
         // Rail flow: tile height unit for the flowing gradient stack.
         // railOffset animates -railTile -> 0, started once in .task(id: reduceMotion).
@@ -54,11 +55,11 @@ extension ConduitUI {
         private let railTileCount: Int = 48
         @State private var railOffset: CGFloat = 0
 
-        // Drawing growth animation: the visible clipped rail length eases toward the
-        // content-driven height `h`. Starts at 0 so the rail draws downward on first
-        // appear; each streamed token retargets the animation smoothly. Under
-        // reduceMotion the length snaps directly to h (no draw animation).
-        @State private var railDrawnHeight: CGFloat = 0
+        // Continuous draw-down: the visible clipped rail length is `h * drawFraction`,
+        // where drawFraction loops 0 -> 1 (see startDraw) so the rail perpetually
+        // redraws itself downward from the mark head — not just once as the message
+        // grows. Under reduceMotion drawFraction is pinned to 1 (static full rail).
+        @State private var drawFraction: CGFloat = 0
 
         var body: some View {
             HStack(alignment: .top, spacing: 13) {
@@ -91,17 +92,20 @@ extension ConduitUI {
                 breatheTask?.cancel()
                 caretTask?.cancel()
                 flowTask?.cancel()
+                drawTask?.cancel()
                 guard !reduceMotion else {
-                    // Calm end-state: static, no glow, no caret blink, full prose.
+                    // Calm end-state: static, no glow, no caret blink, full-height rail.
                     glowPhase = false
                     railOffset = 0
+                    drawFraction = 1
                     caretVisible = true
                     return
                 }
-                // Rail flow runs as a Task-LOOP (not withAnimation.repeatForever):
+                // Rail flow + draw run as Task-LOOPs (not withAnimation.repeatForever):
                 // CA repeat-forever animations play once then drop on re-render/
-                // background. The loop resets to the top and sweeps down forever.
+                // background. The loops reset to the top and sweep down forever.
                 startFlow()
+                startDraw()
                 startBreathe()
                 startCaret()
             }
@@ -116,6 +120,7 @@ extension ConduitUI {
                 // survive independently.
                 guard !reduceMotion else { return }
                 startFlow()
+                startDraw()
                 Telemetry.breadcrumb("streaming-spine", "foreground restart",
                     data: ["contentLen": "\(content.count)"])
             }
@@ -153,11 +158,11 @@ extension ConduitUI {
         // re-clip the stack cheaply and do NOT restart the animation because railOffset is
         // started ONCE in .task(id: reduceMotion) in body, not here.
         //
-        // Drawing growth: the VISIBLE clip uses railDrawnHeight (the animated length), not h
-        // directly. `h` is the full content-driven target; railDrawnHeight eases toward it
-        // so the rail appears to draw downward as the message grows. The column/GeometryReader
-        // height is still `h` so layout is unaffected (the column simply clips shorter while
-        // animating). Under reduceMotion: railDrawnHeight snaps to h (no draw animation).
+        // Continuous draw-down: the VISIBLE clip is `h * drawFraction`, where drawFraction
+        // loops 0 -> 1 (startDraw), so the rail perpetually draws itself downward and snaps
+        // back. The column/GeometryReader height is still `h` so layout is unaffected (the
+        // column simply clips shorter while drawing). Under reduceMotion: drawFraction is
+        // pinned to 1 (static full-height rail, no draw loop).
         //
         // While streaming: the FIXED-size tile stack (railTileCount tiles) sits at railOffset
         // (animated -railTile -> 0, looping), seamlessly flowing down.
@@ -165,13 +170,14 @@ extension ConduitUI {
         private var railLine: some View {
             GeometryReader { geo in
                 let h = max(geo.size.height, railTile)
-                // Use railDrawnHeight (the animated length) for the visible clip.
-                // Clamp to h so we never show more than the actual content height.
-                let drawn = min(railDrawnHeight, h)
+                // Visible clip = h * drawFraction, where drawFraction loops 0 -> 1 so
+                // the rail continuously draws itself downward (see startDraw). As the
+                // message grows, h grows and the current cycle scales with it. Under
+                // reduceMotion drawFraction is pinned to 1 (full height, no draw loop).
+                let drawn = h * drawFraction
                 Group {
                     if reduceMotion {
                         // Calm end-state: static full-height accent->green at opacity 0.5.
-                        // railDrawnHeight is snapped to h immediately (no draw animation).
                         LinearGradient(
                             colors: [neon.accentBright, neon.green],
                             startPoint: .top,
@@ -200,34 +206,12 @@ extension ConduitUI {
                         .opacity(0.95)
                     }
                 }
-                // Clip to the animated drawn length (not h) so the rail visually grows.
-                // The outer GeometryReader still occupies h, keeping layout stable.
+                // Clip to the looping drawn length (h * drawFraction) so the rail
+                // visually draws downward each cycle. The outer GeometryReader still
+                // occupies h, keeping layout stable.
                 .frame(width: 2, height: drawn, alignment: .top)
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
-                // Drive the growth animation whenever the content height changes.
-                // On first appear railDrawnHeight is 0 and this fires immediately to
-                // kick the draw-down. Each streamed token retargets the ease smoothly.
-                .onChange(of: h) { _, newH in
-                    if reduceMotion {
-                        railDrawnHeight = newH
-                    } else {
-                        withAnimation(.easeOut(duration: 0.35)) {
-                            railDrawnHeight = newH
-                        }
-                    }
-                }
-                .onAppear {
-                    // First appear: start at 0 (or snap if reduceMotion) then animate to h.
-                    if reduceMotion {
-                        railDrawnHeight = h
-                    } else {
-                        railDrawnHeight = 0
-                        withAnimation(.easeOut(duration: 0.35)) {
-                            railDrawnHeight = h
-                        }
-                    }
-                }
             }
             .frame(width: 2)
             .frame(maxHeight: .infinity)
@@ -274,6 +258,24 @@ extension ConduitUI {
         }
 
         // MARK: Animation loops
+
+        private func startDraw() {
+            drawTask?.cancel()
+            drawTask = Task {
+                // Continuous draw-down: the rail length sweeps 0 -> full over ~1.1s,
+                // holds briefly, then snaps back to the mark head and redraws — so it
+                // perpetually looks like it's being drawn downward (not a one-shot on
+                // message growth). Runs as a Task-loop so it survives re-render/
+                // foregrounding, like the flow loop.
+                while !Task.isCancelled {
+                    drawFraction = 0
+                    withAnimation(.easeInOut(duration: 1.1)) {
+                        drawFraction = 1
+                    }
+                    try? await Task.sleep(nanoseconds: 1_300_000_000)
+                }
+            }
+        }
 
         private func startFlow() {
             flowTask?.cancel()
