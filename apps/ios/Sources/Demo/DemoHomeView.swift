@@ -82,7 +82,7 @@ private struct DemoPhoneShell: View {
                 set: { if !$0 { selectedSessionID = nil } }
             )) {
                 if let session = selectedSession {
-                    DemoChatView(session: session)
+                    DemoProjectView(session: session)
                 }
             }
         }
@@ -130,7 +130,7 @@ private struct DemoTabletShell: View {
             .toolbar(.hidden, for: .navigationBar)
         } detail: {
             if let session = selectedSession {
-                DemoChatView(session: session)
+                DemoProjectView(session: session)
                     .id(session.id)
             } else {
                 ConduitUI.EmptyDetail()

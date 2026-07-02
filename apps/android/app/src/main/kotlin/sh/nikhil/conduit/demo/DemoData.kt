@@ -12,6 +12,38 @@ import uniffi.conduit_core.ProjectSession
 object DemoData {
 
     // -------------------------------------------------------------------------
+    // Terminal lines
+    //
+    // Canned faux-terminal output for DemoTerminalPage. Each entry is a
+    // TerminalLine(isPrompt, text); prompts render in neon.green, output
+    // in neon.textDim. Mirrors iOS DemoData.terminalLines value-for-value.
+    // -------------------------------------------------------------------------
+
+    data class TerminalLine(val isPrompt: Boolean, val text: String)
+
+    val terminalLines: List<TerminalLine> = listOf(
+        TerminalLine(isPrompt = true,  text = "python todo.py list"),
+        TerminalLine(isPrompt = false, text = "1. [ ] Buy groceries"),
+        TerminalLine(isPrompt = false, text = "2. [x] Ship the release"),
+        TerminalLine(isPrompt = false, text = "3. [ ] Call the dentist"),
+        TerminalLine(isPrompt = true,  text = "python todo.py add \"Review the PR\""),
+        TerminalLine(isPrompt = false, text = "Added: Review the PR"),
+        TerminalLine(isPrompt = true,  text = "python todo.py list"),
+        TerminalLine(isPrompt = false, text = "1. [ ] Buy groceries"),
+        TerminalLine(isPrompt = false, text = "2. [x] Ship the release"),
+        TerminalLine(isPrompt = false, text = "3. [ ] Call the dentist"),
+        TerminalLine(isPrompt = false, text = "4. [ ] Review the PR"),
+        TerminalLine(isPrompt = true,  text = "pytest -q"),
+        TerminalLine(isPrompt = false, text = "........  [100%]"),
+        TerminalLine(isPrompt = false, text = "8 passed in 0.42s"),
+        TerminalLine(isPrompt = true,  text = "python todo.py complete 2"),
+        TerminalLine(isPrompt = false, text = "Completed: Ship the release"),
+        TerminalLine(isPrompt = true,  text = "git add todo.py && git commit -m \"feat: add todo CLI\""),
+        TerminalLine(isPrompt = false, text = "[main 4f2a1c3] feat: add todo CLI"),
+        TerminalLine(isPrompt = false, text = " 1 file changed, 47 insertions(+)"),
+    )
+
+    // -------------------------------------------------------------------------
     // Sessions
     // -------------------------------------------------------------------------
 

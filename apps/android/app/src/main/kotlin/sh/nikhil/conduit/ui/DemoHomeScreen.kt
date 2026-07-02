@@ -108,18 +108,8 @@ private fun DemoPhoneLayout(store: SessionStore, onExitDemo: () -> Unit) {
                     showBack = true,
                     onBack = { selectedSession = null },
                 )
-                // Route transcript through the real read-only ChatPage so the
-                // demo renders authentic cards (code, diff, handoff, pending-input,
-                // plan, subagent) rather than the hand-rolled approximation.
-                LaunchedEffect(session.id) {
-                    Telemetry.breadcrumb("demo", "chat_appeared", mapOf("session" to session.id))
-                }
-                ChatPage(
-                    store = store,
-                    session = session,
-                    readOnly = true,
-                    readOnlyItems = DemoData.conversationBySession[session.id],
-                )
+                // Phase-2: route through DemoProjectScreen (Chat/Terminal/Browser tabs).
+                DemoProjectScreen(store = store, session = session)
             }
         }
     }
@@ -183,20 +173,11 @@ private fun DemoTabletLayout(store: SessionStore, onExitDemo: () -> Unit) {
                 .background(neon.border),
         )
 
-        // Detail panel — route through real read-only ChatPage so the demo
-        // renders authentic cards (code, diff, handoff, pending-input, plan, subagent).
+        // Detail panel — Phase-2: tab switcher (Chat / Terminal / Browser).
         Column(modifier = Modifier.weight(1f).fillMaxSize()) {
             val session = selectedSession
             if (session != null) {
-                LaunchedEffect(session.id) {
-                    Telemetry.breadcrumb("demo", "chat_appeared", mapOf("session" to session.id))
-                }
-                ChatPage(
-                    store = store,
-                    session = session,
-                    readOnly = true,
-                    readOnlyItems = DemoData.conversationBySession[session.id],
-                )
+                DemoProjectScreen(store = store, session = session)
             } else {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
