@@ -1,6 +1,19 @@
 package sh.nikhil.conduit.ui
 
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Chat
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material3.Icon
+import androidx.compose.ui.viewinterop.AndroidView
+import sh.nikhil.conduit.ui.components.NeonPillSegment
+import sh.nikhil.conduit.ui.components.NeonSegmentedPill
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -425,6 +438,166 @@ private fun DemoSessionRow(
                 )
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DemoProjectScreen — phase-2 tab shell (Chat / Terminal / Browser)
+//
+// Android mirror of iOS DemoProjectView: a NeonSegmentedPill tab switcher
+// above the content. Chat = the real read-only ChatPage; Terminal = a static
+// faux terminal (no PTY / libghostty); Browser = a WebView loading the
+// bundled preview.html. No broker.
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun DemoProjectScreen(store: SessionStore, session: ProjectSession) {
+    val neon = LocalNeonTheme.current
+    var tab by remember { mutableStateOf(0) }
+    val segments = listOf(
+        NeonPillSegment("Chat", Icons.AutoMirrored.Outlined.Chat),
+        NeonPillSegment("Terminal", Icons.Outlined.Terminal),
+        NeonPillSegment("Browser", Icons.Outlined.Public),
+    )
+    LaunchedEffect(session.id) {
+        Telemetry.breadcrumb("demo", "project_appeared", mapOf("session" to session.id))
+    }
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Tab pill centred above the content, matching iOS placement.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(neon.surfaceSolid)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            NeonSegmentedPill(
+                segments = segments,
+                selected = tab,
+                onSelect = { i ->
+                    tab = i
+                    Telemetry.breadcrumb(
+                        "demo",
+                        "tab_switched",
+                        mapOf("tab" to i.toString(), "session" to session.id),
+                    )
+                },
+            )
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(neon.border))
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            when (tab) {
+                0 -> ChatPage(
+                    store = store,
+                    session = session,
+                    readOnly = true,
+                    readOnlyItems = DemoData.conversationBySession[session.id],
+                )
+                1 -> DemoTerminalPage()
+                else -> DemoBrowserPage()
+            }
+        }
+    }
+}
+
+@Composable
+private fun DemoTerminalPage() {
+    val neon = LocalNeonTheme.current
+    val listState = rememberLazyListState()
+    LaunchedEffect(Unit) {
+        Telemetry.breadcrumb("demo", "terminal_appeared")
+        if (DemoData.terminalLines.isNotEmpty()) {
+            listState.scrollToItem(DemoData.terminalLines.size - 1)
+        }
+    }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier
+            .fillMaxSize()
+            .background(neon.codeBg)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(1.dp),
+    ) {
+        items(DemoData.terminalLines) { line ->
+            if (line.isPrompt) {
+                Row {
+                    Text(
+                        "$ ",
+                        fontFamily = neon.mono,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = neon.green,
+                    )
+                    Text(
+                        line.text,
+                        fontFamily = neon.mono,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = neon.green,
+                    )
+                }
+            } else {
+                Text(
+                    "  ${line.text}",
+                    fontFamily = neon.mono,
+                    fontSize = 13.sp,
+                    color = neon.textDim,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DemoBrowserPage() {
+    val neon = LocalNeonTheme.current
+    LaunchedEffect(Unit) { Telemetry.breadcrumb("demo", "browser_appeared") }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(neon.surfaceSolid),
+    ) {
+        // Chrome bar: globe + mono URL pill (matches BrowserPage chrome).
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                Icons.Outlined.Public,
+                contentDescription = null,
+                tint = neon.accent,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                "https://todo.demo.local",
+                fontFamily = neon.mono,
+                fontSize = 12.sp,
+                color = neon.codeText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(neon.codeBg)
+                    .border(1.dp, neon.border, RoundedCornerShape(99.dp))
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+            )
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(neon.border))
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    webViewClient = WebViewClient()
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    loadUrl("file:///android_asset/demo/preview.html")
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 
