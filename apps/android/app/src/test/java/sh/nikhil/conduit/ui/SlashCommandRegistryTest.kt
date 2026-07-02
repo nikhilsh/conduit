@@ -77,6 +77,22 @@ class SlashCommandRegistryTest {
         assertFalse(SlashCommandRegistry.classify("/compact", "codex", null)!!.supported)
     }
 
+    @Test fun clearGatedOnClearCapabilityNotCompact() {
+        // /clear reads its OWN capability, not compact.
+        // clear=true → supported even where compact=false.
+        assertTrue(SlashCommandRegistry.classify("/clear", "codex", supportsCompact = false, supportsClear = true)!!.supported)
+        // clear=false → unsupported even where compact=true.
+        assertFalse(SlashCommandRegistry.classify("/clear", "claude", supportsCompact = true, supportsClear = false)!!.supported)
+        // clear=null (old broker) → fall back to compact.
+        assertTrue(SlashCommandRegistry.classify("/clear", "claude", supportsCompact = true, supportsClear = null)!!.supported)
+        assertFalse(SlashCommandRegistry.classify("/clear", "codex", supportsCompact = false, supportsClear = null)!!.supported)
+        // Both null → static "agent == claude" check.
+        assertTrue(SlashCommandRegistry.classify("/clear", "claude")!!.supported)
+        assertFalse(SlashCommandRegistry.classify("/clear", "codex")!!.supported)
+        // /compact still reads compact, unaffected by the clear flag.
+        assertFalse(SlashCommandRegistry.classify("/compact", "claude", supportsCompact = false, supportsClear = true)!!.supported)
+    }
+
     @Test fun autocompleteFiltersByPrefix() {
         // "/c" → compact, clear, context, (cost alias of usage)
         val names = SlashCommandRegistry.autocomplete("/c").map { it.name }

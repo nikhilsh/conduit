@@ -56,6 +56,32 @@ struct SlashCommandRegistryTests {
         #expect(SlashCommandRegistry.classify("/COMPACT", agent: "CLAUDE")?.command.name == "compact")
     }
 
+    /// `/clear` is gated on its OWN capability (supports.clear), not on
+    /// supports.compact, with a compact fallback when the broker is too old to
+    /// state clear. Regression test for the "/clear mis-gated on compact" bug.
+    @Test func clearGatedOnClearCapabilityNotCompact() {
+        func desc(compact: Bool, clear: Bool?) -> AgentDescriptor {
+            AgentDescriptor(supports: AgentDescriptorSupports(compact: compact, clear: clear))
+        }
+        // clear=true → supported even where compact=false.
+        #expect(SlashCommandRegistry.classify("/clear", agent: "codex",
+            descriptor: desc(compact: false, clear: true))?.supported == true)
+        // clear=false → unsupported even where compact=true.
+        #expect(SlashCommandRegistry.classify("/clear", agent: "claude",
+            descriptor: desc(compact: true, clear: false))?.supported == false)
+        // clear=nil (old broker) → fall back to compact.
+        #expect(SlashCommandRegistry.classify("/clear", agent: "claude",
+            descriptor: desc(compact: true, clear: nil))?.supported == true)
+        #expect(SlashCommandRegistry.classify("/clear", agent: "claude",
+            descriptor: desc(compact: false, clear: nil))?.supported == false)
+        // No descriptor → static claude-name check (old broker / no capabilities).
+        #expect(SlashCommandRegistry.classify("/clear", agent: "claude")?.supported == true)
+        #expect(SlashCommandRegistry.classify("/clear", agent: "codex")?.supported == false)
+        // /compact still reads compact, unaffected by the clear flag.
+        #expect(SlashCommandRegistry.classify("/compact", agent: "claude",
+            descriptor: desc(compact: false, clear: true))?.supported == false)
+    }
+
     @Test func autocompleteFiltersByPrefix() {
         let names = SlashCommandRegistry.autocomplete("/c").map(\.name)
         #expect(names.contains("compact"))
