@@ -49,6 +49,7 @@ import uniffi.conduit_core.SshHostKeyDelegate
 import uniffi.conduit_core.SshProgressDelegate
 import uniffi.conduit_core.ConduitClient
 import sh.nikhil.conduit.auth.AgentLoginCoordinator
+import sh.nikhil.conduit.demo.DemoData
 import sh.nikhil.conduit.push.PushStore
 import uniffi.conduit_core.ConduitDelegate
 import uniffi.conduit_core.ViewEventFile
@@ -548,12 +549,25 @@ class SessionStore : ViewModel(), ConduitDelegate {
     fun activateDemo() {
         prefs?.edit()?.putBoolean("conduit.isDemoMode", true)?.apply()
         _isDemoMode.value = true
-        Telemetry.breadcrumb("demo", "activated")
+        // Seed the store so real Usage / Recap / Activity screens light up.
+        _sessions.value = DemoData.sessions
+        _statusBySession.value = _statusBySession.value + DemoData.statusBySession
+        _conversationLog.value = _conversationLog.value + DemoData.conversationBySession
+        updateLifecycle { map ->
+            map + DemoData.sessions.associate { it.id to SessionLifecycle.Live }
+        }
+        Telemetry.breadcrumb("demo", "activated", mapOf("sessions" to DemoData.sessions.size.toString()))
     }
 
     fun deactivateDemo() {
         prefs?.edit()?.putBoolean("conduit.isDemoMode", false)?.apply()
         _isDemoMode.value = false
+        // Remove all demo entries so no residue leaks into a real session.
+        val demoIds = DemoData.sessions.map { it.id }.toSet()
+        _sessions.value = _sessions.value.filterNot { it.id in demoIds }
+        _statusBySession.value = _statusBySession.value - demoIds
+        _conversationLog.value = _conversationLog.value - demoIds
+        updateLifecycle { map -> map - demoIds }
         Telemetry.breadcrumb("demo", "deactivated")
     }
 

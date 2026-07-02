@@ -31,6 +31,12 @@ extension ConduitUI {
         /// Hosted inline as the tablet Sessions right pane (not a sheet) →
         /// drop the close affordance + the outer NavigationStack chrome.
         var embedded: Bool = false
+        /// When true, suppresses all broker-coupled actions (rename, fork, end,
+        /// compact, limits card, terminal attach command). Used by the demo mode
+        /// so the real Usage / Recap / Activity screens can be presented without
+        /// risking a broker call. Default false leaves all real-session paths
+        /// 100% unchanged.
+        var readOnly: Bool = false
 
         @State private var showRename = false
         @State private var showFork = false
@@ -129,7 +135,8 @@ extension ConduitUI {
             // for old brokers. `content` backs BOTH the phone sheet and the
             // tablet Info pane. `.task(id:)` re-fires if the pane rebinds.
             .task(id: session.id) {
-                if agentSupportsUsage {
+                // Skip broker call in readOnly (demo) mode — no live connection.
+                if !readOnly, agentSupportsUsage {
                     store.refreshAccountUsage(sessionID: session.id)
                 }
             }
@@ -230,19 +237,27 @@ extension ConduitUI {
             return HStack(spacing: 12) {
                 avatarTile(tint)
                 VStack(alignment: .leading, spacing: 4) {
-                    Button { showRename = true } label: {
-                        HStack(spacing: 6) {
-                            Text(store.displayName(for: session))
-                                .font(neon.sans(17).weight(.bold))
-                                .foregroundStyle(neon.text)
-                                .neonTextGlow(neon.textGlow)
-                                .lineLimit(1)
-                            Image(systemName: "pencil")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(neon.textFaint)
+                    if readOnly {
+                        Text(store.displayName(for: session))
+                            .font(neon.sans(17).weight(.bold))
+                            .foregroundStyle(neon.text)
+                            .neonTextGlow(neon.textGlow)
+                            .lineLimit(1)
+                    } else {
+                        Button { showRename = true } label: {
+                            HStack(spacing: 6) {
+                                Text(store.displayName(for: session))
+                                    .font(neon.sans(17).weight(.bold))
+                                    .foregroundStyle(neon.text)
+                                    .neonTextGlow(neon.textGlow)
+                                    .lineLimit(1)
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(neon.textFaint)
+                            }
                         }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                     HStack(spacing: 6) {
                         Text(agent.lowercased())
                             .font(neon.mono(11.5).weight(.semibold))
@@ -366,8 +381,9 @@ extension ConduitUI {
                         // (supports.compact in the descriptor, or legacy
                         // claude name-gate) get a manual button; codex-exec
                         // compacts automatically (no manual compact).
+                        // In readOnly mode (demo) we never show the compact button.
                         let agentLower = liveAssistant.lowercased()
-                        if agentSupportsCompact, sessionIsLive {
+                        if !readOnly, agentSupportsCompact, sessionIsLive {
                             Rectangle().fill(neon.border).frame(height: 1)
                             Button {
                                 store.sendChat(sessionID: session.id, message: "/compact")
@@ -445,7 +461,8 @@ extension ConduitUI {
         private var limitsSection: some View {
             // Gate via supports.usage from the descriptor when available;
             // fall back to the hardcoded claude/codex set on old brokers.
-            if agentSupportsUsage {
+            // Hidden in readOnly (demo) mode — no broker account data available.
+            if !readOnly, agentSupportsUsage {
                 let agent = liveAssistant.lowercased()
                 ConduitUI.AccountUsageCard(
                     session: session,
@@ -617,8 +634,10 @@ extension ConduitUI {
                         hairline
                         detailRow("Worktree", wt, mono: true)
                     }
-                    hairline
-                    copyableDetailRow("Terminal", terminalAttachCmd)
+                    if !readOnly {
+                        hairline
+                        copyableDetailRow("Terminal", terminalAttachCmd)
+                    }
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -702,17 +721,24 @@ extension ConduitUI {
         }
 
         // MARK: 6 · Actions
+        //
+        // In readOnly mode (demo) only Recap is shown — Fork and End both
+        // call the broker / mutate real session state.
 
         private var actionRow: some View {
             HStack(spacing: 10) {
-                actionPill(systemImage: "arrow.triangle.branch", label: "Fork", tint: neon.accent) {
-                    showFork = true
+                if !readOnly {
+                    actionPill(systemImage: "arrow.triangle.branch", label: "Fork", tint: neon.accent) {
+                        showFork = true
+                    }
                 }
                 actionPill(systemImage: "doc.text.magnifyingglass", label: "Recap", tint: neon.accent) {
                     showRecap = true
                 }
-                actionPill(systemImage: "stop.circle", label: "End", tint: neon.red) {
-                    showEndConfirm = true
+                if !readOnly {
+                    actionPill(systemImage: "stop.circle", label: "End", tint: neon.red) {
+                        showEndConfirm = true
+                    }
                 }
             }
         }

@@ -911,11 +911,26 @@ final class SessionStore {
 
     func activateDemo() {
         isDemoMode = true
-        Telemetry.breadcrumb("demo", "activated")
+        // Seed the store so real Usage / Recap / Activity screens light up.
+        sessions = DemoData.sessions
+        for session in DemoData.sessions {
+            conversationLog[session.id] = DemoData.conversationBySession[session.id] ?? []
+            statusBySession[session.id] = DemoData.statusBySession[session.id]
+            sessionLifecycle[session.id] = .live
+        }
+        Telemetry.breadcrumb("demo", "activated", data: ["sessions": "\(DemoData.sessions.count)"])
     }
 
     func deactivateDemo() {
         isDemoMode = false
+        // Remove all demo entries so no residue leaks into a real session.
+        let demoIDs = Set(DemoData.sessions.map { $0.id })
+        sessions = sessions.filter { !demoIDs.contains($0.id) }
+        for id in demoIDs {
+            conversationLog.removeValue(forKey: id)
+            statusBySession.removeValue(forKey: id)
+            sessionLifecycle.removeValue(forKey: id)
+        }
         Telemetry.breadcrumb("demo", "deactivated")
     }
 

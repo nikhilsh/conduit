@@ -98,7 +98,20 @@ import uniffi.conduit_core.SessionStatus
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: () -> Unit, embedded: Boolean = false) {
+fun SessionInfoScreen(
+    store: SessionStore,
+    session: ProjectSession,
+    onDismiss: () -> Unit,
+    embedded: Boolean = false,
+    /**
+     * When true, suppresses all broker-coupled actions (rename, fork, end,
+     * compact, limits card, terminal attach command). Used by demo mode so
+     * the real Usage / Recap / Activity sections can be presented without
+     * risking a broker call. Default false leaves all real-session paths
+     * 100% unchanged.
+     */
+    readOnly: Boolean = false,
+) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val statuses by store.statusBySession.collectAsState()
     val conversationLog by store.conversationLog.collectAsState()
@@ -171,13 +184,16 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     // a spurious call. Keyed on session.id so it re-fires if the pane (phone
     // sheet or tablet Info pane) rebinds to a different session.
     LaunchedEffect(session.id) {
-        if (agentDescriptor.supportsUsage) {
-            store.refreshAccountUsage(session.id)
+        // Skip broker calls in readOnly (demo) mode — no live connection.
+        if (!readOnly) {
+            if (agentDescriptor.supportsUsage) {
+                store.refreshAccountUsage(session.id)
+            }
+            // Pull the live model catalog so the fork chooser's model/effort
+            // options reflect what the box actually serves. Failure = keep
+            // static fallbacks.
+            store.refreshModelCatalog()
         }
-        // Pull the live model catalog so the fork chooser's model/effort
-        // options reflect what the box actually serves. Failure = keep
-        // static fallbacks.
-        store.refreshModelCatalog()
     }
 
     val content: @Composable () -> Unit = {
@@ -220,10 +236,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(3.dp),
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable { renameDraft = name; showRename = true },
-                        ) {
+                        if (readOnly) {
                             Text(
                                 name,
                                 style = MaterialTheme.typography.titleMedium,
@@ -232,13 +245,27 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                                 color = neon.text,
                                 maxLines = 1,
                             )
-                            Spacer(Modifier.width(6.dp))
-                            Icon(
-                                Icons.Default.Edit,
-                                contentDescription = "Rename",
-                                tint = neon.textFaint,
-                                modifier = Modifier.size(13.dp),
-                            )
+                        } else {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable { renameDraft = name; showRename = true },
+                            ) {
+                                Text(
+                                    name,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontFamily = neon.sans,
+                                    fontWeight = FontWeight.Bold,
+                                    color = neon.text,
+                                    maxLines = 1,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Icon(
+                                    Icons.Default.Edit,
+                                    contentDescription = "Rename",
+                                    tint = neon.textFaint,
+                                    modifier = Modifier.size(13.dp),
+                                )
+                            }
                         }
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -358,7 +385,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                             val sessionLive = lifecycle !is SessionLifecycle.Exited &&
                                 lifecycle !is SessionLifecycle.FailedToStart &&
                                 store.harness.collectAsState().value.canIssueCommands
-                            if (agentDescriptor.supportsCompact && sessionLive) {
+                            if (!readOnly && agentDescriptor.supportsCompact && sessionLive) {
                                 Box(Modifier.fillMaxWidth().height(1.dp).background(neon.border))
                                 var compacted by remember { mutableStateOf(false) }
                                 TextButton(
@@ -379,7 +406,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                                         color = neon.accent,
                                     )
                                 }
-                            } else if (!agentDescriptor.supportsCompact && sessionLive) {
+                            } else if (!readOnly && !agentDescriptor.supportsCompact && sessionLive) {
                                 Box(Modifier.fillMaxWidth().height(1.dp).background(neon.border))
                                 Text(
                                     "${agentDescriptor.displayName} compacts context automatically",
@@ -397,7 +424,8 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
             // 3 · Limits (this session's agent only). Gate on the descriptor's
             // supportsUsage flag — broker tells us which agents have a usage
             // endpoint; static fallback preserves claude/codex today.
-            if (agentDescriptor.supportsUsage) {
+            // Hidden in readOnly (demo) mode — no broker account data available.
+            if (!readOnly && agentDescriptor.supportsUsage) {
                 NeonAccountUsageCard(
                     fivePct = status?.account5hPct ?: session.account5hPct,
                     fiveResetsAt = status?.account5hResetsAt ?: session.account5hResetsAt,
@@ -459,21 +487,29 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                             Hairline(neon)
                             InfoDetailRow("Worktree", liveWorktree, neon)
                         }
-                        Hairline(neon)
-                        val terminalCmd = terminalAttachCmd(endpoint, savedServers, session.id)
-                        CopyableInfoDetailRow("Terminal", terminalCmd, neon)
+                        if (!readOnly) {
+                            Hairline(neon)
+                            val terminalCmd = terminalAttachCmd(endpoint, savedServers, session.id)
+                            CopyableInfoDetailRow("Terminal", terminalCmd, neon)
+                        }
                     }
                 }
             }
 
             // 6 · Actions
+            // In readOnly mode (demo) only Recap is shown — Fork and End both
+            // call the broker / mutate real session state.
             Row(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                ActionPill(Icons.AutoMirrored.Filled.CallSplit, "Fork", neon.accent, Modifier.weight(1f)) { showFork = true }
+                if (!readOnly) {
+                    ActionPill(Icons.AutoMirrored.Filled.CallSplit, "Fork", neon.accent, Modifier.weight(1f)) { showFork = true }
+                }
                 ActionPill(Icons.Default.Summarize, "Recap", neon.accent, Modifier.weight(1f)) { showRecap = true }
-                ActionPill(Icons.Default.Stop, "End", neon.red, Modifier.weight(1f)) { showEndConfirm = true }
+                if (!readOnly) {
+                    ActionPill(Icons.Default.Stop, "End", neon.red, Modifier.weight(1f)) { showEndConfirm = true }
+                }
             }
 
             Spacer(Modifier.height(12.dp))

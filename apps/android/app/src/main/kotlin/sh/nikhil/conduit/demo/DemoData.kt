@@ -3,6 +3,7 @@ package sh.nikhil.conduit.demo
 import uniffi.conduit_core.ConversationItem
 import uniffi.conduit_core.PlanStep
 import uniffi.conduit_core.ProjectSession
+import uniffi.conduit_core.SessionStatus
 
 /**
  * Deterministic, in-process fake data for the App Store reviewer demo mode.
@@ -59,12 +60,12 @@ object DemoData {
             startedAt = "2026-06-25T10:00:00Z",
             lastActivityAt = "2026-06-25T10:03:30Z",
             displayName = "Build a to-do app",
-            totalInputTokens = null,
-            totalOutputTokens = null,
-            totalCachedTokens = null,
-            totalCostUsd = null,
-            contextUsedTokens = null,
-            contextWindowTokens = null,
+            totalInputTokens = 120_000UL,
+            totalOutputTokens = 18_000UL,
+            totalCachedTokens = 90_000UL,
+            totalCostUsd = 0.42,
+            contextUsedTokens = 48_000UL,
+            contextWindowTokens = 200_000UL,
         ),
         ProjectSession(
             id = "demo-session-2",
@@ -77,12 +78,68 @@ object DemoData {
             startedAt = "2026-06-25T09:30:00Z",
             lastActivityAt = "2026-06-25T09:35:00Z",
             displayName = "Fix authentication bug",
-            totalInputTokens = null,
-            totalOutputTokens = null,
-            totalCachedTokens = null,
-            totalCostUsd = null,
-            contextUsedTokens = null,
-            contextWindowTokens = null,
+            totalInputTokens = 34_000UL,
+            totalOutputTokens = 5_200UL,
+            totalCachedTokens = 22_000UL,
+            totalCostUsd = 0.11,
+            contextUsedTokens = 12_000UL,
+            contextWindowTokens = 200_000UL,
+        ),
+    )
+
+    // -------------------------------------------------------------------------
+    // Canned SessionStatus for demo sessions
+    //
+    // Seeded into store.statusBySession by activateDemo() so Usage/Recap/Activity
+    // screens light up. Values are consistent with the session usage fields above.
+    // -------------------------------------------------------------------------
+
+    val statusBySession: Map<String, SessionStatus> = mapOf(
+        "demo-session-1" to SessionStatus(
+            session = "demo-session-1",
+            assistant = "claude",
+            phase = "idle",
+            health = "green",
+            rows = 40.toUShort(),
+            cols = 120.toUShort(),
+            yolo = false,
+            preview = null,
+            sessionName = "demo-session-1",
+            viewers = 1u,
+            reasoningEffort = null,
+            cwd = "/home/user/projects/todo",
+            startedAt = "2026-06-25T10:00:00Z",
+            lastActivityAt = "2026-06-25T10:03:30Z",
+            displayName = "Build a to-do app",
+            totalInputTokens = 120_000UL,
+            totalOutputTokens = 18_000UL,
+            totalCachedTokens = 90_000UL,
+            totalCostUsd = 0.42,
+            contextUsedTokens = 48_000UL,
+            contextWindowTokens = 200_000UL,
+        ),
+        "demo-session-2" to SessionStatus(
+            session = "demo-session-2",
+            assistant = "claude",
+            phase = "idle",
+            health = "green",
+            rows = 40.toUShort(),
+            cols = 120.toUShort(),
+            yolo = false,
+            preview = null,
+            sessionName = "demo-session-2",
+            viewers = 1u,
+            reasoningEffort = null,
+            cwd = "/home/user/projects/api",
+            startedAt = "2026-06-25T09:30:00Z",
+            lastActivityAt = "2026-06-25T09:35:00Z",
+            displayName = "Fix authentication bug",
+            totalInputTokens = 34_000UL,
+            totalOutputTokens = 5_200UL,
+            totalCachedTokens = 22_000UL,
+            totalCostUsd = 0.11,
+            contextUsedTokens = 12_000UL,
+            contextWindowTokens = 200_000UL,
         ),
     )
 

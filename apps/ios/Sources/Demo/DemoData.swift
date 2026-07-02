@@ -56,12 +56,12 @@ enum DemoData {
             startedAt: "2026-06-25T10:00:00Z",
             lastActivityAt: "2026-06-25T10:03:30Z",
             displayName: "Build a to-do app",
-            totalInputTokens: nil,
-            totalOutputTokens: nil,
-            totalCachedTokens: nil,
-            totalCostUsd: nil,
-            contextUsedTokens: nil,
-            contextWindowTokens: nil
+            totalInputTokens: 120_000,
+            totalOutputTokens: 18_000,
+            totalCachedTokens: 90_000,
+            totalCostUsd: 0.42,
+            contextUsedTokens: 48_000,
+            contextWindowTokens: 200_000
         ),
         ProjectSession(
             id: "demo-session-2",
@@ -74,12 +74,66 @@ enum DemoData {
             startedAt: "2026-06-25T09:30:00Z",
             lastActivityAt: "2026-06-25T09:35:00Z",
             displayName: "Fix authentication bug",
-            totalInputTokens: nil,
-            totalOutputTokens: nil,
-            totalCachedTokens: nil,
-            totalCostUsd: nil,
-            contextUsedTokens: nil,
-            contextWindowTokens: nil
+            totalInputTokens: 34_000,
+            totalOutputTokens: 5_200,
+            totalCachedTokens: 22_000,
+            totalCostUsd: 0.11,
+            contextUsedTokens: 12_000,
+            contextWindowTokens: 200_000
+        ),
+    ]
+
+    // MARK: - Canned SessionStatus for demo sessions
+    //
+    // Seeded into store.statusBySession by activateDemo() so Usage/Recap/Activity
+    // screens light up. Values are consistent with the session usage fields above.
+
+    static let statusBySession: [String: SessionStatus] = [
+        "demo-session-1": SessionStatus(
+            session: "demo-session-1",
+            assistant: "claude",
+            phase: "idle",
+            health: "green",
+            rows: 40,
+            cols: 120,
+            yolo: false,
+            preview: nil,
+            sessionName: "demo-session-1",
+            viewers: 1,
+            reasoningEffort: nil,
+            cwd: "/home/user/projects/todo",
+            startedAt: "2026-06-25T10:00:00Z",
+            lastActivityAt: "2026-06-25T10:03:30Z",
+            displayName: "Build a to-do app",
+            totalInputTokens: 120_000,
+            totalOutputTokens: 18_000,
+            totalCachedTokens: 90_000,
+            totalCostUsd: 0.42,
+            contextUsedTokens: 48_000,
+            contextWindowTokens: 200_000
+        ),
+        "demo-session-2": SessionStatus(
+            session: "demo-session-2",
+            assistant: "claude",
+            phase: "idle",
+            health: "green",
+            rows: 40,
+            cols: 120,
+            yolo: false,
+            preview: nil,
+            sessionName: "demo-session-2",
+            viewers: 1,
+            reasoningEffort: nil,
+            cwd: "/home/user/projects/api",
+            startedAt: "2026-06-25T09:30:00Z",
+            lastActivityAt: "2026-06-25T09:35:00Z",
+            displayName: "Fix authentication bug",
+            totalInputTokens: 34_000,
+            totalOutputTokens: 5_200,
+            totalCachedTokens: 22_000,
+            totalCostUsd: 0.11,
+            contextUsedTokens: 12_000,
+            contextWindowTokens: 200_000
         ),
     ]
 
