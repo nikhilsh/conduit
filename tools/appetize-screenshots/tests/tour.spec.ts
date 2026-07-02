@@ -30,13 +30,19 @@ for (const { platform, publicKey } of TARGETS) {
   if (!publicKey) continue;
 
   test.describe(platform, () => {
-    test.use({ config: { publicKey } });
+    // Dark = the design mockups' hero look. The app follows system appearance
+    // (themeMode defaults to System), so run the session in dark.
+    test.use({ config: { publicKey, appearance: 'dark' } });
 
     test(`${platform} tour`, async ({ session }) => {
       const shot = async (name: string) => {
         const png = await session.screenshot('buffer');
         writeFileSync(join(OUT_DIR, `${platform}-${name}.png`), png.data);
       };
+
+      // Belt-and-suspenders: also force dark at runtime in case the config
+      // appearance didn't apply before first launch.
+      await session.setAppearance('dark');
 
       // 1. Onboarding welcome — let the freshly-launched app settle + render.
       await session.waitForTimeout(15_000);
