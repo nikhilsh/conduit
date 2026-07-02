@@ -264,6 +264,78 @@ fun ConduitChip(
 }
 
 // ---------------------------------------------------------------------------
+// NeonSegmentedPill
+// ---------------------------------------------------------------------------
+
+/**
+ * Descriptor for a single segment in [NeonSegmentedPill]. Kept as a top-level
+ * class (not nested under the composable) to avoid a Kotlin name clash.
+ */
+data class NeonPillSegment(
+    val label: String,
+    val icon: ImageVector? = null,
+)
+
+/**
+ * Floating segmented pill — Android mirror of iOS `NeonSegmentedPill`
+ * (NeonChrome.swift). A glass-capsule container with the ACTIVE segment
+ * filled with [NeonTheme.accent] and [NeonTheme.accentText] label;
+ * inactive segments use [NeonTheme.textDim]. Labels are mono 12sp semibold.
+ * An optional [NeonPillSegment.icon] mirrors the iOS `systemImage` slot.
+ *
+ * @param segments  ordered list of [NeonPillSegment] descriptors
+ * @param selected  index of the currently active segment
+ * @param onSelect  called with the tapped segment index
+ */
+@Composable
+fun NeonSegmentedPill(
+    segments: List<NeonPillSegment>,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val neon = LocalNeonTheme.current
+    Row(
+        modifier = modifier
+            .glassCapsule()
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        segments.forEachIndexed { i, seg ->
+            val isActive = i == selected
+            val fg = if (isActive) neon.accentText else neon.textDim
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(percent = 50))
+                    .background(if (isActive) neon.accent else Color.Transparent)
+                    .clickable { onSelect(i) }
+                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                if (seg.icon != null) {
+                    Icon(
+                        seg.icon,
+                        contentDescription = null,
+                        tint = fg,
+                        modifier = Modifier.size(11.dp),
+                    )
+                }
+                Text(
+                    seg.label,
+                    fontFamily = neon.mono,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = fg,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ConduitActionPill
 // ---------------------------------------------------------------------------
 
