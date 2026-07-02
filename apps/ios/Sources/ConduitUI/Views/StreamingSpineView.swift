@@ -40,6 +40,7 @@ extension ConduitUI {
         // Async loop tasks
         @State private var breatheTask: Task<Void, Never>? = nil
         @State private var caretTask: Task<Void, Never>? = nil
+        @State private var flowTask: Task<Void, Never>? = nil
 
         // Rail flow: tile height unit for the flowing gradient stack.
         // railOffset animates -railTile -> 0, started once in .task(id: reduceMotion).
@@ -80,6 +81,7 @@ extension ConduitUI {
             .task(id: reduceMotion) {
                 breatheTask?.cancel()
                 caretTask?.cancel()
+                flowTask?.cancel()
                 guard !reduceMotion else {
                     // Calm end-state: static, no glow, no caret blink, full prose.
                     glowPhase = false
@@ -87,12 +89,10 @@ extension ConduitUI {
                     caretVisible = true
                     return
                 }
-                // Start rail flow once, keyed on reduceMotion only (NOT on height),
-                // so height changes during streaming never restart the animation.
-                railOffset = -railTile
-                withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
-                    railOffset = 0
-                }
+                // Rail flow runs as a Task-LOOP (not withAnimation.repeatForever):
+                // CA repeat-forever animations play once then drop on re-render/
+                // background. The loop resets to the top and sweeps down forever.
+                startFlow()
                 startBreathe()
                 startCaret()
             }
@@ -102,14 +102,11 @@ extension ConduitUI {
             .onReceive(
                 NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
             ) { _ in
-                // Core Animation suspends repeatForever animations on background.
-                // Re-kick the rail flow so it resumes after the app foregrounds.
-                // The breathe/caret are Task-loop based and survive independently.
+                // Re-kick the rail flow loop after foregrounding (its withAnimation
+                // steps are paused in the background). The breathe/caret loops
+                // survive independently.
                 guard !reduceMotion else { return }
-                railOffset = -railTile
-                withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
-                    railOffset = 0
-                }
+                startFlow()
                 Telemetry.breadcrumb("streaming-spine", "foreground restart",
                     data: ["contentLen": "\(content.count)"])
             }
@@ -268,6 +265,23 @@ extension ConduitUI {
         }
 
         // MARK: Animation loops
+
+        private func startFlow() {
+            flowTask?.cancel()
+            flowTask = Task {
+                // Continuous downward flow: reset to the top (instant — seamless
+                // because the tiles repeat every railTile), sweep down over 1.4s,
+                // then loop. Runs as a Task so it keeps going across re-renders and
+                // foregrounding, unlike a one-shot repeatForever CAAnimation.
+                while !Task.isCancelled {
+                    railOffset = -railTile
+                    withAnimation(.linear(duration: 1.4)) {
+                        railOffset = 0
+                    }
+                    try? await Task.sleep(nanoseconds: 1_400_000_000)
+                }
+            }
+        }
 
         private func startBreathe() {
             breatheTask?.cancel()
