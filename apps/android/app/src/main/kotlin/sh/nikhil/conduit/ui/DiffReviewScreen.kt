@@ -81,6 +81,7 @@ fun DiffReviewScreen(
     store: SessionStore,
     session: ProjectSession,
     onDismiss: () -> Unit = {},
+    readOnly: Boolean = false,
 ) {
     val neon = LocalNeonTheme.current
     val conversationLog by store.conversationLog.collectAsState()
@@ -241,8 +242,8 @@ fun DiffReviewScreen(
             }
         }
 
-        // Commit bar
-        CommitBar(
+        // Commit bar — hidden in read-only mode (demo) so no broker call is reachable.
+        if (!readOnly) CommitBar(
             message = commitMessage,
             onMessageChange = { commitMessage = it },
             isCommitting = isCommitting,

@@ -34,6 +34,11 @@ extension ConduitUI {
         /// drop the leading back button.
         var embedded: Bool = false
 
+        /// When true, suppresses the commit bar and the inline Open PR button.
+        /// Used by demo mode so the diff is read-only with no broker calls
+        /// reachable. Default false leaves all real-session paths 100% unchanged.
+        var readOnly: Bool = false
+
         @State private var commitMessage: String = ""
         @State private var expanded: Set<String> = []
 
@@ -77,7 +82,7 @@ extension ConduitUI {
                     .frame(maxWidth: embedded ? .infinity : 760)
                     .frame(maxWidth: .infinity)
                 }
-                .safeAreaInset(edge: .bottom) { commitBar }
+                .safeAreaInset(edge: .bottom) { if !readOnly { commitBar } }
             }
             .navigationTitle("Changes")
             .navigationBarTitleDisplayMode(.inline)

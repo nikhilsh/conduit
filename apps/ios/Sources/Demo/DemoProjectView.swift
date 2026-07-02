@@ -13,8 +13,10 @@ import WebKit
 struct DemoProjectView: View {
     let session: ProjectSession
     @Environment(\.neonTheme) private var neon
+    @Environment(SessionStore.self) private var store
     @State private var tab: DemoTab = .chat
     @State private var showInfo = false
+    @State private var showChanges = false
 
     enum DemoTab: String, Hashable {
         case chat, terminal, browser
@@ -84,17 +86,43 @@ struct DemoProjectView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showInfo = true
-                    Telemetry.breadcrumb("demo", "session_info_opened", data: ["session": session.id])
-                } label: {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 17, weight: .regular))
+                HStack(spacing: 4) {
+                    Button {
+                        showChanges = true
+                        Telemetry.breadcrumb("demo", "changes_opened", data: ["session": session.id])
+                    } label: {
+                        Image(systemName: "plus.forwardslash.minus")
+                            .font(.system(size: 17, weight: .regular))
+                    }
+                    Button {
+                        showInfo = true
+                        Telemetry.breadcrumb("demo", "session_info_opened", data: ["session": session.id])
+                    } label: {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 17, weight: .regular))
+                    }
                 }
             }
         }
         .sheet(isPresented: $showInfo) {
             ConduitUI.SessionInfoView(session: session, readOnly: true)
+        }
+        .sheet(isPresented: $showChanges) {
+            NavigationStack {
+                ConduitUI.DiffReviewView(session: session, readOnly: true)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button {
+                                showChanges = false
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 13, weight: .semibold))
+                            }
+                            .accessibilityLabel("Close")
+                        }
+                    }
+            }
+            .environment(store)
         }
         .onChange(of: tab) { _, newTab in
             Telemetry.breadcrumb("demo", "tab_switched", data: [
