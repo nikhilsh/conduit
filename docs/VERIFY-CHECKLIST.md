@@ -20,7 +20,19 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
-_(nothing yet)_
+**Streaming rail continuously draws down (looping), not once — iOS + Android. PR #848.**
+
+- The streaming spine rail drew down once (eased grow as the message got taller)
+  then only the gradient flowed. Now the visible rail length is driven by a
+  looping `drawFraction` (0 → 1, ~1.3s, repeat), so the rail perpetually redraws
+  itself downward from the mark head — sweep to full height, snap back, repeat.
+  iOS `StreamingSpineView` uses a `startDraw` Task-loop (re-kicked on foreground);
+  Android `ChatPage.StreamingSpineRow` uses a `rememberInfiniteTransition`. Reduce
+  motion pins it to a static full-height rail; the greedy-height fix is preserved.
+  [iOS + Android, **needs on-device verify**: stream a reply → the rail keeps
+  drawing itself downward the whole time (not a one-shot). Note: each cycle snaps
+  back to the mark head before redrawing (the chosen "repeating draw" — tune
+  cadence/hold if the reset reads as flickery)]
 
 ---
 
