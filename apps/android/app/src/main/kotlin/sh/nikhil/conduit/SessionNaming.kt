@@ -415,12 +415,18 @@ internal data class NeedsYouBanner(val sessions: List<NeedsYouItem>) {
 internal fun isAwaitingInput(conversation: List<ConversationItem>?): Boolean {
     val items = conversation ?: return false
     // Find the last non-user pending_input item, skipping trailing
-    // assistant/tool/system items of other kinds.
-    val last = items.lastOrNull {
+    // assistant/tool/system items of other kinds (Bug A: a streamed assistant
+    // message must not mask an unanswered question).
+    val lastIdx = items.indexOfLast {
         it.role.lowercase() != "user" && it.kind.lowercase() == "pending_input"
-    } ?: return false
+    }
+    if (lastIdx < 0) return false
+    // A user reply AFTER the prompt means the user has acted — this display
+    // surface (home banner / approvals queue) clears. Routing keys off the
+    // resolution marker / resolvedPendingInputIDs instead (SessionStore).
+    if (items.drop(lastIdx + 1).any { it.role.lowercase() == "user" }) return false
     // Belt-and-suspenders: the broker's resolution marker in content.
-    if (sh.nikhil.conduit.ui.PendingQuestions.parsePendingResolution(last.content)?.answered == true) return false
+    if (sh.nikhil.conduit.ui.PendingQuestions.parsePendingResolution(items[lastIdx].content)?.answered == true) return false
     return true
 }
 
