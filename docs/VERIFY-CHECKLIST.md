@@ -20,6 +20,65 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+_(nothing yet)_
+
+---
+
+## v0.0.211
+
+**Read-only Changes / diff review in demo mode — iOS + Android. PR #846.**
+
+- The demo project shell gains a "Changes" affordance that opens the real
+  diff-review screen in a new `readOnly` mode. When `readOnly` is set the commit
+  bar (Commit & push / Open PR) is not mounted, and since the Open-PR sheet is
+  only triggered from inside that bar, no broker git call (`/git/commit`,
+  `/git/pr`) is reachable. Renders the seeded demo diff (colorama edit) from the
+  demo session store; the second demo session has no diff and shows the empty
+  state. Default `readOnly=false` leaves real sessions unchanged. [iOS + Android,
+  **needs on-device verify**: demo → open a session → Changes → the diff renders
+  with NO commit / Open-PR controls]
+
+**Streaming spine rail no longer overshoots the prose — iOS. PR #845.**
+
+- The iOS streaming spine's rail used `.frame(maxHeight: .infinity)` (there is no
+  SwiftUI equivalent of Android's `Height(IntrinsicSize.Max)`), which made the
+  whole `StreamingSpineView` vertically greedy; placed in the chat transcript
+  VStack it ate the leftover viewport height and the cyan→green rail ran far
+  below the last prose line. `.fixedSize(horizontal: false, vertical: true)` pins
+  the spine to its intrinsic (prose) height so the rail ends at the message.
+  Android already uses `IntrinsicSize.Max` and is unaffected. [iOS, **needs
+  on-device verify**: stream a long assistant reply → the left rail ends at the
+  last prose line, not the bottom of the screen]
+
+**Streaming rail flows continuously (was one-shot) — iOS + Android. PR #842.**
+
+- The flowing-gradient rail animation was a one-shot `repeatForever` that played
+  once and dropped on re-render / backgrounding; reworked to a task-loop so the
+  rail sweeps downward continuously for the whole turn. [iOS + Android, **needs
+  on-device verify**: during a streaming turn the rail keeps flowing (does not
+  freeze after the first pass or after foregrounding)]
+
+**Demo mode seeds the session store → real Usage / Recap / Activity — iOS + Android. PR #841.**
+
+- Entering demo now seeds the SessionStore (sessions, `conversationLog`,
+  `statusBySession` with context tokens + token totals, lifecycle = live),
+  cleared on exit, so the REAL Session Info sheet renders authentic Usage
+  (context ring + token line), Activity, and Recap for the demo sessions instead
+  of empty state. A new `readOnly` flag on Session Info hides broker-coupled
+  actions (rename, fork, end, compact, limits card, terminal-attach) in demo.
+  Entry: an info button in the demo project shell. [iOS + Android, **needs
+  on-device verify**: demo → open a session → info → Usage ring + tokens
+  populated, Recap opens, and there is no Fork / End / Compact]
+
+**Demo mode appearance sheet (session-only, no persistence leak) — iOS + Android. PR #840.**
+
+- A gear on the demo home shell opens the real Appearance sheet; theme / font /
+  palette / glow / text-size changes preview live but are snapshotted on demo
+  entry and restored on demo exit so they never leak into the real app. The
+  snapshot covers every property each platform's sheet can mutate. [iOS +
+  Android, **needs on-device verify**: demo → gear → change theme/font → exit
+  demo → the real app's appearance is unchanged]
+
 **Answered questions no longer stick as "needs answer"; answers deliver instead of queueing — iOS + Android. PR #843.**
 
 - Three linked pending-ask bugs. (A) `hasPendingAsk` required the `pending_input`
