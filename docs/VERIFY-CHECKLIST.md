@@ -20,6 +20,37 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Two combined working-indicator styles (B+D) — iOS + Android. PR #855.**
+
+- Adds styles **E "Packets @ prompt"** (D's terminal card + shell header with B's
+  flowing-packet pipe as the `$` command line + dim verb) and **F "Piped prompt"**
+  (D's card + header, a full-width packet-pipe row, then `$ verb▌`). Selectable in
+  the Debug-menu working-indicator toggle alongside A–D. Extracted the packet pipe
+  into a shared `PacketPipe` atom (both platforms). [iOS + Android, **needs
+  on-device verify**: unlock Debug menu (tap version 7×) → Working indicator →
+  flip E/F; check pipe sizing/legibility on Ice + Synth palettes; 6-label picker]
+
+**Real Claude thinking is streamed instead of discarded — broker. PR #854.**
+
+- The broker parsed Claude's reasoning blocks but threw the text away (only a
+  `"thinking"` phase signal). Now it carries `ThinkingText` and publishes a
+  `thinking_streaming` view_event (accumulated reasoning, sharing the turn's
+  `turnTS`), reset at turn end. Ephemeral (no transcript persistence, no core
+  schema change). This is the enabling half; the app UI (collapsible block +
+  indicator peek) is a separate PR. [broker, **redeploy required**;
+  broker-behavior confirm: a thinking-heavy prompt emits `thinking_streaming`]
+
+**Queued-Next messages no longer strand — iOS + Android. PR #851.**
+
+- "Queued Next" entries used to pop ONLY on a broker status frame flipping
+  `turn_active` false; a missed/late frame stranded them forever. Added a second
+  trigger: when the assistant's reply lands (proof the turn ended), flush the
+  oldest queued entry too — delivered via a `bypassTurnGate` even if the stale
+  `turn_active` is still true. Idempotent with the status-frame path (broker also
+  dedups). [iOS + Android, **needs on-device verify**: send a message while the
+  agent is working, then confirm it auto-sends when the reply arrives — not
+  stranded in Queued Next]
+
 **Pipeline gate handoff preview + editable handoff + named step branches — broker + apps. PRs #852 + #853.**
 
 - **Gate handoff preview (broker)** — on entering `AWAITING_GATE`, the broker
