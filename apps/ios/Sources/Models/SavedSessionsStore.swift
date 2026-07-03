@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 
 /// Lifecycle bucket mirrored from `core/src/saved/mod.rs::SavedSessionStatus`.
 /// Stringly-encoded `lowercase` to match the Rust serde repr —
@@ -92,6 +93,14 @@ final class SavedSessionsStore {
     /// is one short string per entry.
     private let tombstoneCap = 500
 
+    // FIX 3: debounce saved-sessions writes (~1s trailing). status frames
+    // call upsert on every heartbeat; without coalescing each fires a full
+    // JSON encode + atomic file write on the @MainActor. A dirty flag
+    // guarantees the last state is captured; flushPendingPersist() is called
+    // on background so a kill never loses an upserted row.
+    private var persistDirty = false
+    private var persistScheduled = false
+
     /// Resolved persistence path, exposed for tests + diagnostics.
     let storeURL: URL
 
@@ -101,6 +110,17 @@ final class SavedSessionsStore {
         self.sessions = loaded.sessions
         self.deletedOrder = loaded.deletedOrder
         self.deletedIDs = Set(loaded.deletedOrder)
+        // FIX 3: flush any pending debounced write on background so a kill
+        // never loses the last upserted row (e.g. the session that was active
+        // when the user hit the home button). Registered here so the singleton
+        // observes the lifecycle for its full lifetime.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.flushPendingPersist() }
+        }
     }
 
     /// Latest-first slice clamped to `limit`. Ties broken by id so
@@ -174,7 +194,7 @@ final class SavedSessionsStore {
             // Avoid a no-op write — checked equality before persisting.
             if row != sessions[idx] {
                 sessions[idx] = row
-                persist()
+                schedulePersist()
             }
         } else {
             let row = SavedSession(
@@ -189,7 +209,7 @@ final class SavedSessionsStore {
                 status: nextStatus
             )
             sessions.append(row)
-            persist()
+            schedulePersist()
         }
     }
 
@@ -255,6 +275,27 @@ final class SavedSessionsStore {
     }
 
     // MARK: - Persistence
+
+    // FIX 3: debounced entry point for status-frame-driven upserts.
+    // Coalesces N per-heartbeat writes into a single trailing write at ~1s.
+    private func schedulePersist() {
+        persistDirty = true
+        guard !persistScheduled else { return }
+        persistScheduled = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1s trailing
+            self.persistScheduled = false
+            self.flushPendingPersist()
+        }
+    }
+
+    /// Flush any pending debounced write synchronously. Called by the
+    /// background observer so a kill never loses the last upserted row.
+    func flushPendingPersist() {
+        guard persistDirty else { return }
+        persistDirty = false
+        persist()
+    }
 
     private func persist() {
         do {

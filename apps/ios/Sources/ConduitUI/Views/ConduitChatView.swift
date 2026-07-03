@@ -3525,6 +3525,8 @@ private struct MonoRunningTicker: View {
     @State private var elapsedSeconds: Int = 0
     @State private var timerTask: Task<Void, Never>? = nil
     @State private var sheen: Bool = false
+    // FIX 2: Task-based sheen so the loop can be cancelled on disappear.
+    @State private var sheenTask: Task<Void, Never>? = nil
     @Environment(\.neonTheme) private var neon
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -3642,25 +3644,28 @@ private struct MonoRunningTicker: View {
                     }
                 }
             }
-            // Sheen sweep: animate from -1.0 to 1.5 (left-off-screen to
-            // right-off-screen) on a 1.5s linear infinite repeat. Skipped
-            // when reduceMotion is on (the overlay is hidden in that case).
+            // FIX 2: Task-based sheen loop so it can be cancelled on disappear.
+            // Replaces withAnimation(.repeatForever) which continued running as a
+            // Core Animation layer animation even after the view left the hierarchy.
+            sheenTask?.cancel()
             if !reduceMotion {
-                withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
-                    sheen = true
+                sheenTask = Task { @MainActor in
+                    while !Task.isCancelled {
+                        sheen = false
+                        withAnimation(.linear(duration: 1.5)) { sheen = true }
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    }
                 }
-            }
-        }
-        .restartAnimationOnForeground {
-            guard !reduceMotion else { return }
-            sheen = false
-            withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
-                sheen = true
             }
         }
         .onDisappear {
             timerTask?.cancel()
             timerTask = nil
+            // FIX 2: cancel sheen Task so the loop stops when the view leaves
+            // the hierarchy (session switch, scroll-off). The repeatForever CA
+            // animation it replaced ran indefinitely after view removal.
+            sheenTask?.cancel()
+            sheenTask = nil
             Telemetry.breadcrumb("chat", "mono-ticker stop", data: [
                 "elapsed": "\(elapsedSeconds)",
                 "completed": "\(completedCount)",

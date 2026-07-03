@@ -122,6 +122,16 @@ extension ConduitUI {
             .onAppear {
                 Telemetry.breadcrumb("streaming-spine", "streaming start", data: ["contentLen": "\(content.count)"])
             }
+            .onDisappear {
+                // FIX 2: cancel perpetual Task loops when the view leaves the
+                // hierarchy (scroll-off or session switch). Task {} is unstructured
+                // -- SwiftUI does NOT cancel it on view removal, so the loops run
+                // forever unless we cancel them explicitly here.
+                drawTask?.cancel()
+                flowTask?.cancel()
+                breatheTask?.cancel()
+                caretTask?.cancel()
+            }
             .onReceive(
                 NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
             ) { _ in
