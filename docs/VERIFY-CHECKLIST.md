@@ -20,6 +20,19 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Fix stale turn-active after broker restart (iOS + Android). PR #865.**
+
+- After the broker process restarts, the app kept a stale `turn_active=true` and
+  never cleared it on the connection drop, so the composer stayed stuck on the
+  Stop button and every send was gated locally — messages appeared sent/"failed"
+  but never reached the agent; only force-quitting the app cleared it. Fix:
+  `clearStaleTurnState` zeroes `turnActive` + streaming/turn-phase/thinking on
+  `.connecting`/`.disconnected`, and `.connected` promotes stuck `queuedTurn`
+  entries to `.normal` so they flush. Broker resume path was verified healthy.
+- **Verify on device:** with an existing session open, restart the broker, then
+  send a message — it should deliver and the agent should reply WITHOUT
+  force-quitting the app. Composer should return to Send (not stuck on Stop).
+
 **Pipeline v2: fanout-as-a-step + TurnComplete advance fix — broker + apps. PRs #862 + #863 (design doc PR #858).**
 
 - **TurnComplete advance signal (broker)** — pipeline steps now also complete
