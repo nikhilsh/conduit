@@ -52,8 +52,14 @@ func TestKBSectionFlagOnIngestsAndSpans(t *testing.T) {
 	if !ok {
 		t.Fatal("flag ON: kbSection should be active when an ingestable doc exists")
 	}
-	if !strings.Contains(section, "README.md") {
-		t.Errorf("flag ON: section should reference the README pointer; got:\n%s", section)
+	// The section is now pointer-only — it does NOT embed the merged index
+	// content (which would have contained README.md). Verify the section
+	// tells the agent to search/read, not that it contains the file name.
+	if strings.Contains(section, "README.md") {
+		t.Errorf("flag ON: section must NOT embed index content (pointer-only); got:\n%s", section)
+	}
+	if !strings.Contains(section, "kb search") {
+		t.Errorf("flag ON: section should advertise kb search; got:\n%s", section)
 	}
 	if !strings.Contains(section, "source-pointer") {
 		t.Errorf("flag ON: merged index should label origins; got:\n%s", section)

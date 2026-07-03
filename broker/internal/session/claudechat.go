@@ -75,11 +75,9 @@ func claudeStreamCommandFork(command, args []string, resumeSessionID string, con
 		// just ends the turn. This makes "the agent asked me to choose"
 		// reliably interactive (device feedback, round 4).
 		//
-		// Part A (harness bootstrap): the conduit-awareness addendum is
-		// MERGED into the same --append-system-prompt value (one flag, not a
-		// second one) so it doesn't clobber the askUserQuestionNudge. The
-		// merge is gated by the kill-switch env; OFF leaves the argv
-		// byte-identical to the pre-feature flag value.
+		// Part A (harness bootstrap): the conduit-awareness addendum (which
+		// includes the AskUserQuestion nudge as bullet 3) rides the single
+		// --append-system-prompt flag. OFF leaves it empty.
 		"--append-system-prompt", claudeAppendSystemPrompt(),
 	)
 	return argv
@@ -121,22 +119,17 @@ func claudeStreamCommandForkWithWorkspace(command, args []string, resumeSessionI
 }
 
 // claudeAppendSystemPrompt is the value passed to claude's
-// --append-system-prompt. It is the askUserQuestionNudge, plus the shared
-// conduit-awareness addendum when the kill-switch is ON (default). Kept a pure
-// function of the env so it is deterministically table-testable.
+// --append-system-prompt. It returns the conduit-awareness addendum when the
+// kill-switch is ON (default), empty string otherwise. The AskUserQuestion
+// nudge is folded into conduitAwarenessPrompt bullet 3, so there is no
+// separate nudge prefix. Kept a pure function of the env so it is
+// deterministically table-testable.
 func claudeAppendSystemPrompt() string {
 	if !conduitAwarenessEnabled() {
-		return askUserQuestionNudge
+		return ""
 	}
-	return askUserQuestionNudge + "\n\n" + conduitAwarenessPrompt()
+	return conduitAwarenessPrompt()
 }
-
-// askUserQuestionNudge steers the agent toward the interactive path.
-const askUserQuestionNudge = "When you need the user to choose between options or " +
-	"answer a question before you continue, ALWAYS use the AskUserQuestion tool " +
-	"rather than writing the question and options as plain text. The mobile app " +
-	"renders AskUserQuestion as tappable choices and waits for the answer; a " +
-	"plain-text question does not pause your turn and the user may miss it."
 
 // claudeStreamInitSessionID extracts the CLI's own conversation id from
 // a `system/init` stream-json line. Captured + persisted so respawns can

@@ -113,7 +113,7 @@ func (opencodeBackend) Spawn(s *Session, adapter agents.Adapter, req spawnReques
 // setTurnHook. nil aiGen → nil generators → the hook no-ops, so an opencode
 // session with no creds behaves identically. Twin of wireCodexTurnHook.
 func wireOpencodeTurnHook(s *Session, aiGen aiGenProvider, proc *opencodeServerProcess) {
-	qrGen := newQuickReplyGeneratorWithProvider(s.ID, aiGen, s.PublishText)
+	qrGen := newQuickReplyGeneratorWithProvider(s.ID, aiGen, s.PublishText, s.SubscriberCount)
 	s.titleGen = newTitleGeneratorWithProvider(s.ID, aiGen, s.firstPrompt, s.applyAITitle)
 	if qrGen == nil && s.titleGen == nil {
 		return

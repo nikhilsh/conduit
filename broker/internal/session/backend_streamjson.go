@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/nikhilsh/conduit/broker/internal/agents"
 )
@@ -14,6 +16,62 @@ import (
 // startChatBackend (manager.go), probeClaudeCatalog (modelcatalog.go), and the
 // claude leg of RefreshAccountUsage (accountusage.go). No wire behavior
 // changed — the goldens pin the argv/frames.
+// phaseRateLimiter coalesces rapid turn-phase status broadcasts to at most
+// one per second. It is trailing-edge: the FINAL phase value in any window
+// always broadcasts (via a timer) so no state is permanently lost. Phase ""
+// (turn end) and calls via immediate() always bypass the limiter.
+type phaseRateLimiter struct {
+	mu            sync.Mutex
+	lastBroadcast time.Time
+	timer         *time.Timer
+	hasPending    bool
+	broadcast     func()
+}
+
+func newPhaseRateLimiter(broadcast func()) *phaseRateLimiter {
+	return &phaseRateLimiter{broadcast: broadcast}
+}
+
+// immediate broadcasts now and cancels any pending timer.
+// Used for turn-end (phase "") transitions that must never be coalesced.
+func (r *phaseRateLimiter) immediate() {
+	r.mu.Lock()
+	if r.timer != nil {
+		r.timer.Stop()
+		r.timer = nil
+	}
+	r.hasPending = false
+	r.mu.Unlock()
+	r.broadcast()
+}
+
+// schedule coalesces the broadcast: fires immediately if the last broadcast
+// was more than 1 second ago, otherwise schedules a trailing-edge timer so
+// the current phase always lands within 1 second.
+func (r *phaseRateLimiter) schedule() {
+	r.mu.Lock()
+	now := time.Now()
+	if now.Sub(r.lastBroadcast) >= time.Second {
+		r.lastBroadcast = now
+		r.hasPending = false
+		r.mu.Unlock()
+		r.broadcast()
+		return
+	}
+	if !r.hasPending {
+		r.hasPending = true
+		delay := time.Second - now.Sub(r.lastBroadcast)
+		r.timer = time.AfterFunc(delay, func() {
+			r.mu.Lock()
+			r.hasPending = false
+			r.lastBroadcast = time.Now()
+			r.mu.Unlock()
+			r.broadcast()
+		})
+	}
+	r.mu.Unlock()
+}
+
 type streamjsonBackend struct{}
 
 func init() { registerBackend("stream-json", streamjsonBackend{}) }
@@ -49,7 +107,7 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 	// best-effort one-shot completion suggests up to 4 tap-able user replies,
 	// emitted as a `view:"quick_replies"` view_event. nil when the feature is
 	// off or no provider has creds — turn-end no-ops.
-	gen := newQuickReplyGeneratorWithProvider(s.ID, req.aiGen, s.PublishText)
+	gen := newQuickReplyGeneratorWithProvider(s.ID, req.aiGen, s.PublishText, s.SubscriberCount)
 	// AI session titles: after the first meaningful exchange the generator
 	// mints a short human title and emits a `view:"session_title"` view_event;
 	// the apps slot it BELOW a manual rename. nil when titling is off / no
@@ -67,10 +125,10 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 	s.mu.Unlock()
 
 	// Part A breadcrumb: the conduit-awareness addendum rides claude's
-	// --append-system-prompt (merged with the askUserQuestionNudge in
-	// claudeAppendSystemPromptForWorkspace). Log once per spawn so a "the agent
-	// didn't know about $PORT" report is diagnosable from box logs. The
-	// mechanism suffix notes whether the KB section was included.
+	// --append-system-prompt (via claudeAppendSystemPromptForWorkspace). Log
+	// once per spawn so a "the agent didn't know about $PORT" report is
+	// diagnosable from box logs. The mechanism suffix notes whether the KB
+	// section was included.
 	if conduitAwarenessEnabled() {
 		mechanism := "claude:append-system-prompt"
 		_, hasKB := kbSection(s.workspaceDir)
@@ -84,16 +142,32 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 	// it can be captured by both the fork respawn and the normal respawn.
 	subagentH := s.subagentHandle()
 
-	// onTurnPhase updates the session's turnPhase field and broadcasts
-	// a fresh status frame whenever the phase changes. An empty phase
-	// string clears the field (turn ended).
+	// onTurnPhase updates the session's turnPhase field and broadcasts a
+	// fresh status frame when the phase changes.
+	//
+	// Rate-limiting: intermediate phase changes (e.g. thinking→writing→working
+	// during streaming) are coalesced to at most 1 broadcast per second via
+	// phaseRateLimiter. A suppressed intermediate is fine; the trailing-edge
+	// timer guarantees the final phase in each window still broadcasts.
+	//
+	// Turn END (phase == "") bypasses rate-limiting and broadcasts immediately.
+	// The app's queued-send flush depends on prompt-idle notification (#865/#866)
+	// so this transition must never be delayed.
+	prl := newPhaseRateLimiter(s.broadcastStatus)
 	onTurnPhase := func(phase string) {
 		s.mu.Lock()
 		changed := s.turnPhase != phase
 		s.turnPhase = phase
 		s.mu.Unlock()
-		if changed {
-			s.broadcastStatus()
+		if !changed {
+			return
+		}
+		if phase == "" {
+			// Turn END: must broadcast immediately, never coalesced.
+			prl.immediate()
+		} else {
+			// Intermediate phase: rate-limit to 1/sec, trailing edge guaranteed.
+			prl.schedule()
 		}
 	}
 
@@ -124,7 +198,7 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 			s.commandEnv(nil),
 			s.workspaceDir,
 			s.PublishText,
-			newQuickReplyGeneratorWithProvider(s.ID, req.aiGen, s.PublishText),
+			newQuickReplyGeneratorWithProvider(s.ID, req.aiGen, s.PublishText, s.SubscriberCount),
 			s.titleGen,
 			s.accumulateUsage,
 			s.handleAskControl,
