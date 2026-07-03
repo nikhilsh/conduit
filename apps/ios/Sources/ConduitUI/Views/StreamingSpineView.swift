@@ -27,6 +27,10 @@ extension ConduitUI {
     struct StreamingSpineView: View {
         /// The partial prose content streamed so far.
         let content: String
+        /// Accumulated reasoning text for the current thinking phase, if any.
+        /// When non-nil and non-empty a collapsible "Thinking..." block renders
+        /// above the prose. Ephemeral -- never persisted.
+        var thinking: String? = nil
 
         @Environment(\.neonTheme) private var neon
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -73,6 +77,12 @@ extension ConduitUI {
 
                 // MARK: Body column
                 VStack(alignment: .leading, spacing: 12) {
+                    // Thinking disclosure -- shown while the agent is in the
+                    // reasoning phase (thinking_streaming events). Collapses to
+                    // a one-line header by default; tap to expand the full text.
+                    if let thinkingText = thinking, !thinkingText.isEmpty {
+                        ThinkingDisclosure(text: thinkingText)
+                    }
                     proseBlock
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -315,6 +325,66 @@ extension ConduitUI {
                     try? await Task.sleep(nanoseconds: 500_000_000)
                     guard !Task.isCancelled else { return }
                     caretVisible.toggle()
+                }
+            }
+        }
+    }
+
+    // MARK: ThinkingDisclosure
+
+    /// Collapsible reasoning-text block rendered above the streaming prose
+    /// while the agent is in a thinking phase. Collapsed by default (one-line
+    /// header only); tap the chevron to reveal the full reasoning text.
+    ///
+    /// Reuses the same collapse pattern as ToolLedger: @State isExpanded +
+    /// a header row with chevron + the body gated on the expanded state.
+    struct ThinkingDisclosure: View {
+        /// Full accumulated reasoning text for this turn.
+        let text: String
+
+        @State private var isExpanded: Bool = false
+        @Environment(\.neonTheme) private var neon
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 0) {
+                // Header row: chevron + "Thinking..." label.
+                Button {
+                    let next = !isExpanded
+                    if reduceMotion {
+                        isExpanded = next
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isExpanded = next
+                        }
+                    }
+                    Telemetry.breadcrumb("thinking", isExpanded ? "expand" : "collapse",
+                        data: ["len": "\(text.count)"])
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(neon.ghost)
+                        Text("Thinking\u{2026}")
+                            .font(neon.mono(12))
+                            .foregroundStyle(neon.textFaint)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isExpanded ? "Collapse thinking" : "Expand thinking")
+
+                // Expanded body: full reasoning text in dim mono.
+                if isExpanded {
+                    Text(text)
+                        .font(neon.mono(12))
+                        .foregroundStyle(neon.textDim)
+                        .lineSpacing(12 * (1.5 - 1.0))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 6)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
         }
