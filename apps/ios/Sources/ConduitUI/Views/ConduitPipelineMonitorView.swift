@@ -10,6 +10,36 @@ extension ConduitUI {
 
     // MARK: - Pipeline poll models
 
+    // MARK: - Fanout models
+
+    struct FanoutRunStatus: Identifiable, Decodable {
+        var id: Int { index }
+        let index: Int
+        let agent_type: String
+        let session_id: String?
+        let branch: String?
+        let phase: String?
+        let started: String?
+        let ended: String?
+
+        var isDone: Bool { phase == "exited(0)" || phase == "exited" }
+        var isFailed: Bool {
+            guard let p = phase else { return false }
+            return p.hasPrefix("exited") && !isDone
+        }
+        var isRunning: Bool {
+            guard let p = phase else { return false }
+            return p == "running" || p == "ready"
+        }
+    }
+
+    struct FanoutStatus: Decodable {
+        let count: Int
+        let agent_types: [String]?
+        let runs: [FanoutRunStatus]?
+        let winner: Int?
+    }
+
     struct PipelineStepStatus: Identifiable, Decodable {
         var id: Int { index }
         let index: Int
@@ -26,6 +56,8 @@ extension ConduitUI {
         let retries: Int?
         /// Previous session IDs for retried executions of this step.
         let prev_session_ids: [String]?
+        /// Fanout configuration + runtime state. Present only for fanout steps.
+        let fanout: FanoutStatus?
 
         var isRunning: Bool {
             guard let p = phase else { return false }
@@ -41,6 +73,8 @@ extension ConduitUI {
             guard let p = phase else { return false }
             return p.hasPrefix("exited") && !isDone
         }
+
+        var isFanout: Bool { fanout != nil }
     }
 
     /// Gate metadata returned by the broker when a pipeline is in the
@@ -86,6 +120,7 @@ extension ConduitUI {
         }
 
         var isAwaitingGate: Bool { state == "awaiting_gate" }
+        var isAwaitingPick: Bool { state == "awaiting_pick" }
     }
 
     // MARK: - Monitor view
@@ -112,6 +147,11 @@ extension ConduitUI {
         @State private var showResumeArea = false
         @State private var resumePromptDraft: String = ""
         @State private var isResuming = false
+        // Fanout pick state
+        @State private var pickCompareRuns: [FanOutCompareRun] = []
+        @State private var isLoadingCompare = false
+        @State private var isPicking = false
+        @State private var pickLoadedForPipelineID: String = ""
 
         var body: some View {
             ZStack {
@@ -121,6 +161,9 @@ extension ConduitUI {
                         VStack(alignment: .leading, spacing: 16) {
                             stateHeader(p)
                             stepsList(p)
+                            if p.isAwaitingPick && store.pipelineFanout {
+                                pickPanel(p)
+                            }
                             if p.isAwaitingGate {
                                 gateCard(p)
                             }
@@ -218,12 +261,13 @@ extension ConduitUI {
         private func stateChip(_ state: String) -> some View {
             let (label, color): (String, Color) = {
                 switch state {
-                case "running":       return ("Running", neon.accent)
-                case "complete":      return ("Complete", neon.green)
-                case "failed":        return ("Failed", neon.red)
-                case "cancelled":     return ("Cancelled", neon.textDim)
-                case "awaiting_gate": return ("Gate", neon.yellow)
-                default:              return (state, neon.textFaint)
+                case "running":        return ("Running", neon.accent)
+                case "complete":       return ("Complete", neon.green)
+                case "failed":         return ("Failed", neon.red)
+                case "cancelled":      return ("Cancelled", neon.textDim)
+                case "awaiting_gate":  return ("Gate", neon.yellow)
+                case "awaiting_pick":  return ("Pick", neon.accent)
+                default:               return (state, neon.textFaint)
                 }
             }()
             return Text(label)
@@ -256,49 +300,78 @@ extension ConduitUI {
             let (stateLabel, stateColor) = stepStateDisplay(stepState)
             let isCurrentStep = step.index == pipeline.current_step && !pipeline.isTerminal
 
-            return HStack(spacing: 12) {
-                AgentAvatar(assistant: step.agent_type, size: 28)
+            return VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 12) {
+                    AgentAvatar(assistant: step.agent_type, size: 28)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(step.role.capitalized)
-                            .font(neon.sans(13).weight(.semibold))
-                            .foregroundStyle(neon.text)
-                        Text("#\(step.index + 1)")
-                            .font(neon.mono(11))
-                            .foregroundStyle(neon.textFaint)
-                        // Retry chip: shown when the step has been retried at least once.
-                        if let retries = step.retries, retries > 0 {
-                            Text("retry \(retries)")
-                                .font(neon.mono(10).weight(.semibold))
-                                .foregroundStyle(neon.yellow)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Capsule().fill(neon.yellow.opacity(0.15)))
-                                .overlay(Capsule().stroke(neon.yellow.opacity(0.35), lineWidth: 1))
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(step.role.capitalized)
+                                .font(neon.sans(13).weight(.semibold))
+                                .foregroundStyle(neon.text)
+                            Text("#\(step.index + 1)")
+                                .font(neon.mono(11))
+                                .foregroundStyle(neon.textFaint)
+                            // Fanout badge
+                            if step.isFanout, let fo = step.fanout {
+                                Text("\(fo.count)x")
+                                    .font(neon.mono(10).weight(.bold))
+                                    .foregroundStyle(neon.accent)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(neon.accent.opacity(0.14)))
+                            }
+                            // Retry chip
+                            if let retries = step.retries, retries > 0 {
+                                Text("retry \(retries)")
+                                    .font(neon.mono(10).weight(.semibold))
+                                    .foregroundStyle(neon.yellow)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(neon.yellow.opacity(0.15)))
+                                    .overlay(Capsule().stroke(neon.yellow.opacity(0.35), lineWidth: 1))
+                            }
                         }
+                        Text(step.agent_type)
+                            .font(neon.mono(10))
+                            .foregroundStyle(neon.textFaint)
                     }
-                    Text(step.agent_type)
-                        .font(neon.mono(10))
-                        .foregroundStyle(neon.textFaint)
+
+                    Spacer(minLength: 6)
+
+                    // State chip
+                    Text(stateLabel)
+                        .font(neon.mono(10).weight(.bold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(stateColor)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(stateColor.opacity(0.14)))
+
+                    // Chevron if session is available
+                    if step.session_id != nil {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(neon.textFaint)
+                    }
                 }
 
-                Spacer(minLength: 6)
-
-                // State chip
-                Text(stateLabel)
-                    .font(neon.mono(10).weight(.bold))
-                    .textCase(.uppercase)
-                    .foregroundStyle(stateColor)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(stateColor.opacity(0.14)))
-
-                // Chevron if session is available
-                if step.session_id != nil {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(neon.textFaint)
+                // Fanout sub-run cluster (below main row)
+                if step.isFanout, let fo = step.fanout, let runs = fo.runs, !runs.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(runs) { run in
+                            fanoutRunLine(run: run, winner: fo.winner)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    if let sid = run.session_id {
+                                        Telemetry.breadcrumb("pipeline", "fanout run open",
+                                            data: ["id": pipelineID, "step": "\(step.index)", "run": "\(run.index)", "session": sid])
+                                        selectedSessionID = sid
+                                    }
+                                }
+                        }
+                    }
+                    .padding(.top, 8)
                 }
             }
             .padding(.horizontal, 12)
@@ -320,18 +393,66 @@ extension ConduitUI {
             }
         }
 
+        private func fanoutRunLine(run: FanoutRunStatus, winner: Int?) -> some View {
+            let isWinner = winner == run.index
+            let isFailed = run.isFailed
+            let phaseText = run.phase ?? "queued"
+            let runColor: Color = {
+                if isWinner { return neon.green }
+                if isFailed { return neon.red }
+                if run.isRunning { return neon.accent }
+                if run.isDone { return neon.green }
+                return neon.textFaint
+            }()
+
+            return HStack(spacing: 8) {
+                AgentAvatar(assistant: run.agent_type, size: 20)
+                Text(run.agent_type)
+                    .font(neon.mono(11))
+                    .foregroundStyle(isFailed ? neon.textFaint : neon.textDim)
+                Text("run \(run.index + 1)")
+                    .font(neon.mono(10))
+                    .foregroundStyle(neon.textFaint)
+                Spacer(minLength: 4)
+                if isWinner {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(neon.green)
+                }
+                Text(phaseText)
+                    .font(neon.mono(10).weight(.semibold))
+                    .foregroundStyle(runColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(runColor.opacity(0.13)))
+                if run.session_id != nil {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(neon.textFaint)
+                }
+            }
+            .opacity(isFailed ? 0.5 : 1)
+        }
+
         private enum StepDisplayState {
-            case queued, running, done, failed, awaitingGate
+            case queued, running, done, failed, awaitingGate, awaitingPick
         }
 
         private func stepDisplayState(step: PipelineStepStatus, pipeline: PipelineStatus) -> StepDisplayState {
-            if step.session_id == nil { return .queued }
+            if step.session_id == nil && step.fanout?.runs == nil { return .queued }
             if step.isDone { return .done }
             if step.isFailed { return .failed }
+            if pipeline.isAwaitingPick && step.index == pipeline.current_step {
+                return .awaitingPick
+            }
             if step.isRunning {
                 if pipeline.isAwaitingGate && step.index == pipeline.current_step {
                     return .awaitingGate
                 }
+                return .running
+            }
+            // Fanout step: has runs but no step-level session (not yet picked)
+            if step.isFanout, let runs = step.fanout?.runs, !runs.isEmpty {
                 return .running
             }
             return .queued
@@ -339,11 +460,378 @@ extension ConduitUI {
 
         private func stepStateDisplay(_ state: StepDisplayState) -> (String, Color) {
             switch state {
-            case .queued:       return ("queued", neon.textFaint)
-            case .running:      return ("running", neon.accent)
-            case .done:         return ("done", neon.green)
-            case .failed:       return ("failed", neon.red)
-            case .awaitingGate: return ("gate", neon.yellow)
+            case .queued:        return ("queued", neon.textFaint)
+            case .running:       return ("running", neon.accent)
+            case .done:          return ("done", neon.green)
+            case .failed:        return ("failed", neon.red)
+            case .awaitingGate:  return ("gate", neon.yellow)
+            case .awaitingPick:  return ("pick", neon.accent)
+            }
+        }
+
+        // MARK: Pick panel (awaiting_pick)
+
+        private func pickPanel(_ p: PipelineStatus) -> some View {
+            // Find the current fanout step to get run data
+            let fanoutStep = p.steps.first(where: { $0.index == p.current_step && $0.isFanout })
+            let fanoutRuns = fanoutStep?.fanout?.runs ?? []
+
+            return VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.branch")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(neon.accent)
+                    Text("Pick the winning run")
+                        .font(neon.sans(14).weight(.semibold))
+                        .foregroundStyle(neon.text)
+                }
+
+                Text("All runs have finished. Compare them below and pick the one to continue the pipeline.")
+                    .font(neon.sans(13))
+                    .foregroundStyle(neon.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if isLoadingCompare {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .tint(neon.accent)
+                            .scaleEffect(0.8)
+                        Text("Loading compare...")
+                            .font(neon.sans(13))
+                            .foregroundStyle(neon.textDim)
+                    }
+                } else {
+                    // Render each run as a compact pick card
+                    ForEach(pickCompareRuns) { run in
+                        pickRunCard(run: run, pipeline: p)
+                    }
+                    // Runs with no compare data but listed in fanout
+                    if pickCompareRuns.isEmpty {
+                        ForEach(fanoutRuns) { run in
+                            pickRunFallbackCard(run: run, pipeline: p)
+                        }
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .neonCardSurface(
+                neon,
+                fill: neon.accent.opacity(neon.dark ? 0.07 : 0.05),
+                cornerRadius: 14,
+                border: neon.accent.opacity(0.27),
+                glowTint: neon.glow ? neon.accent : nil
+            )
+            .onAppear {
+                if pickLoadedForPipelineID != pipelineID, !fanoutRuns.isEmpty {
+                    loadPickCompare(p: p, runs: fanoutRuns)
+                }
+                Telemetry.breadcrumb("pipeline", "pick shown",
+                    data: ["id": pipelineID, "run_count": "\(fanoutRuns.count)"])
+            }
+        }
+
+        private func pickRunCard(run: FanOutCompareRun, pipeline: PipelineStatus) -> some View {
+            let runIndex = pickCompareRuns.firstIndex(where: { $0.session_id == run.session_id }) ?? 0
+            // Find the fanout run entry to get the index in fanout.runs
+            let fanoutStep = pipeline.steps.first(where: { $0.index == pipeline.current_step })
+            let fanoutRunEntry = fanoutStep?.fanout?.runs?.first(where: { $0.session_id == run.session_id })
+            let actualRunIndex = fanoutRunEntry?.index ?? runIndex
+            let isWinner = fanoutStep?.fanout?.winner == actualRunIndex
+            let canPick = !run.hasError && !isPicking && !isWinner
+
+            return VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    AgentAvatar(assistant: run.label.isEmpty ? "claude" : run.label, size: 22)
+                    Text(run.label.isEmpty ? "Run \(actualRunIndex + 1)" : run.label)
+                        .font(neon.mono(13).weight(.bold))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    if isWinner {
+                        Text("Winner")
+                            .font(neon.mono(10).weight(.bold))
+                            .foregroundStyle(neon.green)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(neon.green.opacity(0.15)))
+                    }
+                    // Phase chip
+                    Text(run.phase.isEmpty ? "done" : run.phase)
+                        .font(neon.mono(10).weight(.bold))
+                        .foregroundStyle(run.hasError ? neon.red : neon.green)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill((run.hasError ? neon.red : neon.green).opacity(0.13)))
+                }
+
+                if run.files_changed > 0 {
+                    HStack(spacing: 6) {
+                        Text("\(run.files_changed) files")
+                            .font(neon.mono(11).weight(.semibold))
+                            .foregroundStyle(neon.textDim)
+                        Text("+\(run.insertions)")
+                            .font(neon.mono(11).weight(.semibold))
+                            .foregroundStyle(neon.green)
+                        Text("-\(run.deletions)")
+                            .font(neon.mono(11).weight(.semibold))
+                            .foregroundStyle(neon.red)
+                    }
+                }
+
+                if !run.agent_summary.isEmpty {
+                    Text(run.agent_summary)
+                        .font(neon.sans(12))
+                        .foregroundStyle(neon.textDim)
+                        .lineLimit(2)
+                }
+
+                if run.hasError {
+                    HStack(spacing: 5) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(neon.red)
+                        Text(run.error)
+                            .font(neon.sans(11))
+                            .foregroundStyle(neon.red)
+                            .lineLimit(2)
+                    }
+                }
+
+                // Action row
+                HStack(spacing: 8) {
+                    // Open session button
+                    Button {
+                        Telemetry.breadcrumb("pipeline", "pick run open",
+                            data: ["id": pipelineID, "session": run.session_id])
+                        selectedSessionID = run.session_id
+                    } label: {
+                        Text("Open")
+                            .font(neon.mono(12).weight(.semibold))
+                            .foregroundStyle(neon.accent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(neon.surface2))
+                            .overlay(Capsule().stroke(neon.borderStrong, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+
+                    // Pick button
+                    Button {
+                        Telemetry.breadcrumb("pipeline", "pick tapped",
+                            data: ["id": pipelineID, "run": "\(actualRunIndex)"])
+                        submitPick(runIndex: actualRunIndex, pipeline: pipeline)
+                    } label: {
+                        HStack(spacing: 5) {
+                            if isPicking {
+                                ProgressView()
+                                    .progressViewStyle(.circular)
+                                    .scaleEffect(0.6)
+                                    .tint(neon.accentText)
+                            } else {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            Text(isPicking ? "Picking..." : "Pick")
+                                .font(neon.mono(12).weight(.bold))
+                        }
+                        .foregroundStyle(neon.accentText)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(canPick ? neon.accent : neon.surface2))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canPick)
+                    .opacity(canPick ? 1 : 0.4)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(run.hasError ? neon.red.opacity(0.05) : neon.surface2)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(run.hasError ? neon.red.opacity(0.20) : neon.border, lineWidth: 1)
+            )
+            .opacity(run.hasError ? 0.65 : 1)
+        }
+
+        private func pickRunFallbackCard(run: FanoutRunStatus, pipeline: PipelineStatus) -> some View {
+            let fanoutStep = pipeline.steps.first(where: { $0.index == pipeline.current_step })
+            let isWinner = fanoutStep?.fanout?.winner == run.index
+            let canPick = run.isDone && !isPicking && !isWinner
+
+            return HStack(spacing: 10) {
+                AgentAvatar(assistant: run.agent_type, size: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Run \(run.index + 1) — \(run.agent_type)")
+                        .font(neon.mono(12).weight(.semibold))
+                        .foregroundStyle(neon.text)
+                    Text(run.phase ?? "queued")
+                        .font(neon.mono(10))
+                        .foregroundStyle(run.isFailed ? neon.red : neon.textFaint)
+                }
+                Spacer(minLength: 6)
+                if isWinner {
+                    Text("Winner")
+                        .font(neon.mono(10).weight(.bold))
+                        .foregroundStyle(neon.green)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(neon.green.opacity(0.15)))
+                }
+                Button {
+                    Telemetry.breadcrumb("pipeline", "pick tapped",
+                        data: ["id": pipelineID, "run": "\(run.index)"])
+                    submitPick(runIndex: run.index, pipeline: pipeline)
+                } label: {
+                    Text("Pick")
+                        .font(neon.mono(11).weight(.bold))
+                        .foregroundStyle(neon.accentText)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(canPick ? neon.accent : neon.surface2))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canPick)
+                .opacity(canPick ? 1 : 0.4)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(neon.surface2)
+            )
+            .opacity(run.isFailed ? 0.5 : 1)
+        }
+
+        private func loadPickCompare(p: PipelineStatus, runs: [FanoutRunStatus]) {
+            let sessionIDs = runs.compactMap { $0.session_id }.filter { !$0.isEmpty }
+            guard !sessionIDs.isEmpty else { return }
+            let endpoint = store.endpoint
+            guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/fanout/compare"
+            guard let url = components?.url else { return }
+
+            isLoadingCompare = true
+            Telemetry.breadcrumb("pipeline", "pick compare start",
+                data: ["id": pipelineID, "runs": "\(sessionIDs.count)"])
+
+            struct CompareRequest: Encodable {
+                let session_ids: [String]
+                let base: String
+            }
+            guard let body = try? JSONEncoder().encode(CompareRequest(session_ids: sessionIDs, base: p.base)) else {
+                isLoadingCompare = false
+                return
+            }
+
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 20
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = body
+
+            Task { @MainActor in
+                defer { isLoadingCompare = false }
+                do {
+                    let (data, resp) = try await URLSession.shared.data(for: req)
+                    guard let http = resp as? HTTPURLResponse,
+                          http.statusCode >= 200 && http.statusCode < 300 else {
+                        Telemetry.breadcrumb("pipeline", "pick compare http error",
+                            data: ["id": pipelineID])
+                        return
+                    }
+                    struct CompareResponse: Decodable {
+                        let runs: [FanOutCompareRun]
+                    }
+                    if let parsed = try? JSONDecoder().decode(CompareResponse.self, from: data) {
+                        pickCompareRuns = parsed.runs
+                        pickLoadedForPipelineID = pipelineID
+                        Telemetry.breadcrumb("pipeline", "pick compare ok",
+                            data: ["id": pipelineID, "count": "\(parsed.runs.count)"])
+                    }
+                } catch {
+                    Telemetry.capture(
+                        error: error,
+                        message: "pipeline pick compare network error",
+                        tags: ["surface": "ios", "phase": "pipeline"],
+                        extras: ["id": pipelineID]
+                    )
+                }
+            }
+        }
+
+        private func submitPick(runIndex: Int, pipeline: PipelineStatus) {
+            let endpoint = store.endpoint
+            guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/pipeline/\(pipelineID)/pick"
+            guard let url = components?.url else { return }
+
+            isPicking = true
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 15
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let body = try? JSONSerialization.data(withJSONObject: ["run": runIndex]) {
+                req.httpBody = body
+            }
+
+            Task { @MainActor in
+                defer { isPicking = false }
+                do {
+                    let (data, resp) = try await URLSession.shared.data(for: req)
+                    guard let http = resp as? HTTPURLResponse else { return }
+                    if http.statusCode == 409 {
+                        // 409: not_at_pick or run_failed
+                        let detail: String
+                        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let err = obj["error"] as? String {
+                            detail = err
+                        } else {
+                            detail = "Pick rejected (409)"
+                        }
+                        errorBanner = detail
+                        Telemetry.breadcrumb("pipeline", "pick 409",
+                            data: ["id": pipelineID, "run": "\(runIndex)", "detail": detail])
+                        return
+                    }
+                    if http.statusCode >= 200 && http.statusCode < 300 {
+                        Telemetry.breadcrumb("pipeline", "pick ok",
+                            data: ["id": pipelineID, "run": "\(runIndex)"])
+                        // Clear compare cache so it re-fetches if still at pick
+                        pickCompareRuns = []
+                        pickLoadedForPipelineID = ""
+                        await fetchPipeline()
+                        if pipeline.isTerminal == false {
+                            startPolling()
+                        }
+                    } else {
+                        let msg = "Pick failed: HTTP \(http.statusCode)"
+                        errorBanner = msg
+                        Telemetry.capture(
+                            error: NSError(domain: "ios.pipeline", code: 20,
+                                userInfo: [NSLocalizedDescriptionKey: "pipeline pick failed"]),
+                            message: "pipeline pick failed",
+                            tags: ["surface": "ios", "phase": "pipeline"],
+                            extras: ["id": pipelineID, "run": "\(runIndex)", "status": "\(http.statusCode)"]
+                        )
+                    }
+                } catch {
+                    errorBanner = error.localizedDescription
+                    Telemetry.capture(
+                        error: error,
+                        message: "pipeline pick network error",
+                        tags: ["surface": "ios", "phase": "pipeline"],
+                        extras: ["id": pipelineID, "run": "\(runIndex)"]
+                    )
+                }
             }
         }
 

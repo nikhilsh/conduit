@@ -72,6 +72,11 @@ data class PipelineStepDraft(
     val promptTemplate: String = "",
     val inputFromPrev: String = "none",
     val gateAfter: Boolean = false,
+    // Fanout config (present only when fanoutEnabled == true)
+    val fanoutEnabled: Boolean = false,
+    val fanoutCount: Int = 2,
+    // Per-run agent types (index-aligned); empty = use step agent for all runs
+    val fanoutAgentTypes: List<String> = emptyList(),
 )
 
 /** A saved pipeline template returned by GET /api/pipeline-templates. */
@@ -136,6 +141,7 @@ fun PipelineBuilderScreen(
     val endpoint by store.endpoint.collectAsState()
     val sessions by store.sessions.collectAsState()
     val pipelineTemplates by store.pipelineTemplates.collectAsState()
+    val pipelineFanout by store.pipelineFanout.collectAsState()
     val scope = rememberCoroutineScope()
 
     Telemetry.breadcrumb("pipeline", "builder_opened", emptyMap())
@@ -284,6 +290,14 @@ fun PipelineBuilderScreen(
                         put("prompt_template", step.promptTemplate)
                         put("input_from_prev", step.inputFromPrev)
                         put("gate_after", step.gateAfter)
+                        if (step.fanoutEnabled) {
+                            put("fanout", JSONObject().apply {
+                                put("count", step.fanoutCount)
+                                if (step.fanoutAgentTypes.isNotEmpty()) {
+                                    put("agent_types", JSONArray(step.fanoutAgentTypes))
+                                }
+                            })
+                        }
                     })
                 }
             }
@@ -349,6 +363,14 @@ fun PipelineBuilderScreen(
                         put("prompt_template", step.promptTemplate)
                         put("input_from_prev", step.inputFromPrev)
                         put("gate_after", step.gateAfter)
+                        if (step.fanoutEnabled) {
+                            put("fanout", JSONObject().apply {
+                                put("count", step.fanoutCount)
+                                if (step.fanoutAgentTypes.isNotEmpty()) {
+                                    put("agent_types", JSONArray(step.fanoutAgentTypes))
+                                }
+                            })
+                        }
                     })
                 }
             }
@@ -522,6 +544,7 @@ fun PipelineBuilderScreen(
                     step = step,
                     neon = neon,
                     canDelete = steps.size > 1,
+                    showFanout = pipelineFanout,
                     onUpdate = { updated -> steps[index] = updated },
                     onDelete = { steps.removeAt(index) },
                 )
@@ -763,6 +786,7 @@ private fun StepCard(
     step: PipelineStepDraft,
     neon: NeonTheme,
     canDelete: Boolean,
+    showFanout: Boolean = false,
     onUpdate: (PipelineStepDraft) -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -917,6 +941,220 @@ private fun StepCard(
                     checked = step.gateAfter,
                     onCheckedChange = { onUpdate(step.copy(gateAfter = it)) },
                 )
+            }
+
+            // Fanout section (gated on pipeline_fanout capability)
+            if (showFanout) {
+                FanoutStepSection(step = step, neon = neon, onUpdate = onUpdate)
+            }
+        }
+    }
+}
+
+@Composable
+private fun FanoutStepSection(
+    step: PipelineStepDraft,
+    neon: NeonTheme,
+    onUpdate: (PipelineStepDraft) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                if (step.fanoutEnabled) neon.accent.copy(alpha = 0.07f)
+                else neon.surface2.copy(alpha = 0.5f)
+            )
+            .border(
+                1.dp,
+                if (step.fanoutEnabled) neon.accent.copy(alpha = 0.25f) else neon.border.copy(alpha = 0.5f),
+                RoundedCornerShape(10.dp),
+            )
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        // Fan out toggle row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Fan out this step",
+                fontFamily = neon.sans,
+                fontSize = 13.sp,
+                color = neon.text,
+                modifier = Modifier.weight(1f),
+            )
+            Switch(
+                checked = step.fanoutEnabled,
+                onCheckedChange = { enabled ->
+                    Telemetry.breadcrumb(
+                        "pipeline",
+                        "fanout_toggle",
+                        mapOf("enabled" to enabled.toString()),
+                    )
+                    onUpdate(step.copy(fanoutEnabled = enabled))
+                },
+            )
+        }
+
+        if (step.fanoutEnabled) {
+            // Run count stepper (1-6)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "RUN COUNT",
+                    fontFamily = neon.mono,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 10.sp,
+                    color = neon.textFaint,
+                    modifier = Modifier.weight(1f),
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(
+                                if (step.fanoutCount > 1) neon.accent.copy(alpha = 0.15f)
+                                else neon.surface2
+                            )
+                            .clickable(enabled = step.fanoutCount > 1) {
+                                val newCount = step.fanoutCount - 1
+                                val trimmed = step.fanoutAgentTypes.take(newCount)
+                                onUpdate(step.copy(fanoutCount = newCount, fanoutAgentTypes = trimmed))
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "-",
+                            fontFamily = neon.mono,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = if (step.fanoutCount > 1) neon.accent else neon.textFaint,
+                        )
+                    }
+                    Text(
+                        "${step.fanoutCount}",
+                        fontFamily = neon.mono,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = neon.text,
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(
+                                if (step.fanoutCount < 6) neon.accent.copy(alpha = 0.15f)
+                                else neon.surface2
+                            )
+                            .clickable(enabled = step.fanoutCount < 6) {
+                                onUpdate(step.copy(fanoutCount = step.fanoutCount + 1))
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "+",
+                            fontFamily = neon.mono,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = if (step.fanoutCount < 6) neon.accent else neon.textFaint,
+                        )
+                    }
+                }
+            }
+
+            // Per-run agent pickers
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "PER-RUN AGENTS (OPTIONAL)",
+                        fontFamily = neon.mono,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 10.sp,
+                        color = neon.textFaint,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (step.fanoutAgentTypes.isNotEmpty()) {
+                        Text(
+                            "Clear",
+                            fontFamily = neon.mono,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 10.sp,
+                            color = neon.red,
+                            modifier = Modifier.clickable {
+                                onUpdate(step.copy(fanoutAgentTypes = emptyList()))
+                            },
+                        )
+                    }
+                }
+                Text(
+                    "Leave unset to run step agent x ${step.fanoutCount}.",
+                    fontFamily = neon.sans,
+                    fontSize = 11.sp,
+                    color = neon.textFaint,
+                )
+                repeat(step.fanoutCount) { runIdx ->
+                    var agentExpanded by remember(runIdx) { mutableStateOf(false) }
+                    val currentAgent = step.fanoutAgentTypes.getOrElse(runIdx) { step.agentType }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            "Run ${runIdx + 1}",
+                            fontFamily = neon.mono,
+                            fontSize = 11.sp,
+                            color = neon.textFaint,
+                            modifier = Modifier.width(44.dp),
+                        )
+                        Box(modifier = Modifier.weight(1f)) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(neon.surface2)
+                                    .border(1.dp, neon.border, RoundedCornerShape(8.dp))
+                                    .clickable { agentExpanded = true }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                            ) {
+                                Text(
+                                    currentAgent,
+                                    fontFamily = neon.mono,
+                                    fontSize = 12.sp,
+                                    color = neon.text,
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = agentExpanded,
+                                onDismissRequest = { agentExpanded = false },
+                            ) {
+                                AGENT_TYPES.forEach { agent ->
+                                    DropdownMenuItem(
+                                        text = { Text(agent, fontFamily = neon.mono) },
+                                        onClick = {
+                                            val arr = step.fanoutAgentTypes.toMutableList()
+                                            while (arr.size <= runIdx) arr.add(step.agentType)
+                                            arr[runIdx] = agent
+                                            onUpdate(step.copy(fanoutAgentTypes = arr))
+                                            agentExpanded = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -23,6 +23,11 @@ extension ConduitUI {
         var promptTemplate: String = ""
         var inputFromPrev: String = "none"
         var gateAfter: Bool = false
+        // Fanout config (present only when fanoutEnabled == true)
+        var fanoutEnabled: Bool = false
+        var fanoutCount: Int = 2
+        // Per-run agent types (index-aligned); empty = use step agent for all runs
+        var fanoutAgentTypes: [String] = []
     }
 
     struct CreatedPipeline: Identifiable {
@@ -462,10 +467,149 @@ extension ConduitUI {
                     Toggle("", isOn: step.gateAfter)
                         .tint(neon.accent)
                 }
+
+                // Fan out toggle (gated on pipeline_fanout capability)
+                if store.pipelineFanout {
+                    fanoutSection(step: step)
+                }
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
+        }
+
+        @ViewBuilder
+        private func fanoutSection(step: Binding<PipelineStep>) -> some View {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Image(systemName: "arrow.branch")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(step.wrappedValue.fanoutEnabled ? neon.accent : neon.textFaint)
+                    Text("Fan out this step")
+                        .font(neon.sans(13))
+                        .foregroundStyle(neon.text)
+                    Spacer(minLength: 8)
+                    Toggle("", isOn: step.fanoutEnabled)
+                        .tint(neon.accent)
+                        .onChange(of: step.wrappedValue.fanoutEnabled) { _, newVal in
+                            Telemetry.breadcrumb("pipeline", "fanout toggle",
+                                data: ["enabled": newVal ? "true" : "false"])
+                            if newVal && step.wrappedValue.fanoutCount < 1 {
+                                step.wrappedValue.fanoutCount = 2
+                            }
+                        }
+                }
+
+                if step.wrappedValue.fanoutEnabled {
+                    // Run count stepper (1-6)
+                    HStack {
+                        Text("Run count")
+                            .font(neon.mono(11).weight(.semibold))
+                            .foregroundStyle(neon.textFaint)
+                            .textCase(.uppercase)
+                        Spacer(minLength: 8)
+                        HStack(spacing: 12) {
+                            Button {
+                                if step.wrappedValue.fanoutCount > 1 {
+                                    step.wrappedValue.fanoutCount -= 1
+                                    // Trim agent list if too long
+                                    if step.wrappedValue.fanoutAgentTypes.count > step.wrappedValue.fanoutCount {
+                                        step.wrappedValue.fanoutAgentTypes = Array(step.wrappedValue.fanoutAgentTypes.prefix(step.wrappedValue.fanoutCount))
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .font(.system(size: 22, weight: .medium))
+                                    .foregroundStyle(step.wrappedValue.fanoutCount > 1 ? neon.accent : neon.textFaint)
+                            }
+                            .buttonStyle(.plain)
+                            Text("\(step.wrappedValue.fanoutCount)")
+                                .font(neon.mono(16).weight(.bold))
+                                .foregroundStyle(neon.text)
+                                .frame(minWidth: 24, alignment: .center)
+                            Button {
+                                if step.wrappedValue.fanoutCount < 6 {
+                                    step.wrappedValue.fanoutCount += 1
+                                }
+                            } label: {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.system(size: 22, weight: .medium))
+                                    .foregroundStyle(step.wrappedValue.fanoutCount < 6 ? neon.accent : neon.textFaint)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    // Per-run agent pickers (optional; defaults to step agent x N)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Per-run agents (optional)")
+                                .font(neon.mono(10).weight(.semibold))
+                                .foregroundStyle(neon.textFaint)
+                                .textCase(.uppercase)
+                            Spacer(minLength: 4)
+                            if !step.wrappedValue.fanoutAgentTypes.isEmpty {
+                                Button {
+                                    step.wrappedValue.fanoutAgentTypes = []
+                                } label: {
+                                    Text("Clear")
+                                        .font(neon.mono(10).weight(.semibold))
+                                        .foregroundStyle(neon.red)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        Text("Leave unset to run step agent x \(step.wrappedValue.fanoutCount).")
+                            .font(neon.sans(11))
+                            .foregroundStyle(neon.textFaint)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        ForEach(0..<step.wrappedValue.fanoutCount, id: \.self) { runIdx in
+                            HStack(spacing: 8) {
+                                Text("Run \(runIdx + 1)")
+                                    .font(neon.mono(11))
+                                    .foregroundStyle(neon.textFaint)
+                                    .frame(width: 44, alignment: .leading)
+                                Picker("Run \(runIdx + 1)", selection: Binding(
+                                    get: {
+                                        step.wrappedValue.fanoutAgentTypes.indices.contains(runIdx)
+                                            ? step.wrappedValue.fanoutAgentTypes[runIdx]
+                                            : step.wrappedValue.agentType
+                                    },
+                                    set: { newAgent in
+                                        var arr = step.wrappedValue.fanoutAgentTypes
+                                        // Pad if needed
+                                        while arr.count <= runIdx {
+                                            arr.append(step.wrappedValue.agentType)
+                                        }
+                                        arr[runIdx] = newAgent
+                                        step.wrappedValue.fanoutAgentTypes = arr
+                                    }
+                                )) {
+                                    ForEach(agentOptions, id: \.self) { opt in
+                                        Text(opt).tag(opt)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                .tint(neon.accent)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(step.wrappedValue.fanoutEnabled
+                          ? neon.accent.opacity(0.06)
+                          : neon.surface2.opacity(0.5))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(step.wrappedValue.fanoutEnabled
+                            ? neon.accent.opacity(0.25)
+                            : neon.border.opacity(0.5), lineWidth: 1)
+            )
         }
 
         // MARK: Start button
@@ -607,12 +751,17 @@ extension ConduitUI {
             Telemetry.breadcrumb("pipeline", "template saved",
                 data: ["title": trimTitle, "steps": "\(steps.count)"])
 
+            struct TemplateRequestFanout: Encodable {
+                let count: Int
+                let agent_types: [String]?
+            }
             struct TemplateRequestStep: Encodable {
                 let agent_type: String
                 let role: String
                 let prompt_template: String
                 let input_from_prev: String
                 let gate_after: Bool
+                let fanout: TemplateRequestFanout?
             }
             struct TemplateRequest: Encodable {
                 let title: String
@@ -620,12 +769,17 @@ extension ConduitUI {
                 let steps: [TemplateRequestStep]
             }
             let reqSteps = steps.map { s in
-                TemplateRequestStep(
+                let fo: TemplateRequestFanout? = s.fanoutEnabled ? TemplateRequestFanout(
+                    count: s.fanoutCount,
+                    agent_types: s.fanoutAgentTypes.isEmpty ? nil : s.fanoutAgentTypes
+                ) : nil
+                return TemplateRequestStep(
                     agent_type: s.agentType,
                     role: s.role,
                     prompt_template: s.promptTemplate,
                     input_from_prev: s.inputFromPrev,
-                    gate_after: s.gateAfter
+                    gate_after: s.gateAfter,
+                    fanout: fo
                 )
             }
             let reqBody = TemplateRequest(title: trimTitle, task: trimTask, steps: reqSteps)
@@ -719,12 +873,17 @@ extension ConduitUI {
             Telemetry.breadcrumb("pipeline", "create start",
                 data: ["title": trimTitle, "steps": "\(steps.count)", "host": endpoint.displayHost])
 
+            struct PipelineRequestFanout: Encodable {
+                let count: Int
+                let agent_types: [String]?
+            }
             struct PipelineRequestStep: Encodable {
                 let agent_type: String
                 let role: String
                 let prompt_template: String
                 let input_from_prev: String
                 let gate_after: Bool
+                let fanout: PipelineRequestFanout?
             }
             struct PipelineRequest: Encodable {
                 let title: String
@@ -734,12 +893,17 @@ extension ConduitUI {
                 let steps: [PipelineRequestStep]
             }
             let reqSteps = steps.map { s in
-                PipelineRequestStep(
+                let fanoutPayload: PipelineRequestFanout? = s.fanoutEnabled ? PipelineRequestFanout(
+                    count: s.fanoutCount,
+                    agent_types: s.fanoutAgentTypes.isEmpty ? nil : s.fanoutAgentTypes
+                ) : nil
+                return PipelineRequestStep(
                     agent_type: s.agentType,
                     role: s.role,
                     prompt_template: s.promptTemplate,
                     input_from_prev: s.inputFromPrev,
-                    gate_after: s.gateAfter
+                    gate_after: s.gateAfter,
+                    fanout: fanoutPayload
                 )
             }
             let reqBody = PipelineRequest(
