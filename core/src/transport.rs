@@ -284,6 +284,12 @@ struct WorkerArgs {
 async fn session_worker(mut args: WorkerArgs) {
     let mut current_ws = args.initial_ws.take();
     let mut shutdown_rx = args.shutdown_rx;
+    // Tracks whether the reconnect about to happen was triggered by an
+    // explicit nudge (network-change / app-foreground signal). When true,
+    // reconnect() skips the initial RECONNECT_DELAY so the first dial is
+    // immediate. The flag is consumed once per cycle; it resets to false on
+    // any non-nudge path (socket error, timer-based park revive).
+    let mut nudge_triggered = false;
 
     loop {
         // Acquire (or re-acquire) a live WebSocket.
@@ -298,6 +304,7 @@ async fn session_worker(mut args: WorkerArgs) {
                     &args.override_,
                     &args.delegate,
                     &mut shutdown_rx,
+                    nudge_triggered,
                 )
                 .await
                 {
@@ -329,10 +336,17 @@ async fn session_worker(mut args: WorkerArgs) {
                                 auth: false,
                             },
                         );
-                        if park_until_revive(&mut shutdown_rx, &args.nudge).await {
-                            continue;
+                        match park_until_revive(&mut shutdown_rx, &args.nudge).await {
+                            ParkOutcome::Nudged => {
+                                nudge_triggered = true;
+                                continue;
+                            }
+                            ParkOutcome::TimerExpired => {
+                                nudge_triggered = false;
+                                continue;
+                            }
+                            ParkOutcome::Shutdown => return,
                         }
-                        return;
                     }
                     ReconnectOutcome::ShutdownRequested => {
                         return;
@@ -361,11 +375,14 @@ async fn session_worker(mut args: WorkerArgs) {
             DriveOutcome::Paused => {
                 // App explicitly idled this session. Park without auto-retry
                 // until nudge() (or notify_network_change) wakes us.
+                // park_indefinite only returns true via a nudge, so the
+                // next reconnect cycle should always be immediate here.
                 if !park_indefinite(&mut shutdown_rx, &args.nudge).await {
                     return;
                 }
+                nudge_triggered = true;
             }
-            DriveOutcome::Disconnected(_reason) => {
+            DriveOutcome::Disconnected(ref reason) => {
                 // A socket drop is a ROUTINE rotation, not a user-facing
                 // failure: loop straight back into reconnect(), whose
                 // first act is emitting Connecting{1/5}. Previously we
@@ -379,7 +396,10 @@ async fn session_worker(mut args: WorkerArgs) {
                 // the reference app, which treats foreground/network
                 // rotations as silent recovery.
                 //
-                // Loop back to reconnect.
+                // If the disconnect was caused by an explicit nudge
+                // (drive_socket's nudge arm returns "network change"),
+                // skip the initial delay in the upcoming reconnect cycle.
+                nudge_triggered = reason == "network change";
             }
         }
     }
@@ -401,6 +421,7 @@ async fn reconnect(
     override_: &SpawnOverride,
     delegate: &Arc<dyn ConduitDelegate>,
     shutdown_rx: &mut oneshot::Receiver<()>,
+    skip_initial_delay: bool,
 ) -> ReconnectOutcome {
     for attempt in 1..=RECONNECT_MAX_ATTEMPTS {
         delegate.on_connection_health(
@@ -411,14 +432,19 @@ async fn reconnect(
             },
         );
 
-        // Wait before retrying so we don't hammer the server. Skipping
-        // the wait on attempt 1 would just slam right after a drop and
-        // is unlikely to succeed anyway.
-        let sleep = tokio::time::sleep(RECONNECT_DELAY);
-        tokio::pin!(sleep);
-        tokio::select! {
-            _ = &mut sleep => {}
-            _ = &mut *shutdown_rx => { return ReconnectOutcome::ShutdownRequested; }
+        // When the reconnect was triggered by an explicit nudge (network-
+        // change / foreground signal) the first dial fires immediately —
+        // the nudge already tells us the path changed, so the 1s sleep is
+        // pure waste. Subsequent attempts in the same burst still delay to
+        // avoid hammering the broker. Non-nudge reconnects (socket errors)
+        // always delay so rapid failure loops don't slam the server.
+        if should_delay_on_attempt(attempt, skip_initial_delay) {
+            let sleep = tokio::time::sleep(RECONNECT_DELAY);
+            tokio::pin!(sleep);
+            tokio::select! {
+                _ = &mut sleep => {}
+                _ = &mut *shutdown_rx => { return ReconnectOutcome::ShutdownRequested; }
+            }
         }
 
         match open_ws(endpoint, session_id, assistant, token, override_).await {
@@ -437,17 +463,39 @@ async fn reconnect(
     ReconnectOutcome::Exhausted
 }
 
-/// Park after the reconnect burst gives up (device bug #29). Returns `true`
-/// to retry — woken by a network-change nudge or the slow-retry tick — and
-/// `false` on shutdown. Keeping the worker alive here is what lets the app
-/// auto-recover when the broker/network comes back.
-async fn park_until_revive(shutdown_rx: &mut oneshot::Receiver<()>, nudge: &Arc<Notify>) -> bool {
+/// Returns true when a sleep of RECONNECT_DELAY should precede dial attempt
+/// `attempt`. The first attempt in a nudge-triggered cycle is immediate;
+/// every other attempt keeps the delay to avoid hammering the broker.
+#[inline]
+fn should_delay_on_attempt(attempt: u32, skip_initial_delay: bool) -> bool {
+    !(attempt == 1 && skip_initial_delay)
+}
+
+/// Outcome of parking the worker after a reconnect burst gives up.
+enum ParkOutcome {
+    /// A nudge() call woke the park; the next reconnect should be immediate.
+    Nudged,
+    /// The slow-retry timer fired; keep the normal initial delay next cycle.
+    TimerExpired,
+    /// Shutdown was requested; the caller should return.
+    Shutdown,
+}
+
+/// Park after the reconnect burst gives up (device bug #29). Returns a
+/// [`ParkOutcome`] so the caller knows whether the wake was nudge-driven
+/// (next reconnect cycle should be immediate) or timer-driven (normal delay).
+/// Keeping the worker alive here is what lets the app auto-recover when the
+/// broker/network comes back instead of staying dead.
+async fn park_until_revive(
+    shutdown_rx: &mut oneshot::Receiver<()>,
+    nudge: &Arc<Notify>,
+) -> ParkOutcome {
     let sleep = tokio::time::sleep(RECONNECT_IDLE_RETRY);
     tokio::pin!(sleep);
     tokio::select! {
-        _ = &mut *shutdown_rx => false,
-        _ = nudge.notified() => true,
-        _ = &mut sleep => true,
+        _ = &mut *shutdown_rx => ParkOutcome::Shutdown,
+        _ = nudge.notified() => ParkOutcome::Nudged,
+        _ = &mut sleep => ParkOutcome::TimerExpired,
     }
 }
 
@@ -1274,6 +1322,38 @@ mod tests {
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use std::io::Write;
+
+    // --- reconnect delay gating ---
+
+    /// Prove that a nudge-triggered cycle skips the initial delay while a
+    /// non-nudged cycle (socket error) always delays. This is the gate for
+    /// the "no 1s staleness floor on app-foreground" fix.
+    #[test]
+    fn nudge_skips_initial_reconnect_delay_only() {
+        // Nudge path: attempt 1 is immediate; attempt 2+ still delay.
+        assert!(
+            !should_delay_on_attempt(1, true),
+            "nudge: attempt 1 must be immediate (no delay)"
+        );
+        assert!(
+            should_delay_on_attempt(2, true),
+            "nudge: attempt 2 must still delay"
+        );
+        assert!(
+            should_delay_on_attempt(5, true),
+            "nudge: attempt 5 must still delay"
+        );
+
+        // Normal socket-error path: all attempts delay.
+        assert!(
+            should_delay_on_attempt(1, false),
+            "non-nudge: attempt 1 must delay"
+        );
+        assert!(
+            should_delay_on_attempt(2, false),
+            "non-nudge: attempt 2 must delay"
+        );
+    }
 
     #[test]
     fn flatten_quick_replies_encodes_list_and_id() {
