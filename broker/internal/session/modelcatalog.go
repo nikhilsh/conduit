@@ -51,9 +51,15 @@ type ModelInfo struct {
 	SupportsFastMode bool `json:"supports_fast_mode,omitempty"`
 }
 
-// catalogTTL is how long a fetched catalog is considered fresh. Model lists
-// change on agent releases, not minute-to-minute.
-const catalogTTL = 6 * time.Hour
+// catalogTTL is how long a fetched catalog is considered fresh. The binary
+// fingerprint (see maybeRefreshCatalog) force-invalidates the cache the instant
+// the CLI is upgraded in place, but the model list is fetched *server-side* by
+// the CLI, so a catalog change with no binary change — e.g. Anthropic rolling
+// out a new model like Fable to an existing CLI version — is invisible to the
+// fingerprint and only caught when the TTL lapses. Keep this short enough that
+// such a rollout surfaces within the window without re-spawning the CLI
+// minute-to-minute.
+const catalogTTL = 30 * time.Minute
 
 // catalogRetry is the floor between probe attempts after a failure, so a
 // missing/broken CLI doesn't get re-spawned on every capabilities poll.
