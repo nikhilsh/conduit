@@ -135,6 +135,13 @@ type capabilitiesResponse struct {
 		// /api/pipeline/{id}/continue + DELETE /api/pipeline/{id} +
 		// GET /api/pipelines are available (sequential agent pipeline subsystem).
 		Pipeline bool `json:"pipeline"`
+		// PipelineGatePreview: GET /api/pipeline/{id} includes a populated
+		// `gate` field (GatePreview) when awaiting a gate, and POST
+		// /api/pipeline/{id}/continue accepts an optional {"prev":"..."} body
+		// to amend the handoff before advancing. Apps gate the edit-handoff UI
+		// and preview panel on this flag specifically (not the sibling Pipeline
+		// flag — past bug pattern).
+		PipelineGatePreview bool `json:"pipeline_gate_preview"`
 	} `json:"features"`
 	// Models is the per-assistant model+effort catalog discovered live from
 	// the agent CLIs (claude control-protocol initialize, codex app-server
@@ -187,10 +194,11 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.PushRelayConfigured = s.PushRelayConfigured
 	resp.Features.NtfyURL = s.NtfyURL
 	resp.Features.SessionDiscovery = true
-	resp.Features.SessionFork = true   // real worktree fork with --fork-session (this PR)
-	resp.Features.SessionWatch = true  // since_ts incremental transcript polling
-	resp.Features.FanoutCompare = true // POST /api/fanout/compare diff-stat endpoint
-	resp.Features.Pipeline = true      // sequential agent pipeline subsystem
+	resp.Features.SessionFork = true         // real worktree fork with --fork-session (this PR)
+	resp.Features.SessionWatch = true        // since_ts incremental transcript polling
+	resp.Features.FanoutCompare = true       // POST /api/fanout/compare diff-stat endpoint
+	resp.Features.Pipeline = true            // sequential agent pipeline subsystem
+	resp.Features.PipelineGatePreview = true // gate.prev/output in GET + optional {"prev"} body in continue
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
 	// Pass the pushed-credential store as a nil INTERFACE when unset:

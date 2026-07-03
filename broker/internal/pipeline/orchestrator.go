@@ -21,9 +21,10 @@ var ErrAlreadyTerminal = errors.New("pipeline is in a terminal state")
 // with the session manager. The ws layer wires the concrete *session.Manager
 // behind this interface to avoid an import cycle (pipeline → ws → pipeline).
 type SessionManager interface {
-	// CreateSession spawns a new session with the given agent type, CWD, and
-	// initial prompt. Returns the new session ID or an error.
-	CreateSession(agentType, cwd, initialPrompt string) (sessionID string, err error)
+	// CreateSession spawns a new session with the given agent type, CWD,
+	// initial prompt, and branch name. The branch is used when worktree mode
+	// is enabled (Gap A seam); ignored otherwise. Returns the new session ID.
+	CreateSession(agentType, cwd, initialPrompt, branch string) (sessionID string, err error)
 	// GetPhase returns the session's current phase string (e.g. "running",
 	// "exited(0)", "exited(1)"). Returns "" when the session is unknown.
 	GetPhase(sessionID string) string
@@ -82,10 +83,17 @@ func (o *Orchestrator) Start(p *Pipeline) error {
 }
 
 // Continue advances a pipeline that is waiting at a gate.
+// amendedPrev, when non-empty and p.Gate != nil, overwrites the stored
+// Gate.Prev before spawning the next step — this is the "edit handoff"
+// feature. Empty string means use the pre-computed prev unchanged.
 // Returns ErrNotAtGate when the pipeline is not in AWAITING_GATE state.
-func (o *Orchestrator) Continue(p *Pipeline) error {
+func (o *Orchestrator) Continue(p *Pipeline, amendedPrev string) error {
 	if p.State != PipelineAwaitingGate {
 		return ErrNotAtGate
+	}
+	if amendedPrev != "" && p.Gate != nil {
+		log.Printf("pipeline %s: continue with amended prev (len=%d)", p.ID, len(amendedPrev))
+		p.Gate.Prev = amendedPrev
 	}
 	log.Printf("pipeline %s: continue past gate at step %d", p.ID, p.CurrentStep)
 	return o.spawnNext(p)
@@ -103,6 +111,7 @@ func (o *Orchestrator) Cancel(p *Pipeline) error {
 			}
 		}
 	}
+	p.Gate = nil // clear any pending gate preview on cancel
 	p.State = PipelineCancelled
 	if err := p.Save(o.conduitRoot); err != nil {
 		return fmt.Errorf("pipeline %s: save after cancel: %w", p.ID, err)
@@ -124,6 +133,7 @@ func (o *Orchestrator) Advance(p *Pipeline, stepIndex int, phase string) error {
 	exitCode := exitCodeFromPhase(phase)
 	if exitCode != 0 {
 		// Non-zero exit: pipeline fails at this step.
+		p.Gate = nil // clear any stale gate preview on failure
 		p.State = PipelineFailed
 		if err := p.Save(o.conduitRoot); err != nil {
 			log.Printf("pipeline %s: save after fail: %v", p.ID, err)
@@ -136,12 +146,31 @@ func (o *Orchestrator) Advance(p *Pipeline, stepIndex int, phase string) error {
 	p.State = PipelineStepDone
 
 	if step.GateAfter {
-		// Human gate: park here until POST /continue.
+		// Human gate: compute and persist GatePreview BEFORE saving state.
+		// This lets the app render the handoff without a separate round-trip.
+		gp := &GatePreview{Step: stepIndex}
+		gp.Output = o.sessions.GetLastAssistantText(step.SessionID)
+		k := stepIndex
+		if k+1 < len(p.Steps) && p.Steps[k+1].InputFromPrev != InputNone {
+			nextStep := &p.Steps[k+1]
+			workdir := ""
+			if step.SessionID != "" {
+				workdir = o.sessions.GetWorktreeDir(step.SessionID)
+			}
+			gp.Prev = BuildPrev(workdir, gp.Output, nextStep.InputFromPrev)
+			// Write the audit trail immediately so it is available even
+			// before the user taps Continue.
+			if saveErr := SaveInput(o.conduitRoot, p.ID, k+1, gp.Prev); saveErr != nil {
+				log.Printf("pipeline %s step %d: save input.md at gate: %v", p.ID, k+1, saveErr)
+			}
+		}
+		p.Gate = gp
 		p.State = PipelineAwaitingGate
 		if err := p.Save(o.conduitRoot); err != nil {
 			log.Printf("pipeline %s: save awaiting gate: %v", p.ID, err)
 		}
-		log.Printf("pipeline %s: AWAITING_GATE at step %d", p.ID, stepIndex)
+		log.Printf("pipeline %s: AWAITING_GATE at step %d (prev len=%d, output len=%d)",
+			p.ID, stepIndex, len(gp.Prev), len(gp.Output))
 		o.sendGatePush(p, stepIndex)
 		return nil
 	}
@@ -155,6 +184,7 @@ func (o *Orchestrator) spawnNext(p *Pipeline) error {
 	next := p.CurrentStep + 1
 	if next >= len(p.Steps) {
 		// All steps done.
+		p.Gate = nil // clear gate preview on completion
 		p.State = PipelineComplete
 		if err := p.Save(o.conduitRoot); err != nil {
 			return fmt.Errorf("pipeline %s: save complete: %w", p.ID, err)
@@ -165,10 +195,13 @@ func (o *Orchestrator) spawnNext(p *Pipeline) error {
 	p.CurrentStep = next
 	p.State = PipelineRunning
 	if err := o.spawnStep(p, next); err != nil {
+		p.Gate = nil // clear gate preview on spawn failure
 		p.State = PipelineFailed
 		_ = p.Save(o.conduitRoot)
 		return fmt.Errorf("pipeline %s: spawn step %d: %w", p.ID, next, err)
 	}
+	// Clear gate preview after the step is successfully spawned.
+	p.Gate = nil
 	if err := p.Save(o.conduitRoot); err != nil {
 		return fmt.Errorf("pipeline %s: save after spawn step %d: %w", p.ID, next, err)
 	}
@@ -178,7 +211,8 @@ func (o *Orchestrator) spawnNext(p *Pipeline) error {
 }
 
 // spawnStep creates the child session for step k, filling in SessionID and Started.
-// It also builds {{prev}} from the previous step and saves it to input.md.
+// It also builds {{prev}} from the previous step (or uses a pre-computed Gate.Prev
+// when available) and saves the text actually used to input.md.
 func (o *Orchestrator) spawnStep(p *Pipeline, k int) error {
 	step := &p.Steps[k]
 
@@ -187,18 +221,28 @@ func (o *Orchestrator) spawnStep(p *Pipeline, k int) error {
 	prompt = strings.ReplaceAll(prompt, "{{task}}", p.Task)
 
 	if k > 0 && step.InputFromPrev != InputNone {
-		prev := p.Steps[k-1]
-		workdir := ""
-		if prev.SessionID != "" {
-			workdir = o.sessions.GetWorktreeDir(prev.SessionID)
+		var prevText string
+		// Feature 1/2: if a GatePreview was computed for this step (k-1 had
+		// gate_after=true), use its Prev — which may have been amended by the
+		// Continue caller — instead of recomputing from disk.
+		if p.Gate != nil && p.Gate.Step == k-1 {
+			prevText = p.Gate.Prev
+			log.Printf("pipeline %s step %d: using gate preview prev (len=%d)", p.ID, k, len(prevText))
+		} else {
+			prev := p.Steps[k-1]
+			workdir := ""
+			if prev.SessionID != "" {
+				workdir = o.sessions.GetWorktreeDir(prev.SessionID)
+			}
+			transcriptText := ""
+			if prev.SessionID != "" {
+				transcriptText = o.sessions.GetLastAssistantText(prev.SessionID)
+			}
+			prevText = BuildPrev(workdir, transcriptText, step.InputFromPrev)
 		}
-		transcriptText := ""
-		if prev.SessionID != "" {
-			transcriptText = o.sessions.GetLastAssistantText(prev.SessionID)
-		}
-		prevText := BuildPrev(workdir, transcriptText, step.InputFromPrev)
 		prompt = strings.ReplaceAll(prompt, "{{prev}}", prevText)
-		// Save input.md for audit/replay (best-effort).
+		// Save the text actually used to input.md (overwrites the audit file
+		// written at gate entry if an amendment was applied).
 		if saveErr := SaveInput(o.conduitRoot, p.ID, k, prevText); saveErr != nil {
 			log.Printf("pipeline %s step %d: save input.md: %v", p.ID, k, saveErr)
 		}
@@ -207,7 +251,9 @@ func (o *Orchestrator) spawnStep(p *Pipeline, k int) error {
 		prompt = strings.ReplaceAll(prompt, "{{prev}}", "")
 	}
 
-	sessID, err := o.sessions.CreateSession(step.AgentType, p.CWD, prompt)
+	// Feature 3: named step branches. Format: "pipeline-<id>-step-<k>".
+	branch := fmt.Sprintf("pipeline-%s-step-%d", p.ID, k)
+	sessID, err := o.sessions.CreateSession(step.AgentType, p.CWD, prompt, branch)
 	if err != nil {
 		return fmt.Errorf("create session (agent=%s): %w", step.AgentType, err)
 	}
