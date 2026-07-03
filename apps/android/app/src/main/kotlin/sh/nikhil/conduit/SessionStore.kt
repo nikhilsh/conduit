@@ -6010,6 +6010,26 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     "streaming", "cleared on turn-complete status",
                     mapOf("session" to status.session),
                 )
+            } else if (!nowActive &&
+                _pendingChats.value.flushOnTurnComplete(status.session) != null &&
+                _pendingChats.value.flushable(status.session).isEmpty()
+            ) {
+                // Level-triggered flush (deadlock fix): the app reconnected/
+                // opened to a session that is ALREADY idle yet still holds a
+                // queued-turn entry. Happens when the broker restarts mid-turn
+                // — the app still believed turn_active=true (so the user's next
+                // message was parked in "Queued Next"), but the recovered
+                // session comes back idle, so the true→false edge above never
+                // fires and neither the edge- nor reply-triggered flush runs.
+                // Without this the queued message is stuck forever ("message
+                // sent but the agent never picks it up" after every broker
+                // restart). The empty flushable() guard keeps delivery
+                // one-at-a-time. Mirror of iOS ingestStatus flush-on-idle.
+                Telemetry.breadcrumb(
+                    "chat", "flush-on-idle-status",
+                    mapOf("session" to status.session),
+                )
+                flushOnTurnComplete(status.session)
             }
         }
     }

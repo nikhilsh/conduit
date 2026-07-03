@@ -28,7 +28,7 @@ import uniffi.conduit_core.SessionStatus
  */
 class SessionStoreStaleTurnTest {
 
-    private fun activeStatus(sessionId: String) = SessionStatus(
+    private fun statusWith(sessionId: String, turnActive: Boolean?) = SessionStatus(
         session = sessionId,
         assistant = "claude",
         phase = "running",
@@ -44,8 +44,53 @@ class SessionStoreStaleTurnTest {
         startedAt = null,
         lastActivityAt = null,
         displayName = null,
-        turnActive = true,
+        turnActive = turnActive,
     )
+
+    private fun activeStatus(sessionId: String) = statusWith(sessionId, turnActive = true)
+
+    /**
+     * Deadlock fix (level-triggered flush): a queuedTurn entry left over after a
+     * broker restart must be delivered when an idle status frame arrives, even
+     * with NO turnActive true->false edge. The reconnect worker fires
+     * [ConnectionHealth.Connecting] (clearStaleTurnState zeroes turnActive +
+     * _lastTurnActive) WITHOUT promoting the queued entry; then the recovered
+     * session's status frame comes back idle. With no edge (and if the
+     * .Connected promotion did not fire first) the queued message is stuck
+     * forever. The level-triggered branch in onStatus delivers it.
+     *
+     * Mirror of iOS SessionStoreTests.queuedTurnFlushedOnIdleStatusWithoutEdge.
+     */
+    @Test
+    fun queuedTurnFlushedOnIdleStatusWithoutEdge() {
+        val store = SessionStore()
+        val sessionId = "test-flush-idle-${java.util.UUID.randomUUID()}"
+
+        // Turn active -> the user's message is parked in "Queued Next".
+        store.onStatus(activeStatus(sessionId))
+        store.sendChat(sessionId = sessionId, msg = "stuck after restart")
+        assertTrue(
+            "precondition: message must be queued while the turn is active",
+            store.pendingChats.value.queuedTurnEntries(sessionId).isNotEmpty(),
+        )
+
+        // Broker restarts: .Connecting zeroes stale turn state (no promotion).
+        store.onConnectionHealth(sessionId, ConnectionHealth.Connecting(1u, 5u))
+
+        // Recovered session reports idle. No true->false edge (prior already
+        // false) -> only the level-triggered flush can deliver the entry.
+        store.onStatus(statusWith(sessionId, turnActive = false))
+
+        assertTrue(
+            "queued entry must flush on an idle status frame even without a turn-active edge",
+            store.pendingChats.value.queuedTurnEntries(sessionId).isEmpty(),
+        )
+        val userMsgs = store.conversationLog.value[sessionId].orEmpty().filter { it.role == "user" }
+        assertTrue(
+            "flushed message must have a user echo in the conversation log",
+            userMsgs.any { it.content == "stuck after restart" },
+        )
+    }
 
     /**
      * ConnectionHealth.Connecting must clear stale turnActive and streaming state
