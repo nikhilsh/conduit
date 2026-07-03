@@ -48,6 +48,13 @@ type Step struct {
 	Phase          string        `json:"phase,omitempty"`
 	Started        string        `json:"started,omitempty"`
 	Ended          string        `json:"ended,omitempty"`
+	// Retries counts how many times this step has been re-spawned via Resume.
+	// 0 means the step has never been retried. Each Resume increments this and
+	// uses it to construct a unique branch name (pipeline-<id>-step-<k>-r<n>).
+	Retries int `json:"retries,omitempty"`
+	// PrevSessionIDs holds the session IDs of previous (failed) attempts for
+	// this step, appended in order before each re-spawn. Preserved for inspection.
+	PrevSessionIDs []string `json:"prev_session_ids,omitempty"`
 }
 
 // GatePreview holds the computed handoff preview populated when the pipeline

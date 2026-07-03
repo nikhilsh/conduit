@@ -7,8 +7,13 @@ package ws
 //	POST   /api/pipeline               create + start (runs step 0 immediately)
 //	GET    /api/pipeline/{id}          full pipeline.json (poll for live state)
 //	POST   /api/pipeline/{id}/continue advance past AWAITING_GATE; 409 if not at gate
+//	POST   /api/pipeline/{id}/resume   re-spawn failed step; 409 if not failed
 //	DELETE /api/pipeline/{id}          cancel; kills live child; state → CANCELLED
 //	GET    /api/pipelines              list: [{id, title, state, current_step, step_count}]
+//
+//	GET    /api/pipeline-templates        list all templates
+//	POST   /api/pipeline-templates        create a template
+//	DELETE /api/pipeline-templates/{id}   delete a template
 
 import (
 	"context"
@@ -348,16 +353,208 @@ func (s *Server) serveListPipelines(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"pipelines": items})
 }
 
+// ── POST /api/pipeline/{id}/resume ──────────────────────────────────────────
+
+// resumeBody is the optional request body for POST /api/pipeline/{id}/resume.
+// Absent body or empty prompt = re-run using the original template rendering.
+type resumeBody struct {
+	Prompt string `json:"prompt"`
+}
+
+func (s *Server) serveResumePipeline(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	// Path: /api/pipeline/{id}/resume
+	tail := strings.TrimPrefix(r.URL.Path, "/api/pipeline/")
+	id := strings.TrimSuffix(tail, "/resume")
+	id = strings.TrimSpace(id)
+	if id == "" || strings.Contains(id, "/") {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "missing or invalid pipeline id")
+		return
+	}
+
+	// Parse optional prompt override. Never an error if absent or malformed.
+	var amendedPrompt string
+	if r.Body != nil && r.ContentLength != 0 {
+		var body resumeBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+			amendedPrompt = strings.TrimSpace(body.Prompt)
+		}
+	}
+
+	p, err := pipeline.Load(s.Sessions.ConduitRoot(), id)
+	if err != nil {
+		writeAPIError(w, http.StatusNotFound, "not_found", "pipeline not found: "+id)
+		return
+	}
+	log.Printf("pipeline: resume %s (state=%s, amended_prompt=%v)", id, p.State, amendedPrompt != "")
+	orch := s.pipelineOrchestrator()
+	if err := orch.Resume(p, amendedPrompt); err != nil {
+		if errors.Is(err, pipeline.ErrNotFailed) {
+			writeAPIError(w, http.StatusConflict, "not_failed", "pipeline is not in failed state")
+			return
+		}
+		log.Printf("pipeline: resume %s: %v", id, err)
+		writeAPIError(w, http.StatusInternalServerError, "pipeline_resume_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":           p.ID,
+		"state":        p.State,
+		"current_step": p.CurrentStep,
+	})
+}
+
+// ── Pipeline Templates ───────────────────────────────────────────────────────
+
+// templateStepRequest mirrors TemplateStep for the create body.
+type templateStepRequest struct {
+	AgentType      string                 `json:"agent_type"`
+	Role           string                 `json:"role"`
+	PromptTemplate string                 `json:"prompt_template"`
+	InputFromPrev  pipeline.InputFromPrev `json:"input_from_prev"`
+	GateAfter      bool                   `json:"gate_after"`
+}
+
+// createTemplateRequest is the body for POST /api/pipeline-templates.
+type createTemplateRequest struct {
+	Title string                `json:"title"`
+	Task  string                `json:"task"`
+	Steps []templateStepRequest `json:"steps"`
+}
+
+// serveListTemplates handles GET /api/pipeline-templates.
+func (s *Server) serveListTemplates(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
+		return
+	}
+	templates, err := pipeline.ListTemplates(s.Sessions.ConduitRoot())
+	if err != nil {
+		log.Printf("pipeline-templates: list: %v", err)
+		writeAPIError(w, http.StatusInternalServerError, "list_failed", err.Error())
+		return
+	}
+	if templates == nil {
+		templates = []*pipeline.Template{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"templates": templates})
+}
+
+// serveCreateTemplate handles POST /api/pipeline-templates.
+func (s *Server) serveCreateTemplate(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	var req createTemplateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	req.Title = strings.TrimSpace(req.Title)
+	if req.Title == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "title is required")
+		return
+	}
+	if len(req.Steps) == 0 {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "at least one step is required")
+		return
+	}
+	tmpl := &pipeline.Template{
+		ID:    pipeline.NewTemplateID(),
+		Title: req.Title,
+		Task:  strings.TrimSpace(req.Task),
+		Steps: make([]pipeline.TemplateStep, len(req.Steps)),
+	}
+	for i, rs := range req.Steps {
+		at := strings.TrimSpace(rs.AgentType)
+		if at == "" {
+			at = "claude"
+		}
+		tmpl.Steps[i] = pipeline.TemplateStep{
+			AgentType:      at,
+			Role:           strings.TrimSpace(rs.Role),
+			PromptTemplate: rs.PromptTemplate,
+			InputFromPrev:  rs.InputFromPrev,
+			GateAfter:      rs.GateAfter,
+		}
+	}
+	if err := pipeline.SaveTemplate(s.Sessions.ConduitRoot(), tmpl); err != nil {
+		log.Printf("pipeline-templates: save: %v", err)
+		writeAPIError(w, http.StatusInternalServerError, "save_failed", err.Error())
+		return
+	}
+	log.Printf("pipeline-templates: created %s title=%q steps=%d", tmpl.ID, tmpl.Title, len(tmpl.Steps))
+	writeJSON(w, http.StatusOK, map[string]any{"id": tmpl.ID})
+}
+
+// serveDeleteTemplate handles DELETE /api/pipeline-templates/{id}.
+func (s *Server) serveDeleteTemplate(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodDelete {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "DELETE required")
+		return
+	}
+	id := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/api/pipeline-templates/"))
+	if id == "" || strings.Contains(id, "/") {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "missing or invalid template id")
+		return
+	}
+	if err := pipeline.DeleteTemplate(s.Sessions.ConduitRoot(), id); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeAPIError(w, http.StatusNotFound, "not_found", "template not found: "+id)
+			return
+		}
+		log.Printf("pipeline-templates: delete %s: %v", id, err)
+		writeAPIError(w, http.StatusInternalServerError, "delete_failed", err.Error())
+		return
+	}
+	log.Printf("pipeline-templates: deleted %s", id)
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
+}
+
+// servePipelineTemplateRouter dispatches /api/pipeline-templates and
+// /api/pipeline-templates/{id}. Registered separately from servePipelineRouter
+// so "templates" is not consumed by the {id} wildcard in /api/pipeline/*.
+func (s *Server) servePipelineTemplateRouter(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	switch {
+	case path == "/api/pipeline-templates" && r.Method == http.MethodGet:
+		s.serveListTemplates(w, r)
+	case path == "/api/pipeline-templates" && r.Method == http.MethodPost:
+		s.serveCreateTemplate(w, r)
+	case strings.HasPrefix(path, "/api/pipeline-templates/") && r.Method == http.MethodDelete:
+		s.serveDeleteTemplate(w, r)
+	default:
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "unsupported method for this template endpoint")
+	}
+}
+
 // ── Router dispatch ──────────────────────────────────────────────────────────
 
 // servePipelineRouter dispatches /api/pipeline/* and /api/pipelines.
 // Routes:
 //
-//	GET  /api/pipelines              → serveListPipelines
-//	POST /api/pipeline               → serveCreatePipeline
-//	GET  /api/pipeline/{id}          → serveGetPipeline
-//	POST /api/pipeline/{id}/continue → serveContinuePipeline
-//	DELETE /api/pipeline/{id}        → serveDeletePipeline
+//	GET    /api/pipelines              → serveListPipelines
+//	POST   /api/pipeline               → serveCreatePipeline
+//	GET    /api/pipeline/{id}          → serveGetPipeline
+//	POST   /api/pipeline/{id}/continue → serveContinuePipeline
+//	POST   /api/pipeline/{id}/resume   → serveResumePipeline
+//	DELETE /api/pipeline/{id}          → serveDeletePipeline
 func (s *Server) servePipelineRouter(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	switch {
@@ -367,6 +564,8 @@ func (s *Server) servePipelineRouter(w http.ResponseWriter, r *http.Request) {
 		s.serveCreatePipeline(w, r)
 	case strings.HasSuffix(path, "/continue"):
 		s.serveContinuePipeline(w, r)
+	case strings.HasSuffix(path, "/resume"):
+		s.serveResumePipeline(w, r)
 	case r.Method == http.MethodDelete:
 		s.serveDeletePipeline(w, r)
 	case r.Method == http.MethodGet:
