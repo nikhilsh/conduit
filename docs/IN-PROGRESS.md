@@ -9,12 +9,7 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
 
 ## Active
 
-- **Pipeline gate handoff preview + editable handoff + named step branches** —
-  broker (feat/pipeline-gate-broker) + apps (feat/pipeline-gate-apps).
-  Broker: `GatePreview` on `Pipeline`, gate entry populates `gate` in
-  pipeline.json, `Continue(amendedPrev)` for edit-handoff, named step branches
-  `pipeline-<id>-step-<k>`, `pipeline_gate_preview` capability flag.
-  Apps: gate preview panel + editable handoff field on the Monitor screen.
+(nothing)
 
 ## Deferred (not active)
 

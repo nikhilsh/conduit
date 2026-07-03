@@ -20,6 +20,32 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Pipeline gate handoff preview + editable handoff + named step branches — broker + apps. PRs #852 + #853.**
+
+- **Gate handoff preview (broker)** — on entering `AWAITING_GATE`, the broker
+  computes the next step's `{{prev}}` (HANDOFF-OUT + last assistant text per
+  `input_from_prev`) plus the gated step's output and persists them as a `gate`
+  object in pipeline.json, served by `GET /api/pipeline/{id}`; `input.md` is
+  written at gate entry for audit. Cleared on continue/cancel/fail. [broker,
+  **redeploy required**]
+- **Editable handoff (broker)** — `POST /api/pipeline/{id}/continue` accepts an
+  optional `{"prev": "..."}` body; the amended text is what actually spawns the
+  next step (spawn reuses the persisted/amended `gate.prev` instead of
+  recomputing). Empty/absent body = unchanged. [broker, **redeploy required**]
+- **Named step branches (broker)** — pipeline steps run on
+  `pipeline-<id>-step-<k>` worktree branches via `CreateOptions.Branch` (Gap A
+  seam) instead of default session branches. [broker, **redeploy required**]
+- **`pipeline_gate_preview` capability** — new flag in `/api/capabilities`;
+  apps gate the new UI on this exact flag (old brokers keep prior behavior).
+  [broker]
+- **Gate preview + edit UI (iOS + Android)** — Monitor gate section shows the
+  computed handoff in a capped scrollable mono block (falls back to step output
+  when `prev` is empty), with an "Edit handoff" field; Continue sends the
+  amended `prev` only when actually edited. Telemetry breadcrumbs on preview
+  shown / handoff edited / continue-with-edit. [iOS + Android, **needs
+  on-device verify**: run a gated pipeline, review the handoff at the gate,
+  edit it, confirm the next step's prompt reflects the edit]
+
 **`/clear` gated on its own capability + send-routing diagnostics — iOS + Android. PR #849.**
 
 - Follow-up to the "no replies after `/clear`" device report (#844 verify). The
