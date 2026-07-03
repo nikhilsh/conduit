@@ -31,6 +31,23 @@ extension ConduitUI {
         let currentStep: Int
     }
 
+    // MARK: - Template models
+
+    struct PipelineTemplate: Identifiable, Decodable {
+        let id: String
+        let title: String
+        let task: String
+        let steps: [PipelineTemplateStep]
+    }
+
+    struct PipelineTemplateStep: Decodable {
+        let agent_type: String
+        let role: String
+        let prompt_template: String
+        let input_from_prev: String
+        let gate_after: Bool
+    }
+
     // MARK: - Builder view
 
     struct PipelineBuilderView: View {
@@ -49,6 +66,13 @@ extension ConduitUI {
         @State private var createdPipeline: CreatedPipeline? = nil
         @State private var navigateToMonitor = false
 
+        // Template state
+        @State private var templates: [PipelineTemplate] = []
+        @State private var isLoadingTemplates = false
+        @State private var showTemplatePicker = false
+        @State private var isSavingTemplate = false
+        @State private var templateDeleteConfirm: PipelineTemplate? = nil
+
         private let agentOptions = ["claude", "codex", "opencode"]
         private let roleOptions = ["researcher", "architect", "engineer", "custom"]
         private let inputFromPrevOptions = ["none", "output", "memory", "memory+output"]
@@ -61,6 +85,9 @@ extension ConduitUI {
                         VStack(alignment: .leading, spacing: 18) {
                             metadataSection
                             stepsSection
+                            if store.pipelineTemplates {
+                                saveTemplateButton
+                            }
                             startButton
                         }
                         .padding(.horizontal, 16)
@@ -76,6 +103,29 @@ extension ConduitUI {
                         Button("Cancel") { dismiss() }
                             .foregroundStyle(neon.textDim)
                     }
+                    if store.pipelineTemplates {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button {
+                                loadTemplates()
+                                showTemplatePicker = true
+                            } label: {
+                                HStack(spacing: 4) {
+                                    if isLoadingTemplates {
+                                        ProgressView()
+                                            .progressViewStyle(.circular)
+                                            .scaleEffect(0.7)
+                                            .tint(neon.accent)
+                                    } else {
+                                        Image(systemName: "doc.badge.arrow.up")
+                                            .font(.system(size: 14, weight: .semibold))
+                                    }
+                                    Text("From template")
+                                        .font(neon.sans(13).weight(.semibold))
+                                }
+                                .foregroundStyle(neon.accent)
+                            }
+                        }
+                    }
                 }
                 .tint(neon.accent)
                 .navigationDestination(isPresented: $navigateToMonitor) {
@@ -85,6 +135,24 @@ extension ConduitUI {
                             pipelineTitle: title.isEmpty ? "Pipeline" : title
                         )
                         .environment(store)
+                    }
+                }
+                .sheet(isPresented: $showTemplatePicker) {
+                    templatePickerSheet
+                }
+                .alert("Delete template?", isPresented: Binding(
+                    get: { templateDeleteConfirm != nil },
+                    set: { if !$0 { templateDeleteConfirm = nil } }
+                )) {
+                    Button("Delete", role: .destructive) {
+                        if let t = templateDeleteConfirm {
+                            deleteTemplate(t)
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    if let t = templateDeleteConfirm {
+                        Text("Delete \"\(t.title)\"? This cannot be undone.")
                     }
                 }
                 .alert("Error", isPresented: Binding(
@@ -106,6 +174,121 @@ extension ConduitUI {
                 }
                 Telemetry.breadcrumb("pipeline", "builder opened")
             }
+        }
+
+        // MARK: Template picker sheet
+
+        private var templatePickerSheet: some View {
+            NavigationStack {
+                ZStack {
+                    GlassAppBackground()
+                    if templates.isEmpty {
+                        VStack(spacing: 12) {
+                            Image(systemName: "doc.text")
+                                .font(.system(size: 36, weight: .light))
+                                .foregroundStyle(neon.textFaint)
+                            Text("No templates saved yet")
+                                .font(neon.sans(15))
+                                .foregroundStyle(neon.textDim)
+                            Text("Use \"Save as template\" after filling in a pipeline.")
+                                .font(neon.sans(13))
+                                .foregroundStyle(neon.textFaint)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(32)
+                    } else {
+                        ScrollView {
+                            VStack(spacing: 10) {
+                                ForEach(templates) { tmpl in
+                                    HStack(spacing: 12) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(tmpl.title)
+                                                .font(neon.sans(14).weight(.semibold))
+                                                .foregroundStyle(neon.text)
+                                            Text("\(tmpl.steps.count) step\(tmpl.steps.count == 1 ? "" : "s")")
+                                                .font(neon.mono(11))
+                                                .foregroundStyle(neon.textFaint)
+                                        }
+                                        Spacer(minLength: 8)
+                                        // Swipe-or-button delete
+                                        Button {
+                                            templateDeleteConfirm = tmpl
+                                        } label: {
+                                            Image(systemName: "trash")
+                                                .font(.system(size: 14, weight: .semibold))
+                                                .foregroundStyle(neon.red)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 12)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .neonCardSurface(neon, fill: neon.surface, cornerRadius: 12)
+                                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    .onTapGesture {
+                                        applyTemplate(tmpl)
+                                        showTemplatePicker = false
+                                    }
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                        Button(role: .destructive) {
+                                            templateDeleteConfirm = tmpl
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 14)
+                        }
+                    }
+                }
+                .navigationTitle("From template")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showTemplatePicker = false }
+                            .foregroundStyle(neon.textDim)
+                    }
+                }
+            }
+        }
+
+        // MARK: Save as template button
+
+        private var saveTemplateButton: some View {
+            Button {
+                saveAsTemplate()
+            } label: {
+                HStack(spacing: 6) {
+                    if isSavingTemplate {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(neon.accent)
+                            .scaleEffect(0.7)
+                    } else {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    Text(isSavingTemplate ? "Saving..." : "Save as template")
+                        .font(neon.sans(13).weight(.semibold))
+                }
+                .foregroundStyle(neon.accent)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 11)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(neon.accent.opacity(0.10))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(neon.accent.opacity(0.30), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(isSavingTemplate || startDisabled)
+            .opacity((isSavingTemplate || startDisabled) ? 0.4 : 1)
         }
 
         // MARK: Metadata section
@@ -355,6 +538,160 @@ extension ConduitUI {
             case "architect":    return "Design the architecture and interface for the task output."
             case "engineer":     return "Implement the solution based on prior steps."
             default:             return ""
+            }
+        }
+
+        // MARK: - Template API
+
+        private func loadTemplates() {
+            let endpoint = store.endpoint
+            guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/pipeline-templates"
+            guard let url = components?.url else { return }
+
+            isLoadingTemplates = true
+            var req = URLRequest(url: url)
+            req.httpMethod = "GET"
+            req.timeoutInterval = 15
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+
+            Task { @MainActor in
+                defer { isLoadingTemplates = false }
+                do {
+                    let (data, resp) = try await URLSession.shared.data(for: req)
+                    guard let http = resp as? HTTPURLResponse,
+                          http.statusCode >= 200 && http.statusCode < 300 else { return }
+                    struct TemplatesEnvelope: Decodable {
+                        let templates: [PipelineTemplate]
+                    }
+                    if let env = try? JSONDecoder().decode(TemplatesEnvelope.self, from: data) {
+                        templates = env.templates
+                    }
+                } catch {
+                    Telemetry.breadcrumb("pipeline", "templates load error",
+                        data: ["error": error.localizedDescription])
+                }
+            }
+        }
+
+        private func applyTemplate(_ tmpl: PipelineTemplate) {
+            Telemetry.breadcrumb("pipeline", "template applied",
+                data: ["id": tmpl.id, "title": tmpl.title])
+            title = tmpl.title
+            task = tmpl.task
+            steps = tmpl.steps.map { s in
+                PipelineStep(
+                    agentType: s.agent_type,
+                    role: s.role,
+                    promptTemplate: s.prompt_template,
+                    inputFromPrev: s.input_from_prev,
+                    gateAfter: s.gate_after
+                )
+            }
+            if steps.isEmpty { steps = [PipelineStep()] }
+        }
+
+        private func saveAsTemplate() {
+            let trimTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimTask = task.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimTitle.isEmpty, !trimTask.isEmpty else { return }
+
+            let endpoint = store.endpoint
+            guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/pipeline-templates"
+            guard let url = components?.url else { return }
+
+            isSavingTemplate = true
+            Telemetry.breadcrumb("pipeline", "template saved",
+                data: ["title": trimTitle, "steps": "\(steps.count)"])
+
+            struct TemplateRequestStep: Encodable {
+                let agent_type: String
+                let role: String
+                let prompt_template: String
+                let input_from_prev: String
+                let gate_after: Bool
+            }
+            struct TemplateRequest: Encodable {
+                let title: String
+                let task: String
+                let steps: [TemplateRequestStep]
+            }
+            let reqSteps = steps.map { s in
+                TemplateRequestStep(
+                    agent_type: s.agentType,
+                    role: s.role,
+                    prompt_template: s.promptTemplate,
+                    input_from_prev: s.inputFromPrev,
+                    gate_after: s.gateAfter
+                )
+            }
+            let reqBody = TemplateRequest(title: trimTitle, task: trimTask, steps: reqSteps)
+            guard let bodyData = try? JSONEncoder().encode(reqBody) else {
+                isSavingTemplate = false
+                return
+            }
+
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 15
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = bodyData
+
+            Task { @MainActor in
+                defer { isSavingTemplate = false }
+                do {
+                    let (_, resp) = try await URLSession.shared.data(for: req)
+                    guard let http = resp as? HTTPURLResponse else { return }
+                    if http.statusCode < 200 || http.statusCode >= 300 {
+                        Telemetry.capture(
+                            error: NSError(domain: "ios.pipeline", code: 13,
+                                userInfo: [NSLocalizedDescriptionKey: "template save failed"]),
+                            message: "template save failed",
+                            tags: ["surface": "ios", "phase": "pipeline"],
+                            extras: ["status": "\(http.statusCode)", "title": trimTitle]
+                        )
+                    }
+                } catch {
+                    Telemetry.capture(
+                        error: error,
+                        message: "template save network error",
+                        tags: ["surface": "ios", "phase": "pipeline"],
+                        extras: ["title": trimTitle]
+                    )
+                }
+            }
+        }
+
+        private func deleteTemplate(_ tmpl: PipelineTemplate) {
+            let endpoint = store.endpoint
+            guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/pipeline-templates/\(tmpl.id)"
+            guard let url = components?.url else { return }
+
+            Telemetry.breadcrumb("pipeline", "template deleted",
+                data: ["id": tmpl.id, "title": tmpl.title])
+            var req = URLRequest(url: url)
+            req.httpMethod = "DELETE"
+            req.timeoutInterval = 15
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+
+            Task { @MainActor in
+                do {
+                    let (_, resp) = try await URLSession.shared.data(for: req)
+                    if let http = resp as? HTTPURLResponse,
+                       http.statusCode >= 200 && http.statusCode < 300 {
+                        templates.removeAll { $0.id == tmpl.id }
+                    }
+                } catch {
+                    Telemetry.breadcrumb("pipeline", "template delete error",
+                        data: ["id": tmpl.id, "error": error.localizedDescription])
+                }
+                templateDeleteConfirm = nil
             }
         }
 

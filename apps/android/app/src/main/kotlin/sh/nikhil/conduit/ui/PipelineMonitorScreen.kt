@@ -63,6 +63,10 @@ data class PipelineStep(
     val gateAfter: Boolean,
     val sessionId: String?,
     val phase: String?,
+    /** Number of times this step has been retried via POST /api/pipeline/{id}/resume. */
+    val retries: Int = 0,
+    /** Previous session IDs for retried executions of this step. */
+    val prevSessionIds: List<String> = emptyList(),
 )
 
 /**
@@ -98,6 +102,15 @@ private fun parsePipeline(json: JSONObject): Pipeline {
     if (stepsArr != null) {
         for (i in 0 until stepsArr.length()) {
             val s = stepsArr.getJSONObject(i)
+            val prevSessionIdsArr = s.optJSONArray("prev_session_ids")
+            val prevSessionIds = buildList {
+                if (prevSessionIdsArr != null) {
+                    for (j in 0 until prevSessionIdsArr.length()) {
+                        val sid = prevSessionIdsArr.optString(j, "")
+                        if (sid.isNotEmpty()) add(sid)
+                    }
+                }
+            }
             steps.add(
                 PipelineStep(
                     index = s.optInt("index", i),
@@ -108,6 +121,8 @@ private fun parsePipeline(json: JSONObject): Pipeline {
                     gateAfter = s.optBoolean("gate_after", false),
                     sessionId = s.optString("session_id", "").takeIf { it.isNotEmpty() },
                     phase = s.optString("phase", "").takeIf { it.isNotEmpty() },
+                    retries = s.optInt("retries", 0),
+                    prevSessionIds = prevSessionIds,
                 ),
             )
         }
@@ -153,6 +168,7 @@ fun PipelineMonitorScreen(
     val neon = LocalNeonTheme.current
     val endpoint by store.endpoint.collectAsState()
     val pipelineGatePreview by store.pipelineGatePreview.collectAsState()
+    val pipelineResume by store.pipelineResume.collectAsState()
     val scope = rememberCoroutineScope()
 
     var pipeline by remember { mutableStateOf<Pipeline?>(null) }
@@ -164,6 +180,10 @@ fun PipelineMonitorScreen(
     // Gate handoff edit state
     var isEditingHandoff by remember { mutableStateOf(false) }
     var handoffDraft by remember { mutableStateOf("") }
+    // Resume (retry-from-failed) state
+    var showResumeArea by remember { mutableStateOf(false) }
+    var resumePromptDraft by remember { mutableStateOf("") }
+    var isResuming by remember { mutableStateOf(false) }
 
     Telemetry.breadcrumb(
         "pipeline",
@@ -634,6 +654,151 @@ fun PipelineMonitorScreen(
                                     )
                                 }
                             }
+
+                            // Resume (retry-from-failed) affordance.
+                            if (pipelineResume) {
+                                if (showResumeArea) {
+                                    // Optional prompt override editor.
+                                    Text(
+                                        "OVERRIDE PROMPT (OPTIONAL)",
+                                        fontFamily = neon.mono,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 10.sp,
+                                        color = neon.textFaint,
+                                    )
+                                    OutlinedTextField(
+                                        value = resumePromptDraft,
+                                        onValueChange = { resumePromptDraft = it },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(120.dp),
+                                        placeholder = {
+                                            Text(
+                                                "Leave empty to re-run unchanged...",
+                                                fontFamily = neon.sans,
+                                                fontSize = 13.sp,
+                                                color = neon.textFaint,
+                                            )
+                                        },
+                                        maxLines = Int.MAX_VALUE,
+                                        shape = RoundedCornerShape(8.dp),
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        // Cancel resume
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clip(RoundedCornerShape(50))
+                                                .background(neon.surface2)
+                                                .border(1.dp, neon.borderStrong, RoundedCornerShape(50))
+                                                .clickable {
+                                                    showResumeArea = false
+                                                    resumePromptDraft = ""
+                                                }
+                                                .padding(vertical = 10.dp),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Text(
+                                                "Cancel",
+                                                fontFamily = neon.sans,
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 13.sp,
+                                                color = neon.textDim,
+                                            )
+                                        }
+                                        // Confirm retry
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clip(RoundedCornerShape(50))
+                                                .background(if (isResuming) neon.surface2 else neon.accent)
+                                                .clickable(enabled = !isResuming) {
+                                                    val edited = resumePromptDraft.trim().isNotEmpty()
+                                                    isResuming = true
+                                                    Telemetry.breadcrumb(
+                                                        "pipeline",
+                                                        "resume_tapped",
+                                                        mapOf(
+                                                            "pipeline_id" to pipelineId,
+                                                            "edited" to edited.toString(),
+                                                        ),
+                                                    )
+                                                    scope.launch {
+                                                        val body = if (edited) {
+                                                            JSONObject().put("prompt", resumePromptDraft.trim())
+                                                        } else {
+                                                            JSONObject()
+                                                        }
+                                                        val result = withContext(Dispatchers.IO) {
+                                                            postEndpoint(
+                                                                "/api/pipeline/$pipelineId/resume",
+                                                                body,
+                                                            )
+                                                        }
+                                                        isResuming = false
+                                                        result.onSuccess { json ->
+                                                            Telemetry.breadcrumb(
+                                                                "pipeline",
+                                                                "resume_ok",
+                                                                mapOf("pipeline_id" to pipelineId),
+                                                            )
+                                                            showResumeArea = false
+                                                            resumePromptDraft = ""
+                                                            val parsed = parsePipeline(json)
+                                                            pipeline = parsed
+                                                        }.onFailure { e ->
+                                                            Telemetry.capture(
+                                                                error = e,
+                                                                message = "pipeline resume error",
+                                                                tags = mapOf("surface" to "android", "phase" to "pipeline-monitor"),
+                                                                extras = mapOf("pipeline_id" to pipelineId),
+                                                            )
+                                                            actionError = e.message ?: "Resume failed"
+                                                        }
+                                                    }
+                                                }
+                                                .padding(vertical = 10.dp),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            if (isResuming) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(16.dp),
+                                                    color = neon.accentText,
+                                                    strokeWidth = 2.dp,
+                                                )
+                                            } else {
+                                                Text(
+                                                    "Confirm retry",
+                                                    fontFamily = neon.sans,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp,
+                                                    color = neon.accentText,
+                                                )
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Retry step button
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(50))
+                                            .background(neon.accent.copy(alpha = 0.12f))
+                                            .border(1.dp, neon.accent.copy(alpha = 0.35f), RoundedCornerShape(50))
+                                            .clickable { showResumeArea = true }
+                                            .padding(vertical = 10.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(
+                                            "Retry step",
+                                            fontFamily = neon.sans,
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 13.sp,
+                                            color = neon.accent,
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -800,8 +965,26 @@ private fun PipelineStepRow(
                             color = neon.textFaint,
                         )
                     }
+                    // Retry chip: shown when the step has been retried at least once.
+                    if (step.retries > 0) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(neon.yellow.copy(alpha = 0.15f))
+                                .border(1.dp, neon.yellow.copy(alpha = 0.35f), RoundedCornerShape(50))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                "retry ${step.retries}",
+                                fontFamily = neon.mono,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 10.sp,
+                                color = neon.yellow,
+                            )
+                        }
+                    }
                 }
-                if (!step.inputFromPrev.isNullOrEmpty() && step.inputFromPrev != "none") {
+                if (step.inputFromPrev.isNotEmpty() && step.inputFromPrev != "none") {
                     Text(
                         "input: ${step.inputFromPrev}",
                         fontFamily = neon.mono,

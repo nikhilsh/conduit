@@ -16,13 +16,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -49,6 +53,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -67,6 +73,41 @@ data class PipelineStepDraft(
     val inputFromPrev: String = "none",
     val gateAfter: Boolean = false,
 )
+
+/** A saved pipeline template returned by GET /api/pipeline-templates. */
+data class PipelineTemplateDraft(
+    val id: String,
+    val title: String,
+    val task: String,
+    val steps: List<PipelineStepDraft>,
+)
+
+/** Parse a pipeline template from a JSON object. */
+private fun parsePipelineTemplate(obj: JSONObject): PipelineTemplateDraft {
+    val stepsArr = obj.optJSONArray("steps")
+    val steps = buildList {
+        if (stepsArr != null) {
+            for (i in 0 until stepsArr.length()) {
+                val s = stepsArr.getJSONObject(i)
+                add(
+                    PipelineStepDraft(
+                        agentType = s.optString("agent_type", "claude"),
+                        role = s.optString("role", "engineer"),
+                        promptTemplate = s.optString("prompt_template", ""),
+                        inputFromPrev = s.optString("input_from_prev", "none"),
+                        gateAfter = s.optBoolean("gate_after", false),
+                    ),
+                )
+            }
+        }
+    }
+    return PipelineTemplateDraft(
+        id = obj.optString("id", ""),
+        title = obj.optString("title", ""),
+        task = obj.optString("task", ""),
+        steps = steps.ifEmpty { listOf(PipelineStepDraft()) },
+    )
+}
 
 private val AGENT_TYPES = listOf("claude", "codex", "opencode")
 private val ROLE_PRESETS = listOf("researcher", "architect", "engineer", "custom")
@@ -94,6 +135,7 @@ fun PipelineBuilderScreen(
     val neon = LocalNeonTheme.current
     val endpoint by store.endpoint.collectAsState()
     val sessions by store.sessions.collectAsState()
+    val pipelineTemplates by store.pipelineTemplates.collectAsState()
     val scope = rememberCoroutineScope()
 
     Telemetry.breadcrumb("pipeline", "builder_opened", emptyMap())
@@ -108,6 +150,184 @@ fun PipelineBuilderScreen(
 
     var isCreating by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    // Template state
+    var templates by remember { mutableStateOf<List<PipelineTemplateDraft>>(emptyList()) }
+    var isLoadingTemplates by remember { mutableStateOf(false) }
+    var showTemplatePicker by remember { mutableStateOf(false) }
+    var isSavingTemplate by remember { mutableStateOf(false) }
+    var templateDeleteConfirm by remember { mutableStateOf<PipelineTemplateDraft?>(null) }
+
+    val canStart = title.trim().isNotEmpty() && task.trim().isNotEmpty()
+
+    // Helper: POST to the endpoint returning a JSONObject.
+    fun postEndpointBuilder(path: String, body: JSONObject): Result<JSONObject> {
+        val base = endpoint.httpBaseUrl ?: return Result.failure(Exception("No active endpoint"))
+        return runCatching {
+            val conn = (URL("$base$path").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                setRequestProperty("Content-Type", "application/json")
+                connectTimeout = 10_000
+                readTimeout = 20_000
+            }
+            try {
+                conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val text = stream?.bufferedReader()?.use { it.readText() } ?: "{}"
+                conn.disconnect()
+                JSONObject(text)
+            } catch (e: Exception) {
+                conn.disconnect()
+                throw e
+            }
+        }
+    }
+
+    // Helper: GET returning raw string.
+    fun getEndpointBuilder(path: String): Result<String> {
+        val base = endpoint.httpBaseUrl ?: return Result.failure(Exception("No active endpoint"))
+        return runCatching {
+            val conn = (URL("$base$path").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                connectTimeout = 10_000
+                readTimeout = 20_000
+            }
+            try {
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val text = stream?.bufferedReader()?.use { it.readText() } ?: "{}"
+                conn.disconnect()
+                text
+            } catch (e: Exception) {
+                conn.disconnect()
+                throw e
+            }
+        }
+    }
+
+    // Helper: DELETE returning JSONObject.
+    fun deleteEndpointBuilder(path: String): Result<JSONObject> {
+        val base = endpoint.httpBaseUrl ?: return Result.failure(Exception("No active endpoint"))
+        return runCatching {
+            val conn = (URL("$base$path").openConnection() as HttpURLConnection).apply {
+                requestMethod = "DELETE"
+                setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                connectTimeout = 10_000
+                readTimeout = 20_000
+            }
+            try {
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val text = stream?.bufferedReader()?.use { it.readText() } ?: "{}"
+                conn.disconnect()
+                JSONObject(text)
+            } catch (e: Exception) {
+                conn.disconnect()
+                throw e
+            }
+        }
+    }
+
+    fun loadTemplates() {
+        isLoadingTemplates = true
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { getEndpointBuilder("/api/pipeline-templates") }
+            isLoadingTemplates = false
+            result.onSuccess { raw ->
+                val arr = runCatching {
+                    val obj = JSONObject(raw)
+                    val templatesArr = obj.optJSONArray("templates")
+                    buildList {
+                        if (templatesArr != null) {
+                            for (i in 0 until templatesArr.length()) {
+                                add(parsePipelineTemplate(templatesArr.getJSONObject(i)))
+                            }
+                        }
+                    }
+                }.getOrDefault(emptyList())
+                templates = arr
+            }
+        }
+    }
+
+    fun applyTemplate(tmpl: PipelineTemplateDraft) {
+        Telemetry.breadcrumb(
+            "pipeline",
+            "template_applied",
+            mapOf("id" to tmpl.id, "title" to tmpl.title),
+        )
+        title = tmpl.title
+        task = tmpl.task
+        steps.clear()
+        steps.addAll(tmpl.steps)
+        if (steps.isEmpty()) steps.add(PipelineStepDraft())
+    }
+
+    fun saveAsTemplate() {
+        if (!canStart) return
+        isSavingTemplate = true
+        Telemetry.breadcrumb(
+            "pipeline",
+            "template_saved",
+            mapOf("title" to title.trim(), "steps" to steps.size.toString()),
+        )
+        scope.launch {
+            val stepsJson = JSONArray().apply {
+                steps.forEach { step ->
+                    put(JSONObject().apply {
+                        put("agent_type", step.agentType)
+                        put("role", step.role)
+                        put("prompt_template", step.promptTemplate)
+                        put("input_from_prev", step.inputFromPrev)
+                        put("gate_after", step.gateAfter)
+                    })
+                }
+            }
+            val body = JSONObject().apply {
+                put("title", title.trim())
+                put("task", task.trim())
+                put("steps", stepsJson)
+            }
+            val result = withContext(Dispatchers.IO) {
+                postEndpointBuilder("/api/pipeline-templates", body)
+            }
+            isSavingTemplate = false
+            result.onFailure { e ->
+                Telemetry.capture(
+                    error = e,
+                    message = "pipeline template save error",
+                    tags = mapOf("surface" to "android", "phase" to "pipeline-builder"),
+                )
+                errorMessage = e.message ?: "Template save failed"
+            }
+        }
+    }
+
+    fun deleteTemplate(tmpl: PipelineTemplateDraft) {
+        Telemetry.breadcrumb(
+            "pipeline",
+            "template_deleted",
+            mapOf("id" to tmpl.id, "title" to tmpl.title),
+        )
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                deleteEndpointBuilder("/api/pipeline-templates/${tmpl.id}")
+            }
+            result.onSuccess {
+                templates = templates.filter { it.id != tmpl.id }
+            }.onFailure { e ->
+                Telemetry.breadcrumb(
+                    "pipeline",
+                    "template_delete_error",
+                    mapOf("id" to tmpl.id, "error" to (e.message ?: "")),
+                )
+            }
+        }
+    }
 
     fun postPipeline() {
         val base = endpoint.httpBaseUrl ?: run {
@@ -205,6 +425,32 @@ fun PipelineBuilderScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = neon.text)
+                    }
+                },
+                actions = {
+                    if (pipelineTemplates) {
+                        TextButton(
+                            onClick = {
+                                loadTemplates()
+                                showTemplatePicker = true
+                            },
+                        ) {
+                            if (isLoadingTemplates) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    color = neon.accent,
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Text(
+                                "From template",
+                                fontFamily = neon.sans,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                color = neon.accent,
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -310,15 +556,52 @@ fun PipelineBuilderScreen(
                 }
             }
 
+            // Save as template button (only when broker supports pipeline_templates)
+            if (pipelineTemplates) {
+                item {
+                    val enabled = canStart && !isSavingTemplate
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(neon.accent.copy(alpha = 0.10f))
+                            .border(1.dp, neon.accent.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+                            .clickable(enabled = enabled, onClick = ::saveAsTemplate)
+                            .padding(vertical = 11.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (isSavingTemplate) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    color = neon.accent,
+                                    strokeWidth = 2.dp,
+                                )
+                            }
+                            Text(
+                                if (isSavingTemplate) "Saving..." else "Save as template",
+                                fontFamily = neon.sans,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                color = if (enabled) neon.accent else neon.textFaint,
+                            )
+                        }
+                    }
+                }
+            }
+
             // Start pipeline button
             item {
-                val canStart = title.trim().isNotEmpty() && task.trim().isNotEmpty() && !isCreating
+                val startEnabled = canStart && !isCreating
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(14.dp))
-                        .background(if (canStart) neon.accent else neon.surface2)
-                        .clickable(enabled = canStart, onClick = ::postPipeline)
+                        .background(if (startEnabled) neon.accent else neon.surface2)
+                        .clickable(enabled = startEnabled, onClick = ::postPipeline)
                         .padding(vertical = 14.dp),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -327,13 +610,139 @@ fun PipelineBuilderScreen(
                         fontFamily = neon.sans,
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp,
-                        color = if (canStart) neon.accentText else neon.textFaint,
+                        color = if (startEnabled) neon.accentText else neon.textFaint,
                     )
                 }
             }
 
             item { Spacer(Modifier.height(8.dp)) }
         }
+    }
+
+    // Template picker dialog
+    if (showTemplatePicker) {
+        Dialog(
+            onDismissRequest = { showTemplatePicker = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(neon.bg)
+                    .padding(16.dp),
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    // Dialog header
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "From template",
+                            fontFamily = neon.sans,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = neon.text,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { showTemplatePicker = false }) {
+                            Text("Cancel", fontFamily = neon.sans, color = neon.textDim)
+                        }
+                    }
+                    if (templates.isEmpty()) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(top = 32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                "No templates saved yet",
+                                fontFamily = neon.sans,
+                                fontSize = 15.sp,
+                                color = neon.textDim,
+                            )
+                            Text(
+                                "Use \"Save as template\" after filling in a pipeline.",
+                                fontFamily = neon.sans,
+                                fontSize = 13.sp,
+                                color = neon.textFaint,
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            items(templates, key = { it.id }) { tmpl ->
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .neonCardSurface(neon = neon, shape = RoundedCornerShape(12.dp), fill = neon.surface),
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .clickable {
+                                                applyTemplate(tmpl)
+                                                showTemplatePicker = false
+                                            }
+                                            .padding(12.dp)
+                                            .fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                tmpl.title,
+                                                fontFamily = neon.sans,
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 14.sp,
+                                                color = neon.text,
+                                            )
+                                            Text(
+                                                "${tmpl.steps.size} step${if (tmpl.steps.size == 1) "" else "s"}",
+                                                fontFamily = neon.mono,
+                                                fontSize = 11.sp,
+                                                color = neon.textFaint,
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { templateDeleteConfirm = tmpl },
+                                            modifier = Modifier.size(32.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = "Delete template",
+                                                tint = neon.red,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Template delete confirm dialog
+    templateDeleteConfirm?.let { tmpl ->
+        AlertDialog(
+            onDismissRequest = { templateDeleteConfirm = null },
+            title = { Text("Delete template?") },
+            text = { Text("Delete \"${tmpl.title}\"? This cannot be undone.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        deleteTemplate(tmpl)
+                        templateDeleteConfirm = null
+                    },
+                ) { Text("Delete", color = neon.red) }
+            },
+            dismissButton = {
+                TextButton(onClick = { templateDeleteConfirm = null }) { Text("Cancel") }
+            },
+        )
     }
 
     errorMessage?.let { msg ->

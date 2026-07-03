@@ -2054,6 +2054,16 @@ final class SessionStore {
     /// pre-existing generic gate card when false.
     private(set) var pipelineGatePreview: Bool = false
 
+    /// Whether the broker supports pipeline resume-from-failed
+    /// (`GET /api/capabilities` -> `"pipeline_resume": true`).
+    /// False on old brokers; the "Retry step" affordance hides when false.
+    private(set) var pipelineResume: Bool = false
+
+    /// Whether the broker supports pipeline templates
+    /// (`GET /api/capabilities` -> `"pipeline_templates": true`).
+    /// False on old brokers; Save/Load template affordances hide when false.
+    private(set) var pipelineTemplates: Bool = false
+
     /// Single-flight + at-most-once-per-(box,version) guard for the
     /// post-connect broker auto-update (Fix: broker auto-update on reconnect).
     /// `reconnect()`/`selectSavedServer()` short-circuit to a WS-only bounce
@@ -2083,6 +2093,8 @@ final class SessionStore {
             let agents: [String: AgentDescriptor]?
             let readiness: BrokerReadiness?
             let pipeline_gate_preview: Bool?
+            let pipeline_resume: Bool?
+            let pipeline_templates: Bool?
         }
         Telemetry.breadcrumb(
             "model_catalog", "refresh start",
@@ -2123,6 +2135,10 @@ final class SessionStore {
         }
         // pipeline_gate_preview capability: top-level boolean, default false on old brokers.
         pipelineGatePreview = caps.pipeline_gate_preview ?? false
+        // pipeline_resume: resume-from-failed; default false on old brokers.
+        pipelineResume = caps.pipeline_resume ?? false
+        // pipeline_templates: save/load templates; default false on old brokers.
+        pipelineTemplates = caps.pipeline_templates ?? false
 
         // WS-H.1: parse the readiness block; nil on old brokers → consumers treat as unknown.
         if let r = caps.readiness {
