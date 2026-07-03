@@ -117,12 +117,15 @@ type claudeContentBlock struct {
 // be marshaled into a view_event{view:"chat"}. Either Text (assistant
 // prose) or ToolName (+ optional ToolInput) is set per event.
 // IsThinking is set for a thinking block (no chat content emitted).
+// ThinkingText carries the accumulated reasoning text from the snapshot
+// (non-empty only when IsThinking is true and the CLI has emitted content).
 type ClaudeChatEvent struct {
-	Role       string          // "assistant" prose; the processor maps tool blocks to role:"tool"
-	Text       string          // assistant prose (set for a text block)
-	ToolName   string          // set for a tool_use block (Text empty)
-	ToolInput  json.RawMessage // tool_use args, for the card summary
-	IsThinking bool            // set for a thinking/reasoning block
+	Role         string          // "assistant" prose; the processor maps tool blocks to role:"tool"
+	Text         string          // assistant prose (set for a text block)
+	ToolName     string          // set for a tool_use block (Text empty)
+	ToolInput    json.RawMessage // tool_use args, for the card summary
+	IsThinking   bool            // set for a thinking/reasoning block
+	ThinkingText string          // accumulated reasoning text for this turn (set when IsThinking)
 }
 
 // claudeStreamLineIsTurnEnd reports whether a stream-json line is the
@@ -182,9 +185,11 @@ func parseClaudeStreamLine(line []byte) ([]ClaudeChatEvent, bool) {
 				out = append(out, ClaudeChatEvent{Role: "assistant", ToolName: c.Name, ToolInput: c.Input})
 			}
 		case "thinking":
-			if strings.TrimSpace(c.Thinking) != "" {
-				out = append(out, ClaudeChatEvent{IsThinking: true})
-			}
+			// Always emit an IsThinking event so emitPhase("thinking") fires
+			// even before any text has accumulated. ThinkingText carries the
+			// accumulated reasoning so far (empty on the very first snapshot
+			// before any delta has arrived).
+			out = append(out, ClaudeChatEvent{IsThinking: true, ThinkingText: c.Thinking})
 		}
 	}
 	if len(out) == 0 {

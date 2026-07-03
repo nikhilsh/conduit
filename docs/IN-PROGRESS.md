@@ -9,8 +9,9 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
 
 ## Active
 
-_(nothing actively building — #849 /clear routing gate shipped to
-VERIFY-CHECKLIST pending)_
+- **Stream extended-thinking to apps** — broker surfaces Claude's reasoning
+  blocks as `thinking_streaming` view_events so apps can show live reasoning.
+  Branch `feat/stream-thinking-broker`, PR #TBD.
 
 ## Deferred (not active)
 
