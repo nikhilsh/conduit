@@ -758,6 +758,131 @@ struct SessionStoreTests {
         #expect(log.contains(where: { $0.content == "should bypass" && $0.role == "user" }),
             "bypassTurnGate=true must create an echo even when turn_active=true")
     }
+
+    // MARK: - Stale turn state cleared on broker-restart reconnect
+
+    /// Regression test for "stuck on Stop after broker restart until force-quit".
+    ///
+    /// After a broker restart the app reconnects but the stale turn_active=true
+    /// status is still in memory. The composer stays on the Stop button and
+    /// every subsequent sendChat is silently queued -- the user sees the message
+    /// appear to send but the agent never receives it. Force-quitting fixed it
+    /// because the stale status was cleared on cold start.
+    ///
+    /// Fix: ingestConnectionHealth clears turnActive + streaming state on
+    /// .connecting and non-auth .disconnected so the gate opens immediately
+    /// without waiting for the reconnect status frame.
+
+    @Test func connectingClearsStaleTurnActive() {
+        let store = SessionStore()
+        let sessionID = "test-stale-connecting-\(UUID().uuidString)"
+
+        // Seed turn_active=true + streaming state (simulates mid-turn broker restart).
+        let activeStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "running",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: true,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(activeStatus)
+        store.ingestChatStreaming(sessionID, payload: [
+            "content": "In-flight response...",
+            "turn_ts": "2026-07-03T10:00:00.000Z",
+        ])
+        store.turnPhaseBySession[sessionID] = "writing"
+        store.thinkingBySession[sessionID] = "some thinking"
+        #expect(store.isTurnActive(sessionID: sessionID))
+
+        // Simulate the Rust core firing ConnectionHealth.connecting(1, 5).
+        store.ingestConnectionHealth(sessionID, .connecting(attempt: 1, maxAttempts: 5))
+
+        // Turn gate must be open so the next sendChat is delivered, not queued.
+        #expect(!store.isTurnActive(sessionID: sessionID),
+            "connecting must clear stale turnActive so the send gate opens")
+
+        // Streaming UI state must be cleared so the Stop button goes away.
+        #expect(store.streamingMessage[sessionID] == nil,
+            "connecting must clear streamingMessage")
+        #expect(store.turnPhaseBySession[sessionID] == nil,
+            "connecting must clear turnPhaseBySession")
+        #expect(store.streamingTurnTs[sessionID] == nil,
+            "connecting must clear streamingTurnTs")
+        #expect(store.thinkingBySession[sessionID] == nil,
+            "connecting must clear thinkingBySession")
+
+        // A sendChat now must go through (not be queued).
+        store.sendChat(sessionID: sessionID, message: "post-reconnect message")
+        #expect(store.pendingChats.queuedTurnEntries(for: sessionID).isEmpty,
+            "sendChat after connecting-clear must NOT be queued as queuedTurn")
+    }
+
+    @Test func nonAuthDisconnectedClearsStaleTurnActive() {
+        let store = SessionStore()
+        let sessionID = "test-stale-disconnected-\(UUID().uuidString)"
+
+        // Seed turn_active=true.
+        let activeStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "running",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: true,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(activeStatus)
+        store.streamingMessage[sessionID] = "Partial..."
+        store.turnPhaseBySession[sessionID] = "working"
+        #expect(store.isTurnActive(sessionID: sessionID))
+
+        // Simulate a non-auth disconnection (broker restart / network drop).
+        store.ingestConnectionHealth(sessionID, .disconnected(reason: "EOF", auth: false))
+
+        // Stale turn state must be gone.
+        #expect(!store.isTurnActive(sessionID: sessionID),
+            "non-auth disconnected must clear stale turnActive")
+        #expect(store.streamingMessage[sessionID] == nil,
+            "non-auth disconnected must clear streamingMessage")
+        #expect(store.turnPhaseBySession[sessionID] == nil,
+            "non-auth disconnected must clear turnPhaseBySession")
+    }
+
+    @Test func connectedPromotesQueuedTurnEntriesAndFlushes() {
+        let store = SessionStore()
+        let sessionID = "test-promote-queued-\(UUID().uuidString)"
+
+        // Seed turn_active=true.
+        let activeStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "running",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: true,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(activeStatus)
+
+        // User sends while turn is active -- lands in queuedTurn.
+        store.sendChat(sessionID: sessionID, message: "stuck message")
+        #expect(!store.pendingChats.queuedTurnEntries(for: sessionID).isEmpty,
+            "message must be queuedTurn while turn is active")
+
+        // Broker restarts: connecting fires first (clears turn state), then connected fires.
+        store.ingestConnectionHealth(sessionID, .connecting(attempt: 1, maxAttempts: 5))
+        #expect(!store.isTurnActive(sessionID: sessionID))
+
+        // On reconnect: connected must promote the stuck queuedTurn entry to normal.
+        // (No live client -- message stays pending, but it is no longer stuck in the gate.)
+        store.ingestConnectionHealth(sessionID, .connected)
+
+        // The entry must now be .normal (promoted), no longer a queuedTurn entry.
+        #expect(store.pendingChats.queuedTurnEntries(for: sessionID).isEmpty,
+            "queuedTurn entry must be promoted to normal on reconnect")
+    }
 }
 
 /// `restore-chat-on-reattach` — pins the conversation merge that splices a

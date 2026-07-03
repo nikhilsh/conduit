@@ -234,6 +234,27 @@ struct PendingChatQueue: Equatable {
         bySession[sessionID] = list
     }
 
+    /// After a broker-restart reconnect the turn gate is cleared, so any
+    /// `.queuedTurn` entries that were held waiting for the (now-dead) turn
+    /// to end should be promoted to `.normal` so the next `flushPendingChats`
+    /// delivers them. `.steering` and `.retrying` are also promoted: the steer
+    /// target is gone with the restarted broker. Idempotent; a no-op when
+    /// there are no queued-turn entries.
+    mutating func promoteQueuedTurnToNormal(sessionID: String) {
+        guard var list = bySession[sessionID] else { return }
+        var changed = false
+        for i in list.indices {
+            if list[i].kind == .queuedTurn || list[i].kind == .steering || list[i].kind == .retrying {
+                list[i].kind = .normal
+                list[i].failed = false
+                list[i].attempts = 0
+                list[i].sent = false
+                changed = true
+            }
+        }
+        if changed { bySession[sessionID] = list }
+    }
+
     /// Drop an entire session's queue (session deleted / forgotten).
     mutating func clear(sessionID: String) {
         bySession[sessionID] = nil

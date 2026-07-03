@@ -5940,7 +5940,27 @@ final class SessionStore {
     /// worker. We aggregate across sessions into the single visible
     /// `HarnessState`: any in-progress reconnect dominates; an auth-flavoured
     /// terminal disconnect promotes to the friendly "Pairing expired" state.
-    fileprivate func ingestConnectionHealth(_ sessionID: String, _ health: ConnectionHealth) {
+    /// Clear the transient "agent is working" state for a session when the
+    /// connection drops. A turn's in-flight status cannot be trusted across a
+    /// connection drop: the broker may have restarted and the turn is gone.
+    /// The authoritative reconnect status frame re-asserts turn_active=true if
+    /// a turn genuinely survived. This prevents the composer from being stuck
+    /// on the Stop button and the send gate from blocking all subsequent
+    /// messages until a force-quit (bug: stuck on Stop after broker restart).
+    private func clearStaleTurnState(_ sessionID: String) {
+        if var status = statusBySession[sessionID], status.turnActive == true {
+            status.turnActive = false
+            statusBySession[sessionID] = status
+        }
+        streamingMessage[sessionID] = nil
+        turnPhaseBySession[sessionID] = nil
+        streamingTurnTs[sessionID] = nil
+        thinkingBySession[sessionID] = nil
+        Telemetry.breadcrumb("chat", "cleared stale turn state on disconnect",
+            data: ["session": sessionID])
+    }
+
+    func ingestConnectionHealth(_ sessionID: String, _ health: ConnectionHealth) {
         switch health {
         case .connected:
             connectionHealthBySession[sessionID] = health
@@ -5949,6 +5969,11 @@ final class SessionStore {
             } else if harness == .disconnected {
                 harness = .linked
             }
+            // Promote any queuedTurn entries to normal so they are picked up
+            // by flushPendingChats below. After a broker restart the turn they
+            // were waiting on is gone; they should be re-delivered now that the
+            // turn gate is clear (clearStaleTurnState zeroed it on disconnect).
+            pendingChats.promoteQueuedTurnToNormal(sessionID: sessionID)
             // Flush any `sent`-but-unacked messages for this session. The
             // Rust core's per-session reconnect worker fires this callback
             // when it re-establishes the WS (distinct from the app-level
@@ -5965,6 +5990,7 @@ final class SessionStore {
         case let .connecting(attempt, maxAttempts):
             connectionHealthBySession[sessionID] = health
             harness = .reconnecting(attempt: attempt, maxAttempts: maxAttempts)
+            clearStaleTurnState(sessionID)
         case let .disconnected(reason, auth):
             connectionHealthBySession[sessionID] = health
             if auth {
@@ -5996,6 +6022,7 @@ final class SessionStore {
                     ]
                 )
             } else {
+                clearStaleTurnState(sessionID)
                 ingestDisconnected(reason)
             }
         }

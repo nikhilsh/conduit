@@ -6085,6 +6085,33 @@ class SessionStore : ViewModel(), ConduitDelegate {
         )
     }
 
+    /**
+     * Clear the transient "agent is working" state for a session when the
+     * connection drops. A turn's in-flight status cannot be trusted across a
+     * connection drop: the broker may have restarted and the turn is gone.
+     * The authoritative reconnect status frame re-asserts turn_active=true if
+     * a turn genuinely survived. This prevents the composer from being stuck
+     * on the Stop button and the send gate from blocking all subsequent
+     * messages until a force-quit (bug: stuck on Stop after broker restart).
+     * Mirror of iOS [SessionStore.clearStaleTurnState].
+     */
+    private fun clearStaleTurnState(sessionId: String) {
+        _statusBySession.value[sessionId]?.let { prev ->
+            if (prev.turnActive == true) {
+                _statusBySession.value = _statusBySession.value + (sessionId to prev.copy(turnActive = false))
+            }
+        }
+        // Reset the edge-trigger so the next authoritative status frame is
+        // not ignored (the detector compares against this stored value).
+        _lastTurnActive[sessionId] = false
+        _streamingMessage.update { it - sessionId }
+        _turnPhaseBySession.update { it - sessionId }
+        _streamingTurnTs.update { it - sessionId }
+        _thinkingBySession.update { it - sessionId }
+        Telemetry.breadcrumb("chat", "cleared stale turn state on disconnect",
+            mapOf("session" to sessionId))
+    }
+
     override fun onConnectionHealth(sessionId: String, health: ConnectionHealth) {
         _connectionHealth.value = _connectionHealth.value + (sessionId to health)
         when (health) {
@@ -6094,6 +6121,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 } else {
                     HarnessState.Linked
                 }
+                // Promote any queuedTurn entries to normal so they are picked
+                // up by flushPendingChats below. After a broker restart the
+                // turn they were waiting on is gone; they should be re-delivered
+                // now that the turn gate is clear (clearStaleTurnState zeroed it
+                // on disconnect).
+                updatePendingChats { it.promoteQueuedTurnToNormal(sessionId) }
                 // Flush any `sent`-but-unacked messages for this session. The
                 // Rust core's per-session reconnect worker fires this callback
                 // when it re-establishes the WS (distinct from the app-level
@@ -6111,6 +6144,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             }
             is ConnectionHealth.Connecting -> {
                 _harness.value = HarnessState.Reconnecting(health.attempt, health.maxAttempts)
+                clearStaleTurnState(sessionId)
             }
             is ConnectionHealth.Disconnected -> {
                 if (health.auth) {
@@ -6140,6 +6174,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                         ),
                     )
                 } else {
+                    clearStaleTurnState(sessionId)
                     onDisconnected(health.reason)
                 }
             }
