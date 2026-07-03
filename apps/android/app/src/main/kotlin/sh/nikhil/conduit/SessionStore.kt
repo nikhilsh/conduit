@@ -4530,6 +4530,15 @@ class SessionStore : ViewModel(), ConduitDelegate {
     val brokerReadiness: StateFlow<BrokerReadiness?> = _brokerReadiness.asStateFlow()
 
     /**
+     * Whether the broker supports the pipeline gate preview + handoff-edit
+     * flow (`GET /api/capabilities` -> `"pipeline_gate_preview": true`).
+     * False on old brokers that omit the key. Mirror of iOS
+     * `SessionStore.pipelineGatePreview`.
+     */
+    private val _pipelineGatePreview = MutableStateFlow(false)
+    val pipelineGatePreview: StateFlow<Boolean> = _pipelineGatePreview.asStateFlow()
+
+    /**
      * Refresh [modelCatalog] and [agentDescriptors] from the active
      * endpoint's capabilities in one request. Old brokers (missing keys)
      * and failures are no-ops for the affected flow.
@@ -4593,6 +4602,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 mapOf("host" to ep.displayHost),
             )
         }
+        // pipeline_gate_preview: top-level boolean; default false on old brokers.
+        val gatePreview = runCatching {
+            JSONObject(raw).optBoolean("pipeline_gate_preview", false)
+        }.getOrDefault(false)
+        _pipelineGatePreview.value = gatePreview
     }
 
     /**
