@@ -39,6 +39,31 @@ extension ConduitUI {
         }
     }
 
+    /// Gate metadata returned by the broker when a pipeline is in the
+    /// `awaiting_gate` state. Present only when the broker supports the
+    /// `pipeline_gate_preview` capability.
+    struct PipelineGate: Decodable {
+        /// Index of the completed gated step.
+        let step: Int
+        /// Computed `{{prev}}` handoff text for the next step. May be empty.
+        let prev: String
+        /// Final assistant text from the gated step. May be absent.
+        let output: String?
+
+        enum CodingKeys: String, CodingKey {
+            case step
+            case prev
+            case output
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            step   = try c.decodeIfPresent(Int.self,    forKey: .step)   ?? 0
+            prev   = try c.decodeIfPresent(String.self, forKey: .prev)   ?? ""
+            output = try c.decodeIfPresent(String.self, forKey: .output)
+        }
+    }
+
     struct PipelineStatus: Decodable {
         let id: String
         let title: String
@@ -48,6 +73,9 @@ extension ConduitUI {
         let state: String
         let current_step: Int
         let steps: [PipelineStepStatus]
+        /// Present only when state == "awaiting_gate" and broker supports
+        /// `pipeline_gate_preview`.
+        let gate: PipelineGate?
 
         var isTerminal: Bool {
             state == "complete" || state == "failed" || state == "cancelled"
@@ -73,6 +101,9 @@ extension ConduitUI {
         @State private var showCancelAlert = false
         @State private var errorBanner: String? = nil
         @State private var selectedSessionID: String? = nil
+        // Gate handoff edit state
+        @State private var isEditingHandoff = false
+        @State private var handoffDraft: String = ""
 
         var body: some View {
             ZStack {
@@ -301,7 +332,18 @@ extension ConduitUI {
         // MARK: Gate card
 
         private func gateCard(_ p: PipelineStatus) -> some View {
-            VStack(alignment: .leading, spacing: 12) {
+            let gate = p.gate
+            // Determine the preview text: prefer prev, then output, then nil (show generic text).
+            let previewText: String? = {
+                if let g = gate {
+                    if !g.prev.isEmpty { return g.prev }
+                    if let out = g.output, !out.isEmpty { return out }
+                }
+                return nil
+            }()
+            let showGatePreview = store.pipelineGatePreview && gate != nil
+
+            return VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
                     Image(systemName: "hand.raised.fill")
                         .font(.system(size: 14, weight: .semibold))
@@ -311,15 +353,84 @@ extension ConduitUI {
                         .foregroundStyle(neon.text)
                 }
 
-                Text("Step \(p.current_step + 1) has finished and is gated. Review the output, then continue the pipeline.")
-                    .font(neon.sans(13))
-                    .foregroundStyle(neon.textDim)
-                    .fixedSize(horizontal: false, vertical: true)
+                if showGatePreview, let preview = previewText {
+                    // Handoff preview block
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Handoff preview")
+                                .font(neon.mono(11).weight(.bold))
+                                .foregroundStyle(neon.textDim)
+                                .textCase(.uppercase)
+                            Spacer(minLength: 4)
+                            // Edit toggle button
+                            Button {
+                                if !isEditingHandoff {
+                                    handoffDraft = gate?.prev ?? ""
+                                    Telemetry.breadcrumb("pipeline", "gate handoff edited",
+                                        data: ["id": pipelineID, "step": "\(p.current_step)"])
+                                }
+                                isEditingHandoff.toggle()
+                            } label: {
+                                Text(isEditingHandoff ? "Done" : "Edit handoff")
+                                    .font(neon.mono(11).weight(.semibold))
+                                    .foregroundStyle(neon.accent)
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        if isEditingHandoff {
+                            // Editable TextEditor, fixed 240pt height. No fixedSize:
+                            // avoid greedy-height (iOS footgun: fixedSize overrides frame cap).
+                            TextEditor(text: $handoffDraft)
+                                .font(neon.mono(12))
+                                .foregroundStyle(neon.text)
+                                .scrollContentBackground(.hidden)
+                                .background(neon.surface2)
+                                .frame(height: 240)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(neon.borderStrong, lineWidth: 1)
+                                )
+                        } else {
+                            // Read-only scrollable preview, hard-capped at 240pt.
+                            // Do NOT use .frame(maxHeight:.infinity) or fixedSize here;
+                            // that makes the ScrollView greedy and eats VStack space.
+                            ScrollView(.vertical) {
+                                Text(preview)
+                                    .font(neon.mono(12))
+                                    .foregroundStyle(neon.textDim)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(10)
+                            }
+                            .frame(height: 240)
+                            .background(neon.surface2)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(neon.borderStrong, lineWidth: 1)
+                            )
+                        }
+                    }
+                    .onAppear {
+                        Telemetry.breadcrumb("pipeline", "gate preview shown",
+                            data: ["id": pipelineID, "step": "\(p.current_step)",
+                                   "prev_len": "\(gate?.prev.count ?? 0)"])
+                    }
+                } else if !showGatePreview {
+                    Text("Step \(p.current_step + 1) has finished and is gated. Review the output, then continue the pipeline.")
+                        .font(neon.sans(13))
+                        .foregroundStyle(neon.textDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 Button {
+                    let edited = isEditingHandoff && handoffDraft != (gate?.prev ?? "")
                     Telemetry.breadcrumb("pipeline", "gate continue tapped",
-                        data: ["id": pipelineID, "step": "\(p.current_step)"])
-                    continuePipeline()
+                        data: ["id": pipelineID, "step": "\(p.current_step)",
+                               "edited": edited ? "true" : "false"])
+                    let prevOverride = edited ? handoffDraft : nil
+                    continuePipeline(prevOverride: prevOverride)
                 } label: {
                     HStack(spacing: 6) {
                         if isContinuing {
@@ -463,7 +574,7 @@ extension ConduitUI {
 
         // MARK: - Continue (gate)
 
-        private func continuePipeline() {
+        private func continuePipeline(prevOverride: String? = nil) {
             let endpoint = store.endpoint
             guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return }
             var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
@@ -476,7 +587,13 @@ extension ConduitUI {
             req.timeoutInterval = 15
             req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = Data("{}".utf8)
+            // Only include {"prev": ...} when the user edited the handoff text.
+            if let prev = prevOverride,
+               let body = try? JSONSerialization.data(withJSONObject: ["prev": prev]) {
+                req.httpBody = body
+            } else {
+                req.httpBody = Data("{}".utf8)
+            }
 
             Task { @MainActor in
                 defer { isContinuing = false }
