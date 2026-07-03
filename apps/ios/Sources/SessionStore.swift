@@ -1108,6 +1108,12 @@ final class SessionStore {
     // "" (thinking/waiting). Nil = no phase info from broker yet.
     var turnPhaseBySession: [String: String] = [:]
 
+    // Accumulated thinking/reasoning text for the current turn per sessionID,
+    // sourced from the broker's thinking_streaming view_event (Claude only).
+    // Ephemeral: cleared alongside streamingMessage when the turn ends.
+    // Never persisted into the transcript or conversationLog.
+    var thinkingBySession: [String: String] = [:]
+
     /// IDs of `pending_input` conversation items that have been resolved via
     /// an out-of-band path (ConduitApprovalsView, lock-screen intent) and
     /// should render as ANSWERED in the inline chat card immediately —
@@ -5118,6 +5124,16 @@ final class SessionStore {
         turnPhaseBySession[sessionID] = phase
     }
 
+    /// Handle a `thinking_streaming` view_event: store the accumulated reasoning
+    /// text for the current Claude turn. Ephemeral (not persisted). Cleared
+    /// alongside streamingMessage when the turn ends.
+    func ingestThinkingStreaming(_ sessionID: String, payload: [String: String]) {
+        guard let content = payload["content"] else { return }
+        thinkingBySession[sessionID] = content
+        Telemetry.breadcrumb("thinking", "partial arrived",
+            data: ["len": "\(content.count)", "session": sessionID])
+    }
+
     func ingestChat(_ sessionID: String, _ event: ChatEvent) {
         // Funnel: first assistant reply on the very first session.
         // Guard: no prior assistant items in the chat log for this session.
@@ -5165,6 +5181,7 @@ final class SessionStore {
                 streamingMessage[sessionID] = nil
                 turnPhaseBySession[sessionID] = nil
                 streamingTurnTs[sessionID] = nil
+                thinkingBySession[sessionID] = nil
                 // Belt-and-suspenders: flush the oldest queued-turn entry now
                 // that we know the turn settled (the reply IS the proof). This
                 // handles the case where the status frame reporting
@@ -5616,6 +5633,7 @@ final class SessionStore {
             streamingMessage[status.session] = nil
             turnPhaseBySession[status.session] = nil
             streamingTurnTs[status.session] = nil
+            thinkingBySession[status.session] = nil
             Telemetry.breadcrumb("streaming", "cleared on turn-complete status",
                 data: ["session": status.session])
         }
@@ -7346,6 +7364,8 @@ final class StoreDelegate: ConduitDelegate {
                 s.ingestChatStreaming(sessionId, payload: payload)
             } else if kind == "turn_phase" {
                 s.ingestTurnPhase(sessionId, payload: payload)
+            } else if kind == "thinking_streaming" {
+                s.ingestThinkingStreaming(sessionId, payload: payload)
             } else {
                 s.routeAgentLoginViewEvent(kind: kind, payload: payload)
             }

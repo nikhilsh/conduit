@@ -80,6 +80,27 @@ extension View {
 // hashValue)`; streaming buffers come from
 // `StreamingRendererCoordinator.shared.renderState(for:)`.
 
+// MARK: - Thinking peek helper
+
+extension ConduitUI {
+    /// Extracts the last non-empty, trimmed line of `text` for use as the
+    /// working-indicator status override while the agent is in a thinking phase.
+    /// Returns nil when text is nil, empty, or contains only whitespace lines.
+    /// The result is capped at 80 characters (trailing ellipsis added if needed).
+    static func thinkingPeekLine(from text: String?) -> String? {
+        guard let text, !text.isEmpty else { return nil }
+        let line = text
+            .components(separatedBy: "\n")
+            .reversed()
+            .first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let line, !line.isEmpty else { return nil }
+        if line.count <= 80 { return line }
+        let idx = line.index(line.startIndex, offsetBy: 79)
+        return String(line[..<idx]) + "\u{2026}"
+    }
+}
+
 extension ConduitUI {
 
     struct ChatView: View {
@@ -488,6 +509,19 @@ extension ConduitUI {
             store.streamingMessage[session.id]
         }
 
+        /// Accumulated thinking/reasoning text for the current turn
+        /// (thinking_streaming view_events, Claude only). nil between turns.
+        private var thinkingText: String? {
+            store.thinkingBySession[session.id]
+        }
+
+        /// The last non-empty line of the current thinking text, trimmed and
+        /// capped to 80 characters, for use as the indicator peek status.
+        /// Returns nil when there is no thinking text or no non-empty lines.
+        private var thinkingPeek: String? {
+            ConduitUI.thinkingPeekLine(from: thinkingText)
+        }
+
         /// Stable id for an invisible spacer pinned at the very end of
         /// the list. Scrolling to *this* (rather than the last event)
         /// guarantees we reach the absolute bottom — below the typing
@@ -749,7 +783,7 @@ extension ConduitUI {
                         // chat_streaming view_events deliver partial content.
                         // Old brokers never emit chat_streaming so this stays nil.
                         if let content = streamingOverlayContent, !content.isEmpty, !isReadOnly {
-                            ConduitUI.StreamingSpineView(content: content)
+                            ConduitUI.StreamingSpineView(content: content, thinking: thinkingText)
                                 .padding(.horizontal, 16)
                                 .transition(.opacity)
                                 .id("streaming-overlay")
@@ -762,9 +796,13 @@ extension ConduitUI {
                         // (pre-first-token thinking phase).
                         if isAgentWorking && !isReadOnly
                             && (streamingOverlayContent?.isEmpty ?? true) {
-                            ConduitTypingIndicator(turnPhase: turnPhase, agent: session.assistant)
-                                .padding(.horizontal, 16)
-                                .transition(.opacity)
+                            ConduitTypingIndicator(
+                                turnPhase: turnPhase,
+                                agent: session.assistant,
+                                thinkingPeek: thinkingPeek
+                            )
+                            .padding(.horizontal, 16)
+                            .transition(.opacity)
                         }
                         // Zero-height bottom anchor — the scroll target for
                         // true-bottom jumps (sits below the typing row).
@@ -2446,6 +2484,9 @@ private struct ConduitStructuredMarkdownView: View {
 private struct ConduitTypingIndicator: View {
     var turnPhase: String? // "writing" | "working" | "thinking" | nil
     var agent: String = "claude"
+    /// Last non-empty thinking line (trimmed, capped 80 chars). When turnPhase
+    /// is "thinking" and this is non-nil, it overrides the indicator's canned verb.
+    var thinkingPeek: String? = nil
     @State private var phase = 0
     @Environment(\.neonTheme) private var neon
 
@@ -2457,12 +2498,12 @@ private struct ConduitTypingIndicator: View {
             case "working", "thinking":
                 // Pre-output phases: replaced by the new four-style WorkingIndicator.
                 // Style driven by the debug toggle (debug.workingIndicatorStyle, default .spine).
-                // status: nil lets the component cycle its neutral verb set; no live-activity
-                // string is threaded here (it would require plumbing through many layers).
+                // When phase is "thinking" and we have a live thinking line, pass it as
+                // status so ALL styles show the live reasoning line instead of the canned verb.
                 ConduitUI.WorkingIndicator(
                     style: ConduitWorkingDebug.current,
                     agent: agent,
-                    status: nil
+                    status: turnPhase == "thinking" ? thinkingPeek : nil
                 )
             default:
                 // "writing" / nil — three bouncing dots (active streaming, unchanged).

@@ -48,6 +48,7 @@ import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.DropdownMenu
@@ -405,9 +406,13 @@ fun ChatPage(
     val streamingMessageMap by store.streamingMessage.collectAsState()
     val streamingOverlayContent: String? = streamingMessageMap[session.id]
         ?.takeIf { it.isNotEmpty() }
-    // Current turn phase ("writing", "working", "") — drives distinct indicator states.
+    // Current turn phase ("writing", "working", "") -- drives distinct indicator states.
     val turnPhaseMap by store.turnPhaseBySession.collectAsState()
     val turnPhase: String? = turnPhaseMap[session.id]
+    // Accumulated thinking/reasoning text (thinking_streaming view_events, Claude only).
+    // Ephemeral: cleared at turn end alongside streamingMessage.
+    val thinkingMap by store.thinkingBySession.collectAsState()
+    val thinkingText: String? = thinkingMap[session.id]?.takeIf { it.isNotEmpty() }
     // "Queued Next" panel: observe the pending queue + agent descriptors.
     val pendingChatsQueue by store.pendingChats.collectAsState()
     val agentDescriptorsMap by store.agentDescriptors.collectAsState()
@@ -963,6 +968,7 @@ fun ChatPage(
                     item(key = "streaming-overlay") {
                         StreamingSpineRow(
                             content = streamingOverlayContent,
+                            thinking = thinkingText,
                         )
                     }
                 }
@@ -978,6 +984,7 @@ fun ChatPage(
                             agentAccent,
                             turnPhase,
                             workingIndicatorStyleRaw,
+                            thinkingPeek = thinkingPeekLine(thinkingText),
                         )
                     }
                 }
@@ -2569,17 +2576,19 @@ private fun TypingIndicatorRow(
     @Suppress("UNUSED_PARAMETER") accent: Color,
     turnPhase: String? = null,
     workingIndicatorStyleRaw: String = "Spine",
+    thinkingPeek: String? = null,
 ) {
     val neon = LocalNeonTheme.current
     if (turnPhase == "working" || turnPhase == "thinking") {
         // Pre-output phases: the new four-style working indicator (debug-toggle driven);
-        // supersedes the legacy WORKING.../THINKING... label + single dot. status=null lets
-        // the component cycle its neutral verb set; reduce-motion is handled internally.
+        // supersedes the legacy WORKING.../THINKING... label + single dot.
+        // When phase is "thinking" and a live reasoning line is available, pass it as
+        // status so ALL styles show the live thinking line instead of the canned verb.
         sh.nikhil.conduit.ui.components.ConduitWorkingIndicator(
             style = sh.nikhil.conduit.ui.components.ConduitWorkingStyle.from(workingIndicatorStyleRaw),
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             agent = assistant,
-            status = null,
+            status = if (turnPhase == "thinking") thinkingPeek else null,
         )
     } else {
         // "writing" / null -> three bouncing dots under the ASSISTANT label (no robot icon,
@@ -2622,6 +2631,92 @@ private fun TypingIndicatorRow(
     }
 }
 
+// ── Thinking disclosure + peek helper ─────────────────────────────────────────
+
+/**
+ * Returns the last non-empty, trimmed line of [text] for use as the
+ * working-indicator status override while the agent is in a thinking phase.
+ * Returns null when text is null, empty, or contains only whitespace lines.
+ * The result is capped at 80 characters (trailing ellipsis appended if needed).
+ * Mirror of iOS ConduitUI.thinkingPeekLine.
+ */
+internal fun thinkingPeekLine(text: String?): String? {
+    if (text.isNullOrEmpty()) return null
+    val line = text.lines().reversed()
+        .firstOrNull { it.isNotBlank() }
+        ?.trim() ?: return null
+    if (line.isEmpty()) return null
+    return if (line.length <= 80) line else line.take(79) + "…"
+}
+
+/**
+ * Collapsible reasoning-text block rendered above the streaming prose while
+ * the agent is in a thinking phase (thinking_streaming view_events).
+ *
+ * Collapsed by default: a one-line header row (chevron + "Thinking..." in mono/dim).
+ * Tapping the header expands to show the full accumulated reasoning text.
+ * Respects reduced-motion (no animation when enabled).
+ * Mirror of iOS ConduitUI.ThinkingDisclosure.
+ */
+@Composable
+private fun ThinkingDisclosure(text: String) {
+    val neon = LocalNeonTheme.current
+    var isExpanded by remember { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // Header row: chevron + "Thinking..." label.
+        Row(
+            modifier = Modifier
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                ) {
+                    val next = !isExpanded
+                    isExpanded = next
+                    Telemetry.breadcrumb(
+                        "thinking",
+                        if (next) "expand" else "collapse",
+                        mapOf("len" to text.length.toString()),
+                    )
+                }
+                .fillMaxWidth()
+                .semantics { contentDescription = if (isExpanded) "Collapse thinking" else "Expand thinking" },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = if (isExpanded) {
+                    Icons.Default.KeyboardArrowDown
+                } else {
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight
+                },
+                contentDescription = null,
+                tint = neon.ghost,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                "Thinking…",
+                fontFamily = neon.mono,
+                fontSize = 12.sp,
+                color = neon.textFaint,
+            )
+        }
+        // Expanded body: full reasoning text in dim mono.
+        androidx.compose.animation.AnimatedVisibility(visible = isExpanded) {
+            Text(
+                text,
+                fontFamily = neon.mono,
+                fontSize = 12.sp,
+                lineHeight = (12f * 1.5f).sp,
+                color = neon.textDim,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+            )
+        }
+    }
+}
+
 // ── Direction C streaming spine ───────────────────────────────────────────────
 
 /**
@@ -2645,7 +2740,7 @@ private fun TypingIndicatorRow(
  * prose-streaming phase only.
  */
 @Composable
-private fun StreamingSpineRow(content: String) {
+private fun StreamingSpineRow(content: String, thinking: String? = null) {
     val neon = LocalNeonTheme.current
     val context = androidx.compose.ui.platform.LocalContext.current
     val reduceMotion = remember {
@@ -2831,13 +2926,18 @@ private fun StreamingSpineRow(content: String) {
 
         Spacer(Modifier.width(13.dp))
 
-        // Body column: prose + caret.
+        // Body column: optional thinking disclosure + prose + caret.
         Column(
             modifier = Modifier
                 .weight(1f)
                 .padding(bottom = 4.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // Thinking disclosure: shown while the agent is in the reasoning phase.
+            // Collapses to a one-line header by default; tap the chevron to expand.
+            if (!thinking.isNullOrEmpty()) {
+                ThinkingDisclosure(text = thinking)
+            }
             // Prose: neon.sans, 15.5sp, line-height 1.62, neon.text.
             // Caret is appended INLINE as an AnnotatedString span so it trails the last
             // character and wraps naturally with the text (not pinned to the right margin).

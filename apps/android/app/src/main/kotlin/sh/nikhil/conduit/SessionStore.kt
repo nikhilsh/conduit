@@ -672,6 +672,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
     val turnPhaseBySession: StateFlow<Map<String, String>> = _turnPhaseBySession.asStateFlow()
 
     /**
+     * Accumulated thinking/reasoning text for the current turn per sessionId,
+     * sourced from the broker's thinking_streaming view_event (Claude only).
+     * Ephemeral: cleared alongside [_streamingMessage] when the turn ends.
+     * Never persisted into the transcript or conversationLog.
+     * Mirror of iOS [SessionStore.thinkingBySession].
+     */
+    private val _thinkingBySession = MutableStateFlow<Map<String, String>>(emptyMap())
+    val thinkingBySession: StateFlow<Map<String, String>> = _thinkingBySession.asStateFlow()
+
+    /**
      * The `turn_ts` of the actively-streaming turn per sessionId. Set by
      * [ingestChatStreaming] and used by [onChatEvent] to distinguish the
      * final current-turn message from broker-replayed older transcript entries.
@@ -5620,6 +5630,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 _streamingMessage.update { it - sessionId }
                 _turnPhaseBySession.update { it - sessionId }
                 _streamingTurnTs.update { it - sessionId }
+                _thinkingBySession.update { it - sessionId }
                 // Belt-and-suspenders: flush the oldest queued-turn entry now
                 // that we know the turn settled (the reply IS the proof). This
                 // handles the case where the status frame reporting
@@ -5742,6 +5753,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             "credential_source" -> ingestCredentialSource(sessionId, payload)
             "chat_streaming" -> ingestChatStreaming(sessionId, payload)
             "turn_phase" -> ingestTurnPhase(sessionId, payload)
+            "thinking_streaming" -> ingestThinkingStreaming(sessionId, payload)
             else -> routeAgentLoginViewEvent(kind, payload)
         }
     }
@@ -5776,6 +5788,22 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _turnPhaseBySession.update { it + (sessionId to phase) }
         Telemetry.breadcrumb("turn_phase", phase.ifEmpty { "cleared" },
             mapOf("session" to sessionId))
+    }
+
+    /**
+     * Handle a thinking_streaming view_event: store the accumulated reasoning
+     * text for the current Claude turn. Ephemeral -- not persisted into the
+     * transcript or conversationLog. Cleared alongside [_streamingMessage]
+     * when the turn ends.
+     * Mirror of iOS SessionStore.ingestThinkingStreaming.
+     */
+    fun ingestThinkingStreaming(sessionId: String, payload: Map<String, String>) {
+        val content = payload["content"] ?: return
+        _thinkingBySession.update { it + (sessionId to content) }
+        Telemetry.breadcrumb(
+            "thinking", "partial arrived",
+            mapOf("len" to content.length.toString(), "session" to sessionId),
+        )
     }
 
     /**
@@ -5937,6 +5965,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 _streamingMessage.update { it - status.session }
                 _turnPhaseBySession.update { it - status.session }
                 _streamingTurnTs.update { it - status.session }
+                _thinkingBySession.update { it - status.session }
                 Telemetry.breadcrumb(
                     "streaming", "cleared on turn-complete status",
                     mapOf("session" to status.session),
