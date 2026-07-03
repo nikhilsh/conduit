@@ -198,6 +198,13 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 	// turn so the turn-end `result` can hand the generator the message it
 	// should base chips on (and an id the apps tie the chips to).
 	var lastAssistantText, lastAssistantTS string
+	// thinkingAccum holds the accumulated reasoning text for the current
+	// turn. Extended-thinking arrives as a series of `assistant` snapshots
+	// under --include-partial-messages; each snapshot replaces the previous
+	// (the latest has the most complete text). We track the latest snapshot
+	// value and publish thinking_streaming on every update so the apps can
+	// show the growing reasoning text. Reset at turn end alongside turnTS.
+	var thinkingAccum string
 	// lastAskTS captures the ts of the most recently published AskUserQuestion
 	// chat event. Passed to onControl so handleAskControl can store it in
 	// pendingAsk, enabling reconnect replays to use the original ts and thus
@@ -311,6 +318,7 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 			emitPhase("")
 			turnTS = ""
 			lastAssistantText, lastAssistantTS = "", ""
+			thinkingAccum = ""
 			lastContextTokens = 0
 			continue
 		}
@@ -345,6 +353,29 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 			// status broadcast rides the same event loop tick.
 			if e.IsThinking {
 				emitPhase("thinking")
+				// Latch turnTS on the first thinking event so the
+				// thinking_streaming view shares the same turn identifier
+				// as the subsequent chat_streaming frames for this turn.
+				if turnTS == "" {
+					turnTS = claudeChatNow().UTC().Format(time.RFC3339Nano)
+				}
+				// Only publish a thinking_streaming event when the
+				// accumulated text has grown (the very first snapshot may
+				// arrive with an empty thinking field).
+				if e.ThinkingText != "" && e.ThinkingText != thinkingAccum {
+					thinkingAccum = e.ThinkingText
+					thinkPayload, terr := json.Marshal(map[string]any{
+						"type": "view_event",
+						"view": "thinking_streaming",
+						"event": map[string]any{
+							"content": thinkingAccum,
+							"ts":      turnTS,
+						},
+					})
+					if terr == nil {
+						publish(thinkPayload)
+					}
+				}
 				continue
 			}
 			var role, content string
