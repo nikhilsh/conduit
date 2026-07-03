@@ -45,14 +45,15 @@ import sh.nikhil.conduit.ui.NeonTheme
 import sh.nikhil.conduit.ui.glassCapsule
 import sh.nikhil.conduit.ui.neonAgentColor
 
-// ── Style + debug setting ────────────────────────────────────────────────────────────────
+// -- Style + debug setting ---------------------------------------------------------------
 
 /**
- * Four-style pre-output working indicator (design handoff "working-indicator").
+ * Six-style pre-output working indicator (design handoff "working-indicator").
  * Replaces the legacy "WORKING..." label + single pulsing dot.
  *
  * Styles: Spine (breathing mark + flowing rail), Packets (3 flowing packets),
- * Mark (shimmer sweep), Prompt (shell prompt card). Selected via
+ * Mark (shimmer sweep), Prompt (shell prompt card), PacketsPrompt (packets AS
+ * the prompt command line), PipedPrompt (stacked pipe + prompt). Selected via
  * [PREF_KEY] in AppearanceStore (default Spine).
  *
  * Animation periods match the iOS mirror:
@@ -62,7 +63,9 @@ enum class ConduitWorkingStyle(val displayName: String) {
     Spine("A - Conduit spine"),
     Packets("B - Packets"),
     Mark("C - Breathing mark"),
-    Prompt("D - At the prompt");
+    Prompt("D - At the prompt"),
+    PacketsPrompt("E - Packets @ prompt"),
+    PipedPrompt("F - Piped prompt");
 
     companion object {
         /** SharedPreferences key (matches iOS debug.workingIndicatorStyle). */
@@ -75,12 +78,12 @@ enum class ConduitWorkingStyle(val displayName: String) {
 
 private val VERBS = listOf("thinking", "reading files", "running tests", "writing the patch", "pushing")
 
-// ── The indicator ────────────────────────────────────────────────────────────────────────
+// -- The indicator -----------------------------------------------------------------------
 
 /**
  * Working indicator composable.
  *
- * @param style   Which of the four visual styles to render.
+ * @param style   Which of the six visual styles to render.
  * @param agent   Agent key used for the tint (e.g. "claude", "codex").
  * @param status  Live activity text. null -> cycles VERBS set.
  * @param modifier Optional layout modifier.
@@ -126,10 +129,12 @@ fun ConduitWorkingIndicator(
     val verb = status ?: VERBS[((t / 1.9f).toInt()) % VERBS.size]
 
     when (style) {
-        ConduitWorkingStyle.Spine   -> SpineStyle(modifier, neon, agentTint, agent, verb, t)
-        ConduitWorkingStyle.Packets -> PacketsStyle(modifier, neon, agentTint, agent, verb, t)
-        ConduitWorkingStyle.Mark    -> MarkStyle(modifier, neon, agent, t)
-        ConduitWorkingStyle.Prompt  -> PromptStyle(modifier, neon, agentTint, agent, verb, t)
+        ConduitWorkingStyle.Spine         -> SpineStyle(modifier, neon, agentTint, agent, verb, t)
+        ConduitWorkingStyle.Packets       -> PacketsStyle(modifier, neon, agentTint, agent, verb, t)
+        ConduitWorkingStyle.Mark          -> MarkStyle(modifier, neon, agent, t)
+        ConduitWorkingStyle.Prompt        -> PromptStyle(modifier, neon, agentTint, agent, verb, t)
+        ConduitWorkingStyle.PacketsPrompt -> PacketsPromptStyle(modifier, neon, agentTint, agent, verb, t)
+        ConduitWorkingStyle.PipedPrompt   -> PipedPromptStyle(modifier, neon, agentTint, agent, verb, t)
     }
 }
 
@@ -211,29 +216,7 @@ private fun PacketsStyle(
                     .border(1.dp, agentTint.copy(alpha = 0.36f), RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center,
             ) { AgentAvatar(assistant = agent, size = 16.dp) }
-            // The pipe: capsule with 3 packets flowing L->R.
-            Box(
-                Modifier
-                    .weight(1f)
-                    .height(26.dp)
-                    .glassCapsule()
-                    .drawBehind {
-                        val w = size.width
-                        for (i in 0..2) {
-                            val phase = ((t / 1.5f) + i / 3f) % 1f
-                            val alpha = when {
-                                phase < 0.12f -> phase / 0.12f
-                                phase > 0.88f -> (1f - phase) / 0.12f
-                                else -> 1f
-                            }
-                            drawCircle(
-                                color = (if (i % 2 == 0) neon.accent else neon.green).copy(alpha = alpha),
-                                radius = 3.dp.toPx(),
-                                center = Offset(phase * (w + 12.dp.toPx()) - 6.dp.toPx(), size.height / 2),
-                            )
-                        }
-                    },
-            )
+            PacketPipe(neon = neon, t = t, modifier = Modifier.weight(1f).height(26.dp))
         }
         Row(Modifier.padding(start = 40.dp)) {
             Text(agent, fontFamily = neon.mono, fontSize = 12.sp, color = agentTint)
@@ -310,17 +293,116 @@ private fun PromptStyle(
             .padding(horizontal = 13.dp, vertical = 11.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Row {
-            Text(agent, fontFamily = neon.mono, fontSize = 13.sp, color = agentTint)
-            Text("@prod", fontFamily = neon.mono, fontSize = 13.sp, color = neon.textFaint)
-            Text(" ~/broker", fontFamily = neon.mono, fontSize = 13.sp, color = neon.textFaint.copy(alpha = 0.6f))
-        }
+        PromptHeader(neon = neon, agentTint = agentTint, agent = agent)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("$ ", fontFamily = neon.mono, fontSize = 13.sp, color = neon.green)
             Text(verb, fontFamily = neon.mono, fontSize = 13.sp, color = neon.text)
             CaretBox(neon, t)
         }
     }
+}
+
+// E: packets AS the prompt command line
+@Composable
+private fun PacketsPromptStyle(
+    modifier: Modifier,
+    neon: NeonTheme,
+    agentTint: Color,
+    agent: String,
+    verb: String,
+    t: Float,
+) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(neon.codeBg)
+            .border(1.dp, neon.border, RoundedCornerShape(12.dp))
+            .padding(horizontal = 13.dp, vertical = 11.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        PromptHeader(neon = neon, agentTint = agentTint, agent = agent)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("$ ", fontFamily = neon.mono, fontSize = 13.sp, color = neon.green)
+            PacketPipe(neon = neon, t = t, modifier = Modifier.width(96.dp).height(20.dp))
+            Text(verb, fontFamily = neon.mono, fontSize = 12.sp, color = neon.textFaint)
+        }
+    }
+}
+
+// F: stacked pipe + prompt
+@Composable
+private fun PipedPromptStyle(
+    modifier: Modifier,
+    neon: NeonTheme,
+    agentTint: Color,
+    agent: String,
+    verb: String,
+    t: Float,
+) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(neon.codeBg)
+            .border(1.dp, neon.border, RoundedCornerShape(12.dp))
+            .padding(horizontal = 13.dp, vertical = 11.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        PromptHeader(neon = neon, agentTint = agentTint, agent = agent)
+        PacketPipe(neon = neon, t = t, modifier = Modifier.fillMaxWidth().height(22.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("$ ", fontFamily = neon.mono, fontSize = 13.sp, color = neon.green)
+            Text(verb, fontFamily = neon.mono, fontSize = 13.sp, color = neon.text)
+            CaretBox(neon, t)
+        }
+    }
+}
+
+// -- Shared atoms ------------------------------------------------------------------------
+
+/**
+ * Shared header line used by D/E/F: agent@prod ~/broker in mono tints.
+ * Mirrors iOS PromptHeader().
+ */
+@Composable
+private fun PromptHeader(neon: NeonTheme, agentTint: Color, agent: String) {
+    Row {
+        Text(agent, fontFamily = neon.mono, fontSize = 13.sp, color = agentTint)
+        Text("@prod", fontFamily = neon.mono, fontSize = 13.sp, color = neon.textFaint)
+        Text(" ~/broker", fontFamily = neon.mono, fontSize = 13.sp, color = neon.textFaint.copy(alpha = 0.6f))
+    }
+}
+
+/**
+ * Capsule pipe with 3 flowing packets. Extracted so B/E/F styles can reuse it
+ * at different sizes. Mirrors iOS PacketPipe(t:).
+ */
+@Composable
+private fun PacketPipe(neon: NeonTheme, t: Float, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .glassCapsule()
+            .drawBehind {
+                val w = size.width
+                for (i in 0..2) {
+                    val phase = ((t / 1.5f) + i / 3f) % 1f
+                    val alpha = when {
+                        phase < 0.12f -> phase / 0.12f
+                        phase > 0.88f -> (1f - phase) / 0.12f
+                        else -> 1f
+                    }
+                    drawCircle(
+                        color = (if (i % 2 == 0) neon.accent else neon.green).copy(alpha = alpha),
+                        radius = 3.dp.toPx(),
+                        center = Offset(phase * (w + 12.dp.toPx()) - 6.dp.toPx(), size.height / 2),
+                    )
+                }
+            },
+    )
 }
 
 @Composable
@@ -335,7 +417,7 @@ private fun CaretBox(neon: NeonTheme, t: Float) {
     )
 }
 
-// ── Preview ──────────────────────────────────────────────────────────────────────────────
+// -- Preview -----------------------------------------------------------------------------
 
 @Preview(showBackground = true, backgroundColor = 0xFF04050A)
 @Composable

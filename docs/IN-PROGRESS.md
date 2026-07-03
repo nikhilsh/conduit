@@ -9,6 +9,14 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
 
 ## Active
 
+- **Working indicator styles E+F (packets@prompt + piped prompt)** —
+  branch `feat/working-indicator-bd-combos`. Extracts `PacketPipe` atom from
+  style B, adds `packetsPrompt` (E) and `pipedPrompt` (F) to iOS
+  `ConduitWorkingStyle` enum + `WorkingIndicator` view; Android mirror adds
+  `PacketsPrompt`/`PipedPrompt` cases + `PacketPipe`/`PromptHeader` composables.
+  Debug-menu style picker auto-includes new cases via `allCases`/`.entries`.
+  Needs on-device verification.
+
 - **Pipeline gate handoff preview + editable handoff + named step branches** —
   broker (feat/pipeline-gate-broker) + apps (feat/pipeline-gate-apps).
   Broker: `GatePreview` on `Pipeline`, gate entry populates `gate` in
