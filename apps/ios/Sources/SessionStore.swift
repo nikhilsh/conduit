@@ -2042,6 +2042,12 @@ final class SessionStore {
     /// omit the block — every WS-H.2/H.3 consumer treats nil as "unknown".
     private(set) var brokerReadiness: BrokerReadiness?
 
+    /// Whether the broker supports the pipeline gate preview + handoff-edit
+    /// flow (`GET /api/capabilities` -> `"pipeline_gate_preview": true`).
+    /// False on old brokers that omit the key; consumers render the
+    /// pre-existing generic gate card when false.
+    private(set) var pipelineGatePreview: Bool = false
+
     /// Single-flight + at-most-once-per-(box,version) guard for the
     /// post-connect broker auto-update (Fix: broker auto-update on reconnect).
     /// `reconnect()`/`selectSavedServer()` short-circuit to a WS-only bounce
@@ -2070,6 +2076,7 @@ final class SessionStore {
             let models: [String: [ConduitUI.AgentModel]]?
             let agents: [String: AgentDescriptor]?
             let readiness: BrokerReadiness?
+            let pipeline_gate_preview: Bool?
         }
         Telemetry.breadcrumb(
             "model_catalog", "refresh start",
@@ -2108,6 +2115,9 @@ final class SessionStore {
                 "agent_descriptors", "no agents in capabilities (old broker)",
                 data: ["host": endpoint.displayHost])
         }
+        // pipeline_gate_preview capability: top-level boolean, default false on old brokers.
+        pipelineGatePreview = caps.pipeline_gate_preview ?? false
+
         // WS-H.1: parse the readiness block; nil on old brokers → consumers treat as unknown.
         if let r = caps.readiness {
             brokerReadiness = r
