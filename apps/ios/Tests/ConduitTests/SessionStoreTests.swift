@@ -573,6 +573,191 @@ struct SessionStoreTests {
         #expect(store.streamingTurnTs[sessionID] == nil,
             "turnActive=false status must clear streamingTurnTs")
     }
+
+    // MARK: - flushQueuedOnReply: belt-and-suspenders flush on live assistant reply
+
+    /// A queuedTurn entry IS delivered (removed from queue, echo created) when
+    /// a LIVE assistant reply arrives even though turn_active is still true
+    /// (simulates a missed or delayed status frame).
+    @Test func queuedTurnFlushedOnLiveAssistantReplyEvenWhenTurnStillActive() {
+        let store = SessionStore()
+        let sessionID = "test-flush-reply-\(UUID().uuidString)"
+        let turnTs = "2026-07-01T12:01:00.000Z"
+
+        // Seed turn_active=true via a status frame.
+        let activeStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "running",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: true,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(activeStatus)
+        #expect(store.isTurnActive(sessionID: sessionID))
+
+        // Seed an active streaming turn so shouldClearStreaming is true for a
+        // same-ts reply.
+        store.ingestChatStreaming(sessionID, payload: [
+            "content": "Streaming...",
+            "turn_ts": turnTs,
+        ])
+
+        // User sends a message while turn is active -- goes into QueuedNext.
+        store.sendChat(sessionID: sessionID, message: "queued message")
+        #expect(!store.pendingChats.queuedTurnEntries(for: sessionID).isEmpty,
+            "message must land in the queued-turn panel")
+
+        // A LIVE assistant reply arrives (same ts as streaming turn).
+        // turn_active is still true at this point (missed status frame).
+        let liveReply = ChatEvent(
+            role: "assistant",
+            content: "Assistant reply.",
+            ts: turnTs,
+            files: []
+        )
+        store.ingestChat(sessionID, liveReply)
+
+        // The queued entry must now be gone from the panel (delivered).
+        #expect(store.pendingChats.queuedTurnEntries(for: sessionID).isEmpty,
+            "queuedTurn entry must be flushed when a live assistant reply arrives")
+
+        // The echo must appear in the conversation log (sendChat was called).
+        let log = store.conversationLog[sessionID] ?? []
+        let userMessages = log.filter { $0.role == "user" }
+        #expect(userMessages.contains(where: { $0.content == "queued message" }),
+            "flushed message must have a user echo in the conversation log")
+    }
+
+    /// A REPLAYED (older-ts) assistant event must NOT flush the queued-turn entry
+    /// (shouldClearStreaming == false path).
+    @Test func queuedTurnNotFlushedOnReplayedOlderAssistantReply() {
+        let store = SessionStore()
+        let sessionID = "test-no-flush-replay-\(UUID().uuidString)"
+        let turnTs = "2026-07-01T12:01:00.000Z"
+
+        // Seed turn_active=true.
+        let activeStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "running",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: true,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(activeStatus)
+
+        // Active streaming turn at turnTs.
+        store.ingestChatStreaming(sessionID, payload: [
+            "content": "Live streaming...",
+            "turn_ts": turnTs,
+        ])
+
+        // User queues a message.
+        store.sendChat(sessionID: sessionID, message: "next question")
+        #expect(!store.pendingChats.queuedTurnEntries(for: sessionID).isEmpty)
+
+        // Broker replays an OLDER assistant message (ts < turnTs).
+        let replay = ChatEvent(
+            role: "assistant",
+            content: "Old reply from previous turn.",
+            ts: "2026-07-01T12:00:00.000Z",
+            files: []
+        )
+        store.ingestChat(sessionID, replay)
+
+        // The queued entry must still be there -- replay must NOT flush.
+        #expect(!store.pendingChats.queuedTurnEntries(for: sessionID).isEmpty,
+            "queued entry must NOT be flushed by a replayed older assistant reply")
+    }
+
+    /// No double-send: when both the reply-flush (flushQueuedOnReply) and the
+    /// subsequent turn_active->false status frame (flushQueuedOnTurnComplete)
+    /// fire, the second one is a no-op.
+    @Test func noDoubleSendWhenBothReplyFlushAndStatusFrameFire() {
+        let store = SessionStore()
+        let sessionID = "test-double-send-\(UUID().uuidString)"
+        let turnTs = "2026-07-01T12:02:00.000Z"
+
+        // Seed turn_active=true.
+        let activeStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "running",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: true,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(activeStatus)
+
+        store.ingestChatStreaming(sessionID, payload: [
+            "content": "Streaming...",
+            "turn_ts": turnTs,
+        ])
+
+        // Queue one message.
+        store.sendChat(sessionID: sessionID, message: "only once")
+        #expect(store.pendingChats.queuedTurnEntries(for: sessionID).count == 1)
+
+        // Trigger 1: live assistant reply flushes the entry.
+        let reply = ChatEvent(role: "assistant", content: "Reply.", ts: turnTs, files: [])
+        store.ingestChat(sessionID, reply)
+        #expect(store.pendingChats.queuedTurnEntries(for: sessionID).isEmpty,
+            "entry must be flushed after reply")
+
+        // Capture how many user echoes exist after the reply-flush.
+        let echoCountAfterReply = (store.conversationLog[sessionID] ?? []).filter { $0.role == "user" }.count
+
+        // Trigger 2: status frame reporting turn_active false (the normal path).
+        let idleStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "idle",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: false,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(idleStatus)
+
+        // No additional echo must appear -- flushQueuedOnTurnComplete returned nil.
+        let echoCountAfterStatus = (store.conversationLog[sessionID] ?? []).filter { $0.role == "user" }.count
+        #expect(echoCountAfterStatus == echoCountAfterReply,
+            "status frame after reply-flush must not create a duplicate echo")
+    }
+
+    /// bypassTurnGate=false (default) keeps existing callers byte-identical:
+    /// a message sent while turn_active=true still goes to the queued panel.
+    @Test func bypassTurnGateDefaultFalseKeepsQueueGateBehavior() {
+        let store = SessionStore()
+        let sessionID = "test-bypass-default-\(UUID().uuidString)"
+
+        let activeStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "running",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: true,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(activeStatus)
+        #expect(store.isTurnActive(sessionID: sessionID))
+
+        // Default sendChat (bypassTurnGate=false) must queue.
+        store.sendChat(sessionID: sessionID, message: "should be queued")
+        #expect(!store.pendingChats.queuedTurnEntries(for: sessionID).isEmpty,
+            "default sendChat must still queue when turn is active")
+
+        // Explicit bypassTurnGate=true must bypass the queue.
+        store.sendChat(sessionID: sessionID, message: "should bypass", bypassTurnGate: true)
+        let log = store.conversationLog[sessionID] ?? []
+        #expect(log.contains(where: { $0.content == "should bypass" && $0.role == "user" }),
+            "bypassTurnGate=true must create an echo even when turn_active=true")
+    }
 }
 
 /// `restore-chat-on-reattach` — pins the conversation merge that splices a

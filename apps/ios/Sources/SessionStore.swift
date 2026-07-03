@@ -4015,7 +4015,7 @@ final class SessionStore {
         attemptDeliver(sessionID: sessionID, localID: localID, message: message)
     }
 
-    func sendChat(sessionID: String, message: String) {
+    func sendChat(sessionID: String, message: String, bypassTurnGate: Bool = false) {
         // §D: a fresh user turn is the retry — drop any standing agent-auth
         // failure flag so the "Sign in on this box" banner clears. If the
         // retry 401s again, the next assistant/result line re-sets it.
@@ -4056,7 +4056,10 @@ final class SessionStore {
         // (supports.steer), queue AND immediately attempt a steer so the
         // message is injected into the running turn. For all other agents
         // (claude, etc.), hold it and auto-send when the turn ends.
-        if isTurnActive(sessionID: sessionID) {
+        // bypassTurnGate=true is used by flushQueuedOnReply to deliver a
+        // queued message even when turn_active has not yet flipped false (the
+        // assistant reply is itself proof the turn ended).
+        if !bypassTurnGate, isTurnActive(sessionID: sessionID) {
             sendChatQueued(sessionID: sessionID, message: message)
             return
         }
@@ -4240,6 +4243,25 @@ final class SessionStore {
         // Route through the full sendChat path so the optimistic echo is
         // created and the message is persisted via the normal enqueue(.normal).
         sendChat(sessionID: sessionID, message: entry.message)
+    }
+
+    /// Belt-and-suspenders flush called when a LIVE (not replayed) assistant
+    /// reply arrives. A settled assistant reply is proof the turn ended, so we
+    /// deliver the oldest queued-turn entry here even if the status frame
+    /// reporting turn_active=false has not arrived yet (missed/delayed frame).
+    /// Idempotent with flushQueuedOnTurnComplete: markDelivered removes the
+    /// entry before re-sending, so whichever trigger fires second finds nil and
+    /// is a no-op. The broker also dedups by client_msg_id.
+    func flushQueuedOnReply(sessionID: String) {
+        guard let entry = pendingChats.flushOnTurnComplete(sessionID: sessionID) else { return }
+        Telemetry.breadcrumb("chat", "flush-on-reply",
+            data: ["session": sessionID, "local_id": entry.localID,
+                   "kind": entry.kind.rawValue])
+        // Remove BEFORE re-sending so the queue never holds a duplicate.
+        pendingChats.markDelivered(sessionID: sessionID, localID: entry.localID)
+        // bypassTurnGate=true: the reply proves the turn is done even if
+        // turn_active is still true in memory at this instant.
+        sendChat(sessionID: sessionID, message: entry.message, bypassTurnGate: true)
     }
 
     /// True when a send/deliver error means the broker no longer knows this
@@ -5143,6 +5165,12 @@ final class SessionStore {
                 streamingMessage[sessionID] = nil
                 turnPhaseBySession[sessionID] = nil
                 streamingTurnTs[sessionID] = nil
+                // Belt-and-suspenders: flush the oldest queued-turn entry now
+                // that we know the turn settled (the reply IS the proof). This
+                // handles the case where the status frame reporting
+                // turn_active=false was missed or delayed across a reconnect.
+                // Idempotent with flushQueuedOnTurnComplete (second call gets nil).
+                flushQueuedOnReply(sessionID: sessionID)
             } else {
                 Telemetry.breadcrumb("streaming", "replay skipped clear",
                     data: ["session": sessionID, "event_ts": event.ts,
