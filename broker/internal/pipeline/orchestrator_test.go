@@ -11,13 +11,14 @@ import (
 
 // fakeSession holds the state of a session created by the fake manager.
 type fakeSession struct {
-	agentType string
-	cwd       string
-	prompt    string
-	branch    string
-	phase     string
-	worktree  string
-	lastText  string
+	agentType    string
+	cwd          string
+	prompt       string
+	branch       string
+	phase        string
+	worktree     string
+	lastText     string
+	turnComplete bool // simulates structured-chat turn completion
 }
 
 // fakeSessionManager is a test double for SessionManager.
@@ -69,6 +70,14 @@ func (f *fakeSessionManager) GetLastAssistantText(sessionID string) string {
 		return ""
 	}
 	return s.lastText
+}
+
+func (f *fakeSessionManager) TurnComplete(sessionID string) bool {
+	s, ok := f.sessions[sessionID]
+	if !ok {
+		return false
+	}
+	return s.turnComplete && s.lastText != ""
 }
 
 func (f *fakeSessionManager) CancelSession(sessionID string) error {
@@ -563,5 +572,487 @@ func TestGateNilSerializesOmitted(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"gate"`) {
 		t.Errorf("gate field present in JSON when nil; got %s", string(data))
+	}
+}
+
+// ── TurnComplete signal tests ─────────────────────────────────────────────────
+
+// TestTurnCompleteAdvancesStep verifies that pollStep (via Advance with
+// "turn_complete") correctly advances a step when TurnComplete returns true.
+// This is the fix for structured-chat sessions (claude) that never exited.
+func TestTurnCompleteAdvancesStep(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone},
+		{Index: 1, AgentType: "claude", PromptTemplate: "step 1", InputFromPrev: InputNone},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep(0): %v", err)
+	}
+	sessID := p.Steps[0].SessionID
+
+	// Simulate turn complete: phase stays "running", but lastText set + turnComplete.
+	sm.sessions[sessID].lastText = "done"
+	sm.sessions[sessID].turnComplete = true
+	// phase is still "running" (not exited) — this is the claude case.
+	sm.sessions[sessID].phase = "running"
+
+	// Advance with "turn_complete" phase signal.
+	if err := orch.Advance(p, 0, "turn_complete"); err != nil {
+		t.Fatalf("Advance(turn_complete): %v", err)
+	}
+
+	// Pipeline should advance to running step 1.
+	if p.State != PipelineRunning {
+		t.Errorf("state=%s, want running", p.State)
+	}
+	if p.CurrentStep != 1 {
+		t.Errorf("current_step=%d, want 1", p.CurrentStep)
+	}
+	// Session must NOT be cancelled (kept alive for BuildPrev/GatePreview/inspect).
+	if sm.sessions[sessID].phase == "cancelled" {
+		t.Error("step 0 session was cancelled — must be kept alive for downstream reads")
+	}
+}
+
+// TestTurnCompleteNoReplyDoesNotAdvance verifies that TurnComplete returns
+// false when turn_active is false but no assistant reply exists yet
+// (pre-first-turn window).
+func TestTurnCompleteNoReplyDoesNotAdvance(t *testing.T) {
+	sm := newFakeSessionManager()
+	// Synthesize a session with turnComplete=true but lastText="" — the guard.
+	sm.nextID++
+	id := strings.Repeat("0", 7) + string(rune('0'+sm.nextID))
+	sm.sessions[id] = &fakeSession{
+		phase:        "running",
+		turnComplete: true,
+		lastText:     "", // no reply yet
+	}
+	if sm.TurnComplete(id) {
+		t.Error("TurnComplete returned true with no assistant reply; want false")
+	}
+}
+
+// TestTurnCompleteWithGateEntry verifies that a turn_complete advance with
+// gate_after=true populates GatePreview correctly.
+func TestTurnCompleteWithGateEntry(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone, GateAfter: true},
+		{Index: 1, AgentType: "claude", PromptTemplate: "step 1: {{prev}}", InputFromPrev: InputOutput},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep(0): %v", err)
+	}
+	sm.sessions[p.Steps[0].SessionID].lastText = "turn output"
+
+	if err := orch.Advance(p, 0, "turn_complete"); err != nil {
+		t.Fatalf("Advance(turn_complete): %v", err)
+	}
+
+	if p.State != PipelineAwaitingGate {
+		t.Fatalf("state=%s, want awaiting_gate", p.State)
+	}
+	if p.Gate == nil {
+		t.Fatal("Gate is nil after turn_complete gate entry")
+	}
+	if p.Gate.Output != "turn output" {
+		t.Errorf("Gate.Output=%q, want %q", p.Gate.Output, "turn output")
+	}
+}
+
+// ── Fanout step tests ─────────────────────────────────────────────────────────
+
+// TestFanoutSpawnsNRuns verifies that spawnFanout creates count sessions
+// with -run-<i> branches and that step.SessionID is empty until pick.
+func TestFanoutSpawnsNRuns(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			Fanout: &FanoutConfig{
+				Count:      3,
+				AgentTypes: []string{"claude", "codex", "opencode"},
+			},
+		},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep: %v", err)
+	}
+
+	// Must have spawned exactly 3 sessions.
+	if len(sm.created) != 3 {
+		t.Fatalf("expected 3 CreateSession calls; got %d", len(sm.created))
+	}
+
+	// Verify branch names.
+	for i, c := range sm.created {
+		want := "pipeline-" + p.ID + "-step-0-run-" + string(rune('0'+i))
+		if c.branch != want {
+			t.Errorf("run %d branch=%q, want %q", i, c.branch, want)
+		}
+	}
+
+	// Step.SessionID must be empty until pick.
+	if p.Steps[0].SessionID != "" {
+		t.Errorf("step.SessionID=%q, want empty before pick", p.Steps[0].SessionID)
+	}
+
+	// Fanout.Runs must be populated.
+	fc := p.Steps[0].Fanout
+	if len(fc.Runs) != 3 {
+		t.Fatalf("fanout.Runs len=%d, want 3", len(fc.Runs))
+	}
+	for i, run := range fc.Runs {
+		if run.Phase != "running" {
+			t.Errorf("run %d Phase=%q, want running", i, run.Phase)
+		}
+		if run.SessionID == "" {
+			t.Errorf("run %d SessionID is empty", i)
+		}
+	}
+}
+
+// TestFanoutAllFailedIsFailed verifies that when every run exits non-zero
+// the pipeline transitions to FAILED.
+func TestFanoutAllFailedIsFailed(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			Fanout:         &FanoutConfig{Count: 2},
+		},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep: %v", err)
+	}
+
+	// Set all runs to failed.
+	for _, run := range p.Steps[0].Fanout.Runs {
+		sm.sessions[run.SessionID].phase = "exited(1)"
+	}
+	// Manually settle the runs (simulating pollFanout seeing all settled).
+	for i := range p.Steps[0].Fanout.Runs {
+		p.Steps[0].Fanout.Runs[i].Phase = "exited(1)"
+	}
+
+	if err := orch.advanceFanout(p, 0); err != nil {
+		t.Fatalf("advanceFanout: %v", err)
+	}
+
+	if p.State != PipelineFailed {
+		t.Errorf("state=%s, want failed", p.State)
+	}
+}
+
+// TestFanoutPartialFailureAwaitsPick verifies that when at least one run
+// exits(0) the pipeline enters AWAITING_PICK.
+func TestFanoutPartialFailureAwaitsPick(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			Fanout:         &FanoutConfig{Count: 3},
+		},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep: %v", err)
+	}
+
+	// Run 0: success; run 1: failed; run 2: success.
+	p.Steps[0].Fanout.Runs[0].Phase = "exited(0)"
+	p.Steps[0].Fanout.Runs[1].Phase = "exited(1)"
+	p.Steps[0].Fanout.Runs[2].Phase = "turn_complete"
+
+	if err := orch.advanceFanout(p, 0); err != nil {
+		t.Fatalf("advanceFanout: %v", err)
+	}
+
+	if p.State != PipelineAwaitingPick {
+		t.Errorf("state=%s, want awaiting_pick", p.State)
+	}
+}
+
+// TestPickSetsWinnerAndAdvances verifies that Pick sets fanout.winner,
+// step.session_id, and spawns the next step when there is no gate.
+func TestPickSetsWinnerAndAdvances(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			Fanout:         &FanoutConfig{Count: 2},
+		},
+		{Index: 1, AgentType: "claude", PromptTemplate: "step 1", InputFromPrev: InputNone},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep: %v", err)
+	}
+
+	run0SessID := p.Steps[0].Fanout.Runs[0].SessionID
+	run1SessID := p.Steps[0].Fanout.Runs[1].SessionID
+	_ = run1SessID
+
+	// Settle both runs; run 0 wins.
+	p.Steps[0].Fanout.Runs[0].Phase = "exited(0)"
+	p.Steps[0].Fanout.Runs[1].Phase = "exited(0)"
+	p.State = PipelineAwaitingPick
+
+	if err := orch.Pick(p, 0); err != nil {
+		t.Fatalf("Pick(0): %v", err)
+	}
+
+	// Winner must be set.
+	if p.Steps[0].Fanout.Winner == nil || *p.Steps[0].Fanout.Winner != 0 {
+		t.Errorf("Fanout.Winner=%v, want 0", p.Steps[0].Fanout.Winner)
+	}
+	// step.SessionID must equal run 0's session ID.
+	if p.Steps[0].SessionID != run0SessID {
+		t.Errorf("step.SessionID=%q, want %q (run 0)", p.Steps[0].SessionID, run0SessID)
+	}
+	// Pipeline must advance to step 1.
+	if p.CurrentStep != 1 {
+		t.Errorf("current_step=%d, want 1", p.CurrentStep)
+	}
+	if p.State != PipelineRunning {
+		t.Errorf("state=%s, want running", p.State)
+	}
+}
+
+// TestPickRejectsFailedRun verifies that picking a non-exited(0) run → ErrRunFailed.
+func TestPickRejectsFailedRun(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			Fanout:         &FanoutConfig{Count: 2},
+		},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep: %v", err)
+	}
+
+	p.Steps[0].Fanout.Runs[0].Phase = "exited(0)"
+	p.Steps[0].Fanout.Runs[1].Phase = "exited(1)"
+	p.State = PipelineAwaitingPick
+
+	if err := orch.Pick(p, 1); !errors.Is(err, ErrRunFailed) {
+		t.Errorf("Pick(1) err=%v, want ErrRunFailed", err)
+	}
+}
+
+// TestPickRejectsOutOfRange verifies that an out-of-range run index returns an error.
+func TestPickRejectsOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			Fanout:         &FanoutConfig{Count: 2},
+		},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep: %v", err)
+	}
+	p.Steps[0].Fanout.Runs[0].Phase = "exited(0)"
+	p.Steps[0].Fanout.Runs[1].Phase = "exited(0)"
+	p.State = PipelineAwaitingPick
+
+	if err := orch.Pick(p, 5); err == nil {
+		t.Error("Pick(5) returned nil error; want out-of-range error")
+	}
+	if err := orch.Pick(p, -1); err == nil {
+		t.Error("Pick(-1) returned nil error; want out-of-range error")
+	}
+}
+
+// TestPickNotAtPick verifies that Pick when not in awaiting_pick returns ErrNotAtPick.
+func TestPickNotAtPick(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone},
+	})
+	p.State = PipelineRunning
+
+	if err := orch.Pick(p, 0); !errors.Is(err, ErrNotAtPick) {
+		t.Errorf("Pick on running state: got %v, want ErrNotAtPick", err)
+	}
+}
+
+// TestFanoutGateAfterEntersGateWithWinnerPreview verifies that when a fanout
+// step has gate_after=true, picking the winner transitions to AWAITING_GATE
+// with a GatePreview computed from the winner's session.
+func TestFanoutGateAfterEntersGateWithWinnerPreview(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			GateAfter:      true,
+			Fanout:         &FanoutConfig{Count: 2},
+		},
+		{Index: 1, AgentType: "claude", PromptTemplate: "{{prev}}", InputFromPrev: InputOutput},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep: %v", err)
+	}
+
+	winnerSessID := p.Steps[0].Fanout.Runs[0].SessionID
+	sm.sessions[winnerSessID].lastText = "winner output"
+
+	p.Steps[0].Fanout.Runs[0].Phase = "exited(0)"
+	p.Steps[0].Fanout.Runs[1].Phase = "exited(0)"
+	p.State = PipelineAwaitingPick
+
+	if err := orch.Pick(p, 0); err != nil {
+		t.Fatalf("Pick(0): %v", err)
+	}
+
+	if p.State != PipelineAwaitingGate {
+		t.Fatalf("state=%s, want awaiting_gate", p.State)
+	}
+	if p.Gate == nil {
+		t.Fatal("Gate is nil after fanout pick with gate_after=true")
+	}
+	if p.Gate.Output != "winner output" {
+		t.Errorf("Gate.Output=%q, want %q", p.Gate.Output, "winner output")
+	}
+	if p.Steps[0].SessionID != winnerSessID {
+		t.Errorf("step.SessionID=%q, want winner=%q", p.Steps[0].SessionID, winnerSessID)
+	}
+}
+
+// TestCancelKillsAllFanoutRuns verifies that Cancel during a fanout step
+// kills every live run session.
+func TestCancelKillsAllFanoutRuns(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			Fanout:         &FanoutConfig{Count: 3},
+		},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep: %v", err)
+	}
+
+	runSessIDs := make([]string, 3)
+	for i, run := range p.Steps[0].Fanout.Runs {
+		runSessIDs[i] = run.SessionID
+	}
+
+	p.State = PipelineRunning
+	if err := orch.Cancel(p); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	if p.State != PipelineCancelled {
+		t.Errorf("state=%s, want cancelled", p.State)
+	}
+	for i, sessID := range runSessIDs {
+		if sm.sessions[sessID].phase != "cancelled" {
+			t.Errorf("run %d session %s not cancelled (phase=%q)", i, sessID, sm.sessions[sessID].phase)
+		}
+	}
+}
+
+// TestFanoutJSONRoundtrip verifies FanoutConfig + Winner survive a Save/Load.
+func TestFanoutJSONRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	winner := 1
+	p := &Pipeline{
+		ID:    "p_fanout01",
+		Title: "fanout roundtrip",
+		State: PipelineAwaitingPick,
+		Steps: []Step{
+			{
+				Index: 0,
+				Fanout: &FanoutConfig{
+					Count:      2,
+					AgentTypes: []string{"claude", "codex"},
+					Runs: []FanoutRun{
+						{Index: 0, Phase: "exited(0)", SessionID: "s_a"},
+						{Index: 1, Phase: "turn_complete", SessionID: "s_b"},
+					},
+					Winner: &winner,
+				},
+			},
+		},
+	}
+	if err := p.Save(dir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := Load(dir, p.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Steps[0].Fanout == nil {
+		t.Fatal("Fanout nil after Load")
+	}
+	fc := got.Steps[0].Fanout
+	if fc.Count != 2 {
+		t.Errorf("Count=%d, want 2", fc.Count)
+	}
+	if fc.Winner == nil || *fc.Winner != 1 {
+		t.Errorf("Winner=%v, want 1", fc.Winner)
+	}
+	if len(fc.Runs) != 2 || fc.Runs[1].Phase != "turn_complete" {
+		t.Errorf("Runs=%+v", fc.Runs)
 	}
 }

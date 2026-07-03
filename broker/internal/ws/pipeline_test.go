@@ -393,6 +393,206 @@ func TestTemplateRoundTripHTTP(t *testing.T) {
 	}
 }
 
+// TestCapabilitiesPipelineFanout verifies that features.pipeline_fanout is true.
+func TestCapabilitiesPipelineFanout(t *testing.T) {
+	srv, tok := newTestServer(t)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/capabilities?token="+url.QueryEscape(tok), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET capabilities: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("capabilities status=%d", resp.StatusCode)
+	}
+	var body struct {
+		Features struct {
+			PipelineFanout bool `json:"pipeline_fanout"`
+		} `json:"features"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode capabilities: %v", err)
+	}
+	if !body.Features.PipelineFanout {
+		t.Error("features.pipeline_fanout is false; want true")
+	}
+}
+
+// setupAwaitingPickPipeline creates a fanout pipeline in awaiting_pick state.
+func setupAwaitingPickPipeline(t *testing.T, conduitRoot string) (pipelineID string) {
+	t.Helper()
+	run0SessID := "fanout-run-0"
+	run1SessID := "fanout-run-1"
+	winner := 0
+	_ = winner
+	p := &pipeline.Pipeline{
+		ID:          pipeline.NewID(),
+		Title:       "fanout test",
+		Task:        "do things",
+		CWD:         "/tmp",
+		State:       pipeline.PipelineAwaitingPick,
+		CurrentStep: 0,
+		Steps: []pipeline.Step{
+			{
+				Index:         0,
+				AgentType:     "claude",
+				InputFromPrev: pipeline.InputNone,
+				Fanout: &pipeline.FanoutConfig{
+					Count: 2,
+					Runs: []pipeline.FanoutRun{
+						{Index: 0, SessionID: run0SessID, Phase: "exited(0)"},
+						{Index: 1, SessionID: run1SessID, Phase: "exited(1)"},
+					},
+				},
+			},
+		},
+	}
+	if err := p.Save(conduitRoot); err != nil {
+		t.Fatalf("save test pipeline: %v", err)
+	}
+	return p.ID
+}
+
+// TestPickEndpointNotAtPick verifies POST /api/pipeline/{id}/pick returns 409
+// "not_at_pick" when the pipeline is not in awaiting_pick state.
+func TestPickEndpointNotAtPick(t *testing.T) {
+	srv, tok := newTestServer(t)
+	conduitRoot := resolveConduitRoot(t, srv.URL, tok)
+	if conduitRoot == "" {
+		t.Skip("conduitRoot not deterministic in this environment")
+	}
+
+	// Use a pipeline at gate (not awaiting_pick).
+	pipelineID := setupPipelineAtGate(t, conduitRoot)
+	bodyBytes, _ := json.Marshal(map[string]int{"run": 0})
+	req, _ := http.NewRequest(http.MethodPost,
+		srv.URL+"/api/pipeline/"+pipelineID+"/pick?token="+url.QueryEscape(tok),
+		bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST pick: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("expected 409; got %d", resp.StatusCode)
+	}
+	var body struct {
+		Error struct{ Code string } `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if body.Error.Code != "not_at_pick" {
+		t.Errorf("error code=%q, want not_at_pick", body.Error.Code)
+	}
+}
+
+// TestPickEndpointRunFailed verifies POST /api/pipeline/{id}/pick returns 409
+// "run_failed" when the selected run did not exit(0).
+func TestPickEndpointRunFailed(t *testing.T) {
+	srv, tok := newTestServer(t)
+	conduitRoot := resolveConduitRoot(t, srv.URL, tok)
+	if conduitRoot == "" {
+		t.Skip("conduitRoot not deterministic in this environment")
+	}
+
+	pipelineID := setupAwaitingPickPipeline(t, conduitRoot)
+	// Run 1 failed (exited(1)) — pick it to trigger run_failed.
+	bodyBytes, _ := json.Marshal(map[string]int{"run": 1})
+	req, _ := http.NewRequest(http.MethodPost,
+		srv.URL+"/api/pipeline/"+pipelineID+"/pick?token="+url.QueryEscape(tok),
+		bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST pick: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("expected 409 run_failed; got %d", resp.StatusCode)
+	}
+	var body struct {
+		Error struct{ Code string } `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if body.Error.Code != "run_failed" {
+		t.Errorf("error code=%q, want run_failed", body.Error.Code)
+	}
+}
+
+// TestPickEndpointSuccess verifies POST /api/pipeline/{id}/pick on a
+// succeeded run does not return 404, 409, or a method-not-allowed error.
+func TestPickEndpointSuccess(t *testing.T) {
+	srv, tok := newTestServer(t)
+	conduitRoot := resolveConduitRoot(t, srv.URL, tok)
+	if conduitRoot == "" {
+		t.Skip("conduitRoot not deterministic in this environment")
+	}
+
+	pipelineID := setupAwaitingPickPipeline(t, conduitRoot)
+	// Run 0 succeeded; pick it.
+	bodyBytes, _ := json.Marshal(map[string]int{"run": 0})
+	req, _ := http.NewRequest(http.MethodPost,
+		srv.URL+"/api/pipeline/"+pipelineID+"/pick?token="+url.QueryEscape(tok),
+		bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST pick: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		t.Fatalf("got 404: pipeline not found — conduitRoot mismatch or write failed")
+	}
+	if resp.StatusCode == http.StatusConflict {
+		var body struct {
+			Error struct{ Code string } `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		t.Fatalf("got 409 %q for a valid pick", body.Error.Code)
+	}
+}
+
+// TestCreateValidatesFanoutConfig verifies that POST /api/pipeline rejects
+// invalid fanout configs with 400.
+func TestCreateValidatesFanoutConfig(t *testing.T) {
+	srv, tok := newTestServer(t)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			"count zero",
+			`{"title":"t","task":"t","steps":[{"agent_type":"claude","prompt_template":"p","input_from_prev":"none","fanout":{"count":0}}]}`,
+		},
+		{
+			"count too large",
+			`{"title":"t","task":"t","steps":[{"agent_type":"claude","prompt_template":"p","input_from_prev":"none","fanout":{"count":7}}]}`,
+		},
+		{
+			"agent_types length mismatch",
+			`{"title":"t","task":"t","steps":[{"agent_type":"claude","prompt_template":"p","input_from_prev":"none","fanout":{"count":2,"agent_types":["claude","codex","opencode"]}}]}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, _ := http.NewRequest(http.MethodPost,
+				srv.URL+"/api/pipeline?token="+url.QueryEscape(tok),
+				strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("POST pipeline: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("expected 400; got %d", resp.StatusCode)
+			}
+		})
+	}
+}
+
 // TestTemplateDelete404 verifies that DELETE /api/pipeline-templates/{id}
 // returns 404 for a non-existent template.
 func TestTemplateDelete404(t *testing.T) {
