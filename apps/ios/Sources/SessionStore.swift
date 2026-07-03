@@ -396,6 +396,12 @@ extension StoredEndpoint: Codable {}
 struct AgentDescriptorSupports: Decodable, Equatable {
     /// Whether `/compact` is available for this agent.
     var compact: Bool
+    /// Whether `/clear` (in-session context reset) is available. Optional:
+    /// `nil` means the broker is too old to state it, so callers fall back to
+    /// `compact` as a proxy (any backend with compact almost certainly also
+    /// clears). Distinct from `compact` because a backend can support one
+    /// without the other (broker `BackendCapabilities.Clear`, PR #844).
+    var clear: Bool?
     /// Whether `ask_user_question` is supported.
     var askUserQuestion: Bool
     /// Whether the reasoning-effort dial / picker should be shown.
@@ -412,6 +418,7 @@ struct AgentDescriptorSupports: Decodable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case compact
+        case clear
         case askUserQuestion = "ask_user_question"
         case effort
         case planMode = "plan_mode"
@@ -421,6 +428,7 @@ struct AgentDescriptorSupports: Decodable, Equatable {
 
     init(
         compact: Bool = false,
+        clear: Bool? = nil,
         askUserQuestion: Bool = false,
         effort: Bool = true,
         planMode: Bool = false,
@@ -428,6 +436,7 @@ struct AgentDescriptorSupports: Decodable, Equatable {
         steer: Bool = false
     ) {
         self.compact = compact
+        self.clear = clear
         self.askUserQuestion = askUserQuestion
         self.effort = effort
         self.planMode = planMode
@@ -438,6 +447,7 @@ struct AgentDescriptorSupports: Decodable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         compact         = try c.decodeIfPresent(Bool.self, forKey: .compact)         ?? false
+        clear           = try c.decodeIfPresent(Bool.self, forKey: .clear)
         askUserQuestion = try c.decodeIfPresent(Bool.self, forKey: .askUserQuestion) ?? false
         effort          = try c.decodeIfPresent(Bool.self, forKey: .effort)          ?? true
         planMode        = try c.decodeIfPresent(Bool.self, forKey: .planMode)        ?? false
@@ -4005,6 +4015,21 @@ final class SessionStore {
         // through to the normal send below; app-handled ones are handled
         // here and we return early. See docs/SLASH-COMMANDS.md.
         if handleSlashCommand(sessionID: sessionID, message: message) { return }
+
+        // Diagnostic: capture the routing-decision inputs for EVERY delivered
+        // send so a message that silently gets queued behind a stuck turn, or
+        // consumed as an answer to a stale pending-ask, is reconstructable from
+        // Sentry without a repro. This is the "no replies after /clear" device
+        // report (#844 verification): the reply path is proven healthy, so the
+        // failure is a mis-route here — record which branch we're about to take.
+        // Cheap: ring-buffered breadcrumb, attached to the next captured event.
+        Telemetry.breadcrumb("chat", "send routing", data: [
+            "session": sessionID,
+            "turn_active": isTurnActive(sessionID: sessionID) ? "1" : "0",
+            "pending_ask": hasPendingAsk(sessionID: sessionID) ? "1" : "0",
+            "has_client": clientForSession(sessionID) != nil ? "1" : "0",
+            "is_slash": message.hasPrefix("/") ? "1" : "0",
+        ])
 
         // ELICITATION BYPASS: if the session is blocked on a pending
         // AskUserQuestion, the answer MUST bypass the turn-queue gate and

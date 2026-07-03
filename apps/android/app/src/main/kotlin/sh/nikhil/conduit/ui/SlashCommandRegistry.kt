@@ -64,12 +64,20 @@ object SlashCommandRegistry {
      * Returns null when [input] isn't a recognised slash command (so the
      * caller sends it as a normal chat message).
      *
-     * [supportsCompact] is the broker-provided capability flag for the
-     * agent's compact support. When non-null it overrides the static
-     * `agent == "claude"` check for [SlashCommand.claudeOnly] commands.
-     * null = fall back to the static check (old broker / unknown agent).
+     * [supportsCompact] / [supportsClear] are the broker-provided capability
+     * flags. Each [SlashCommand.claudeOnly] pass-through is gated on ITS OWN
+     * capability — `/clear` on [supportsClear], everything else on
+     * [supportsCompact] — rather than a single shared flag, so a backend that
+     * supports one but not the other is judged correctly. [supportsClear] falls
+     * back to [supportsCompact] when null (broker too old to state it). A null
+     * capability ultimately falls back to the static `agent == "claude"` check.
      */
-    fun classify(input: String, agent: String, supportsCompact: Boolean? = null): SlashCommandMatch? {
+    fun classify(
+        input: String,
+        agent: String,
+        supportsCompact: Boolean? = null,
+        supportsClear: Boolean? = null,
+    ): SlashCommandMatch? {
         val trimmed = input.trimStart()
         if (!trimmed.startsWith("/")) return null
         val body = trimmed.substring(1)
@@ -77,8 +85,12 @@ object SlashCommandRegistry {
         if (name.isEmpty()) return null
         val cmd = lookup(name) ?: return null
         val args = body.drop(name.length).trim()
+        val staticClaude = agent.equals("claude", ignoreCase = true)
         val supported = if (cmd.claudeOnly) {
-            supportsCompact ?: agent.equals("claude", ignoreCase = true)
+            when (cmd.name) {
+                "clear" -> supportsClear ?: supportsCompact ?: staticClaude
+                else -> supportsCompact ?: staticClaude
+            }
         } else {
             true
         }
