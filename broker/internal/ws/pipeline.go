@@ -8,6 +8,7 @@ package ws
 //	GET    /api/pipeline/{id}          full pipeline.json (poll for live state)
 //	POST   /api/pipeline/{id}/continue advance past AWAITING_GATE; 409 if not at gate
 //	POST   /api/pipeline/{id}/resume   re-spawn failed step; 409 if not failed
+//	POST   /api/pipeline/{id}/pick     pick fanout winner; 409 if not awaiting_pick
 //	DELETE /api/pipeline/{id}          cancel; kills live child; state → CANCELLED
 //	GET    /api/pipelines              list: [{id, title, state, current_step, step_count}]
 //
@@ -72,6 +73,31 @@ func (p *pipelineSessionManager) GetWorktreeDir(sessionID string) string {
 	return sess.WorkspaceDir()
 }
 
+func (p *pipelineSessionManager) TurnComplete(sessionID string) bool {
+	sess, ok := p.m.Get(sessionID)
+	if !ok {
+		return false
+	}
+	// A turn is "complete" when the structured-chat backend's turn is not
+	// active AND the session has produced at least one assistant reply.
+	// The assistant-reply guard prevents a false positive in the
+	// pre-first-turn window where turn_active is also false before the
+	// initial prompt lands.
+	if sess.TurnActive() {
+		return false
+	}
+	entries, err := p.m.ConversationLog(sessionID)
+	if err != nil {
+		return false
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Role == "assistant" {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *pipelineSessionManager) GetLastAssistantText(sessionID string) string {
 	entries, err := p.m.ConversationLog(sessionID)
 	if err != nil || len(entries) == 0 {
@@ -118,12 +144,21 @@ func (s *Server) pipelineOrchestrator() *pipeline.Orchestrator {
 
 // ── POST /api/pipeline ──────────────────────────────────────────────────────
 
+// fanoutStepReq is the optional "fanout" object within a step in the create
+// request. Its presence makes the step a fanout step.
+type fanoutStepReq struct {
+	Count      int      `json:"count"`
+	AgentTypes []string `json:"agent_types,omitempty"`
+}
+
 type createPipelineStepRequest struct {
 	AgentType      string                 `json:"agent_type"`
 	Role           string                 `json:"role"`
 	PromptTemplate string                 `json:"prompt_template"`
 	InputFromPrev  pipeline.InputFromPrev `json:"input_from_prev"`
 	GateAfter      bool                   `json:"gate_after"`
+	// Fanout, when present, declares this step as a fanout step.
+	Fanout *fanoutStepReq `json:"fanout,omitempty"`
 }
 
 type createPipelineRequest struct {
@@ -174,7 +209,7 @@ func (s *Server) serveCreatePipeline(w http.ResponseWriter, r *http.Request) {
 		Steps:   make([]pipeline.Step, len(req.Steps)),
 	}
 	for i, rs := range req.Steps {
-		p.Steps[i] = pipeline.Step{
+		step := pipeline.Step{
 			Index:          i,
 			AgentType:      strings.TrimSpace(rs.AgentType),
 			Role:           strings.TrimSpace(rs.Role),
@@ -182,9 +217,32 @@ func (s *Server) serveCreatePipeline(w http.ResponseWriter, r *http.Request) {
 			InputFromPrev:  rs.InputFromPrev,
 			GateAfter:      rs.GateAfter,
 		}
-		if p.Steps[i].AgentType == "" {
-			p.Steps[i].AgentType = "claude"
+		if step.AgentType == "" {
+			step.AgentType = "claude"
 		}
+		if rs.Fanout != nil {
+			fc := rs.Fanout
+			// Infer count from agent_types length when count is omitted.
+			count := fc.Count
+			if count == 0 && len(fc.AgentTypes) > 0 {
+				count = len(fc.AgentTypes)
+			}
+			if count < 1 || count > 6 {
+				writeAPIError(w, http.StatusBadRequest, "invalid_request",
+					"fanout count must be between 1 and 6")
+				return
+			}
+			if len(fc.AgentTypes) > 0 && len(fc.AgentTypes) != count {
+				writeAPIError(w, http.StatusBadRequest, "invalid_request",
+					"fanout agent_types length must equal count")
+				return
+			}
+			step.Fanout = &pipeline.FanoutConfig{
+				Count:      count,
+				AgentTypes: fc.AgentTypes,
+			}
+		}
+		p.Steps[i] = step
 	}
 
 	log.Printf("pipeline: creating %s title=%q steps=%d", p.ID, p.Title, len(p.Steps))
@@ -410,6 +468,78 @@ func (s *Server) serveResumePipeline(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ── POST /api/pipeline/{id}/pick ────────────────────────────────────────────
+
+// pickBody is the request body for POST /api/pipeline/{id}/pick.
+type pickBody struct {
+	Run int `json:"run"`
+}
+
+func (s *Server) servePickPipeline(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	// Path: /api/pipeline/{id}/pick
+	tail := strings.TrimPrefix(r.URL.Path, "/api/pipeline/")
+	id := strings.TrimSuffix(tail, "/pick")
+	id = strings.TrimSpace(id)
+	if id == "" || strings.Contains(id, "/") {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "missing or invalid pipeline id")
+		return
+	}
+
+	var body pickBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+
+	p, err := pipeline.Load(s.Sessions.ConduitRoot(), id)
+	if err != nil {
+		writeAPIError(w, http.StatusNotFound, "not_found", "pipeline not found: "+id)
+		return
+	}
+	log.Printf("pipeline: pick %s (state=%s, run=%d)", id, p.State, body.Run)
+	orch := s.pipelineOrchestrator()
+	if err := orch.Pick(p, body.Run); err != nil {
+		if errors.Is(err, pipeline.ErrNotAtPick) {
+			writeAPIError(w, http.StatusConflict, "not_at_pick", "pipeline is not awaiting a pick")
+			return
+		}
+		if errors.Is(err, pipeline.ErrRunFailed) {
+			writeAPIError(w, http.StatusConflict, "run_failed", "selected run did not succeed")
+			return
+		}
+		log.Printf("pipeline: pick %s: %v", id, err)
+		// Check if it's a range error (400) vs internal error.
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	// Determine winner index for response.
+	var winnerIdx *int
+	if k := p.CurrentStep; k < len(p.Steps) {
+		step := &p.Steps[k]
+		if step.IsFanout() && step.Fanout != nil {
+			winnerIdx = step.Fanout.Winner
+		}
+	}
+
+	resp := map[string]any{
+		"id":           p.ID,
+		"state":        p.State,
+		"current_step": p.CurrentStep,
+	}
+	if winnerIdx != nil {
+		resp["winner"] = *winnerIdx
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // ── Pipeline Templates ───────────────────────────────────────────────────────
 
 // templateStepRequest mirrors TemplateStep for the create body.
@@ -554,6 +684,7 @@ func (s *Server) servePipelineTemplateRouter(w http.ResponseWriter, r *http.Requ
 //	GET    /api/pipeline/{id}          → serveGetPipeline
 //	POST   /api/pipeline/{id}/continue → serveContinuePipeline
 //	POST   /api/pipeline/{id}/resume   → serveResumePipeline
+//	POST   /api/pipeline/{id}/pick     → servePickPipeline
 //	DELETE /api/pipeline/{id}          → serveDeletePipeline
 func (s *Server) servePipelineRouter(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -566,6 +697,8 @@ func (s *Server) servePipelineRouter(w http.ResponseWriter, r *http.Request) {
 		s.serveContinuePipeline(w, r)
 	case strings.HasSuffix(path, "/resume"):
 		s.serveResumePipeline(w, r)
+	case strings.HasSuffix(path, "/pick"):
+		s.servePickPipeline(w, r)
 	case r.Method == http.MethodDelete:
 		s.serveDeletePipeline(w, r)
 	case r.Method == http.MethodGet:

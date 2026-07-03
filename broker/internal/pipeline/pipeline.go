@@ -21,6 +21,10 @@ const (
 	PipelineRunning      PipelineState = "running"
 	PipelineStepDone     PipelineState = "step_done"
 	PipelineAwaitingGate PipelineState = "awaiting_gate"
+	// PipelineAwaitingPick is entered when all runs of a fanout step have
+	// settled and at least one succeeded. The human must POST …/pick to
+	// select the winner before the pipeline advances.
+	PipelineAwaitingPick PipelineState = "awaiting_pick"
 	PipelineComplete     PipelineState = "complete"
 	PipelineFailed       PipelineState = "failed"
 	PipelineCancelled    PipelineState = "cancelled"
@@ -35,6 +39,32 @@ const (
 	InputMemory       InputFromPrev = "memory"
 	InputMemoryOutput InputFromPrev = "memory+output"
 )
+
+// FanoutRun holds per-run state for a fanout step.
+type FanoutRun struct {
+	Index     int    `json:"index"`
+	AgentType string `json:"agent_type"`
+	SessionID string `json:"session_id,omitempty"`
+	Branch    string `json:"branch,omitempty"`
+	Phase     string `json:"phase,omitempty"`
+	Started   string `json:"started,omitempty"`
+	Ended     string `json:"ended,omitempty"`
+}
+
+// FanoutConfig declares and tracks the state of a fanout step.
+// A step is a fanout step when Fanout != nil && Fanout.Count > 0.
+type FanoutConfig struct {
+	// Count is the number of parallel runs. Required. 1–6.
+	Count int `json:"count"`
+	// AgentTypes is an optional index-aligned list of agent types, one per run.
+	// When absent all runs use the step's own AgentType.
+	AgentTypes []string `json:"agent_types,omitempty"`
+	// Runs is populated as runs are spawned. Mirrors how SessionID/Phase are
+	// populated on a normal step.
+	Runs []FanoutRun `json:"runs,omitempty"`
+	// Winner is the picked run index. Nil until the human picks.
+	Winner *int `json:"winner,omitempty"`
+}
 
 // Step is a single agent invocation within a pipeline.
 type Step struct {
@@ -55,6 +85,14 @@ type Step struct {
 	// PrevSessionIDs holds the session IDs of previous (failed) attempts for
 	// this step, appended in order before each re-spawn. Preserved for inspection.
 	PrevSessionIDs []string `json:"prev_session_ids,omitempty"`
+	// Fanout, when non-nil, declares this step as a fanout step. Its presence
+	// is the discriminator — no separate agent_type sentinel.
+	Fanout *FanoutConfig `json:"fanout,omitempty"`
+}
+
+// IsFanout returns true when this step is a fanout step.
+func (s *Step) IsFanout() bool {
+	return s.Fanout != nil && s.Fanout.Count > 0
 }
 
 // GatePreview holds the computed handoff preview populated when the pipeline

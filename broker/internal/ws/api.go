@@ -149,6 +149,10 @@ type capabilitiesResponse struct {
 		// PipelineTemplates: /api/pipeline-templates CRUD endpoints are available.
 		// GET list, POST create (returns {id}), DELETE /{id}.
 		PipelineTemplates bool `json:"pipeline_templates"`
+		// PipelineFanout: fanout steps are supported in POST /api/pipeline
+		// (step.fanout config), and POST /api/pipeline/{id}/pick is available.
+		// Apps gate the fanout-step builder control and pick screen on this flag.
+		PipelineFanout bool `json:"pipeline_fanout"`
 	} `json:"features"`
 	// Models is the per-assistant model+effort catalog discovered live from
 	// the agent CLIs (claude control-protocol initialize, codex app-server
@@ -208,6 +212,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.PipelineGatePreview = true // gate.prev/output in GET + optional {"prev"} body in continue
 	resp.Features.PipelineResume = true      // POST /api/pipeline/{id}/resume
 	resp.Features.PipelineTemplates = true   // /api/pipeline-templates CRUD
+	resp.Features.PipelineFanout = true      // fanout steps + POST /api/pipeline/{id}/pick
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
 	// Pass the pushed-credential store as a nil INTERFACE when unset:
