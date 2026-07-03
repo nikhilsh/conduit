@@ -24,6 +24,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -37,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -63,6 +65,20 @@ data class PipelineStep(
     val phase: String?,
 )
 
+/**
+ * Gate metadata returned by the broker when a pipeline is in the
+ * `awaiting_gate` state. Present only when the broker supports the
+ * `pipeline_gate_preview` capability.
+ */
+data class PipelineGate(
+    /** Index of the completed gated step. */
+    val step: Int,
+    /** Computed {{prev}} handoff text for the next step. May be empty. */
+    val prev: String,
+    /** Final assistant text from the gated step. May be absent. */
+    val output: String?,
+)
+
 data class Pipeline(
     val id: String,
     val title: String,
@@ -72,6 +88,8 @@ data class Pipeline(
     val state: String,
     val currentStep: Int,
     val steps: List<PipelineStep>,
+    /** Present only when state == "awaiting_gate" and broker supports pipeline_gate_preview. */
+    val gate: PipelineGate? = null,
 )
 
 private fun parsePipeline(json: JSONObject): Pipeline {
@@ -94,6 +112,15 @@ private fun parsePipeline(json: JSONObject): Pipeline {
             )
         }
     }
+    // Parse optional gate block (present when state == "awaiting_gate" and broker
+    // supports pipeline_gate_preview capability).
+    val gate = json.optJSONObject("gate")?.let { g ->
+        PipelineGate(
+            step = g.optInt("step", 0),
+            prev = g.optString("prev", ""),
+            output = g.optString("output", "").takeIf { it.isNotEmpty() },
+        )
+    }
     return Pipeline(
         id = json.optString("id", ""),
         title = json.optString("title", ""),
@@ -103,6 +130,7 @@ private fun parsePipeline(json: JSONObject): Pipeline {
         state = json.optString("state", ""),
         currentStep = json.optInt("current_step", 0),
         steps = steps,
+        gate = gate,
     )
 }
 
@@ -124,6 +152,7 @@ fun PipelineMonitorScreen(
 ) {
     val neon = LocalNeonTheme.current
     val endpoint by store.endpoint.collectAsState()
+    val pipelineGatePreview by store.pipelineGatePreview.collectAsState()
     val scope = rememberCoroutineScope()
 
     var pipeline by remember { mutableStateOf<Pipeline?>(null) }
@@ -132,6 +161,9 @@ fun PipelineMonitorScreen(
     var isContinuing by remember { mutableStateOf(false) }
     var isCancelling by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
+    // Gate handoff edit state
+    var isEditingHandoff by remember { mutableStateOf(false) }
+    var handoffDraft by remember { mutableStateOf("") }
 
     Telemetry.breadcrumb(
         "pipeline",
@@ -366,6 +398,28 @@ fun PipelineMonitorScreen(
 
                 // Awaiting gate card
                 if (p.state == "awaiting_gate") {
+                    val gate = p.gate
+                    // Determine preview text: prefer prev, then output, then null.
+                    val previewText: String? = gate?.let { g ->
+                        g.prev.takeIf { it.isNotEmpty() } ?: g.output?.takeIf { it.isNotEmpty() }
+                    }
+                    val showGatePreview = pipelineGatePreview && gate != null
+
+                    // Breadcrumb when preview is shown (side-effect on first display).
+                    LaunchedEffect(showGatePreview, gate) {
+                        if (showGatePreview && gate != null) {
+                            Telemetry.breadcrumb(
+                                "pipeline",
+                                "gate_preview_shown",
+                                mapOf(
+                                    "pipeline_id" to pipelineId,
+                                    "step" to p.currentStep.toString(),
+                                    "prev_len" to gate.prev.length.toString(),
+                                ),
+                            )
+                        }
+                    }
+
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -381,27 +435,120 @@ fun PipelineMonitorScreen(
                                 fontWeight = FontWeight.SemiBold,
                                 color = neon.yellow,
                             )
-                            Text(
-                                "The pipeline is paused at a gate step. Review the output above, then continue.",
-                                fontFamily = neon.sans,
-                                fontSize = 13.sp,
-                                color = neon.textDim,
-                            )
+
+                            if (showGatePreview && previewText != null) {
+                                // Handoff preview header row
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Text(
+                                        "HANDOFF PREVIEW",
+                                        fontFamily = neon.mono,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp,
+                                        color = neon.textDim,
+                                    )
+                                    Text(
+                                        if (isEditingHandoff) "Done" else "Edit handoff",
+                                        fontFamily = neon.mono,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 11.sp,
+                                        color = neon.accent,
+                                        modifier = Modifier.clickable {
+                                            if (!isEditingHandoff) {
+                                                handoffDraft = gate?.prev ?: ""
+                                                Telemetry.breadcrumb(
+                                                    "pipeline",
+                                                    "gate_handoff_edited",
+                                                    mapOf(
+                                                        "pipeline_id" to pipelineId,
+                                                        "step" to p.currentStep.toString(),
+                                                    ),
+                                                )
+                                            }
+                                            isEditingHandoff = !isEditingHandoff
+                                        },
+                                    )
+                                }
+
+                                if (isEditingHandoff) {
+                                    // Editable text field, fixed 240dp height, multiline.
+                                    OutlinedTextField(
+                                        value = handoffDraft,
+                                        onValueChange = { handoffDraft = it },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(240.dp),
+                                        textStyle = TextStyle(
+                                            fontFamily = neon.mono,
+                                            fontSize = 12.sp,
+                                            color = neon.text,
+                                        ),
+                                        maxLines = Int.MAX_VALUE,
+                                        shape = RoundedCornerShape(8.dp),
+                                    )
+                                } else {
+                                    // Read-only preview, capped height. Nested vertical
+                                    // scroll inside the outer scrollable Column is not
+                                    // supported by Compose; use maxLines clipping instead.
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(neon.surface2)
+                                            .border(1.dp, neon.borderStrong, RoundedCornerShape(8.dp))
+                                            .padding(10.dp),
+                                    ) {
+                                        Text(
+                                            previewText,
+                                            fontFamily = neon.mono,
+                                            fontSize = 12.sp,
+                                            color = neon.textDim,
+                                            maxLines = 12,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                            } else if (!showGatePreview) {
+                                Text(
+                                    "The pipeline is paused at a gate step. Review the output above, then continue.",
+                                    fontFamily = neon.sans,
+                                    fontSize = 13.sp,
+                                    color = neon.textDim,
+                                )
+                            }
+
+                            // Continue button
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(if (!isContinuing) neon.yellow else neon.surface2)
                                     .clickable(enabled = !isContinuing) {
+                                        val edited = isEditingHandoff &&
+                                            handoffDraft != (gate?.prev ?: "")
                                         isContinuing = true
                                         Telemetry.breadcrumb(
                                             "pipeline",
                                             "gate_continue_tapped",
-                                            mapOf("pipeline_id" to pipelineId),
+                                            mapOf(
+                                                "pipeline_id" to pipelineId,
+                                                "edited" to edited.toString(),
+                                            ),
                                         )
                                         scope.launch {
+                                            val body = if (edited) {
+                                                JSONObject().put("prev", handoffDraft)
+                                            } else {
+                                                JSONObject()
+                                            }
                                             val result = withContext(Dispatchers.IO) {
-                                                postEndpoint("/api/pipeline/$pipelineId/continue")
+                                                postEndpoint(
+                                                    "/api/pipeline/$pipelineId/continue",
+                                                    body,
+                                                )
                                             }
                                             isContinuing = false
                                             result.onSuccess { json ->
