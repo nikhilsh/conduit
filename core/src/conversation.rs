@@ -443,7 +443,16 @@ fn looks_like_handoff(text: &str) -> bool {
     // misclassified — they produce false "Now → conversation" cards.
     let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
     let lower = first.to_ascii_lowercase();
-    (lower.contains("handing off") || lower.contains("handoff")) && lower.contains("to ")
+    let words: Vec<&str> = lower
+        .split_whitespace()
+        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|word| !word.is_empty())
+        .collect();
+    let has_handoff_declaration = words.contains(&"handoff")
+        || words
+            .windows(2)
+            .any(|pair| pair[0] == "handing" && pair[1] == "off");
+    has_handoff_declaration && words.contains(&"to")
 }
 
 /// Mirror of the client `isNeonPlanShaped` gate (Android `NeonComponents.kt`,
@@ -1065,6 +1074,21 @@ mod tests {
             Some("finish wiring session.rs to transport")
         );
         assert!(item.result_summary.is_none());
+    }
+
+    #[test]
+    fn handoff_filename_in_prose_is_not_a_handoff() {
+        // Regression: mentioning HANDOFF-OUT.html and later saying "to
+        // determine" used to produce a bogus "The → determine" handoff card.
+        let content = "The local code exposes a likely gap: the production adapters declare \
+            on_swap, but the bare Claude/Codex commands do not implement the documented \
+            SIGUSR1 → HANDOFF-OUT.html contract. I’m checking the originating PR discussions \
+            and issues now to determine whether this was known, intentionally deferred, or \
+            later superseded.";
+        let item = item_from_chat_event(&ev("assistant", content), 0);
+        assert_eq!(item.kind, "message");
+        assert!(item.source_agent.is_none());
+        assert!(item.target_agent.is_none());
     }
 
     #[test]
