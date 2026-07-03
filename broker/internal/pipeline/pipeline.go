@@ -50,6 +50,18 @@ type Step struct {
 	Ended          string        `json:"ended,omitempty"`
 }
 
+// GatePreview holds the computed handoff preview populated when the pipeline
+// enters AWAITING_GATE. It is persisted in pipeline.json so GET
+// /api/pipeline/{id} serves it for free. The apps show Output (step k's
+// last assistant text) and Prev (the computed {{prev}} for step k+1) so the
+// user can review before tapping Continue. The Continue handler accepts an
+// optional amended Prev, which overwrites this field before advancing.
+type GatePreview struct {
+	Step   int    `json:"step"`             // index of the completed gated step k
+	Prev   string `json:"prev"`             // computed {{prev}} for step k+1; "" when none
+	Output string `json:"output,omitempty"` // step k's last assistant text
+}
+
 // Pipeline is the top-level pipeline definition + live state.
 type Pipeline struct {
 	ID          string        `json:"id"`
@@ -61,6 +73,10 @@ type Pipeline struct {
 	CurrentStep int           `json:"current_step"`
 	Created     string        `json:"created"`
 	Steps       []Step        `json:"steps"`
+	// Gate is populated when State == PipelineAwaitingGate. It holds the
+	// preview the app displays and the pre-computed {{prev}} for the next
+	// step. Nil in all other states.
+	Gate *GatePreview `json:"gate,omitempty"`
 }
 
 // NewID generates a pipeline ID: "p_" + 8 random hex chars.

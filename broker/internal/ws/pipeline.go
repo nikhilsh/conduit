@@ -29,9 +29,9 @@ type pipelineSessionManager struct {
 	m *session.Manager
 }
 
-func (p *pipelineSessionManager) CreateSession(agentType, cwd, initialPrompt string) (string, error) {
+func (p *pipelineSessionManager) CreateSession(agentType, cwd, initialPrompt, branch string) (string, error) {
 	id := newSessionID()
-	opts := session.CreateOptions{CWD: cwd}
+	opts := session.CreateOptions{CWD: cwd, Branch: branch}
 	sess, _, err := p.m.GetOrCreateWithOptions(id, agentType, opts)
 	if err != nil {
 		return "", err
@@ -225,6 +225,13 @@ func (s *Server) serveGetPipeline(w http.ResponseWriter, r *http.Request) {
 
 // ── POST /api/pipeline/{id}/continue ────────────────────────────────────────
 
+// continueBody is the optional request body for POST /api/pipeline/{id}/continue.
+// Old clients send no body; new clients may send {"prev": "amended text"}.
+// Missing body, empty body, or any parse error all produce "" (never an error).
+type continueBody struct {
+	Prev string `json:"prev"`
+}
+
 func (s *Server) serveContinuePipeline(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
@@ -241,14 +248,25 @@ func (s *Server) serveContinuePipeline(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", "missing or invalid pipeline id")
 		return
 	}
+
+	// Parse optional body for the amended prev. Never an error if absent or malformed.
+	var amendedPrev string
+	if r.Body != nil && r.ContentLength != 0 {
+		var body continueBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+			amendedPrev = body.Prev
+		}
+		// parse failure → amendedPrev stays ""
+	}
+
 	p, err := pipeline.Load(s.Sessions.ConduitRoot(), id)
 	if err != nil {
 		writeAPIError(w, http.StatusNotFound, "not_found", "pipeline not found: "+id)
 		return
 	}
-	log.Printf("pipeline: continue %s (state=%s)", id, p.State)
+	log.Printf("pipeline: continue %s (state=%s, amended_prev=%v)", id, p.State, amendedPrev != "")
 	orch := s.pipelineOrchestrator()
-	if err := orch.Continue(p); err != nil {
+	if err := orch.Continue(p, amendedPrev); err != nil {
 		if errors.Is(err, pipeline.ErrNotAtGate) {
 			writeAPIError(w, http.StatusConflict, "not_at_gate", "pipeline is not awaiting a gate")
 			return
