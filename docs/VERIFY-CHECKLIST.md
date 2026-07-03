@@ -46,6 +46,18 @@ pending section above it. Newest merge first._
   on-device verify**: run a gated pipeline, review the handoff at the gate,
   edit it, confirm the next step's prompt reflects the edit]
 
+**Demo session 1 showcases every card type (plan / subagent / handoff added) — iOS + Android. PR #850.**
+
+- The plan / subagent / handoff cards existed only in demo session 2, so the
+  first session opened ("Build a to-do app") never showed them (reported: "I've
+  never seen plan or subagent"). Session 1 is reworked into one flagship story
+  that hits every card type in order — plan roadmap → tools → code block → diff →
+  subagent edge-case audit → handoff (claude › codex) → pending-input. No
+  renderer change (the read-only ChatView/ChatPage already handled all kinds);
+  demo-content only, iOS + Android mirrored value-for-value. [iOS + Android,
+  **needs on-device verify**: enter demo → open the first session → plan,
+  subagent, and handoff cards all render alongside code / diff / pending-input]
+
 **`/clear` gated on its own capability + send-routing diagnostics — iOS + Android. PR #849.**
 
 - Follow-up to the "no replies after `/clear`" device report (#844 verify). The
