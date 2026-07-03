@@ -448,11 +448,11 @@ fn looks_like_handoff(text: &str) -> bool {
         .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric()))
         .filter(|word| !word.is_empty())
         .collect();
-    let has_handoff_declaration = words.iter().any(|word| *word == "handoff")
+    let has_handoff_declaration = words.contains(&"handoff")
         || words
             .windows(2)
             .any(|pair| pair[0] == "handing" && pair[1] == "off");
-    has_handoff_declaration && words.iter().any(|word| *word == "to")
+    has_handoff_declaration && words.contains(&"to")
 }
 
 /// Mirror of the client `isNeonPlanShaped` gate (Android `NeonComponents.kt`,
