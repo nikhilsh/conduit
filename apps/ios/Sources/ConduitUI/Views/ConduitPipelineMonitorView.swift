@@ -22,6 +22,10 @@ extension ConduitUI {
         let phase: String?
         let started: String?
         let ended: String?
+        /// Number of times this step has been retried via POST /api/pipeline/{id}/resume.
+        let retries: Int?
+        /// Previous session IDs for retried executions of this step.
+        let prev_session_ids: [String]?
 
         var isRunning: Bool {
             guard let p = phase else { return false }
@@ -104,6 +108,10 @@ extension ConduitUI {
         // Gate handoff edit state
         @State private var isEditingHandoff = false
         @State private var handoffDraft: String = ""
+        // Resume (retry-from-failed) state
+        @State private var showResumeArea = false
+        @State private var resumePromptDraft: String = ""
+        @State private var isResuming = false
 
         var body: some View {
             ZStack {
@@ -259,6 +267,16 @@ extension ConduitUI {
                         Text("#\(step.index + 1)")
                             .font(neon.mono(11))
                             .foregroundStyle(neon.textFaint)
+                        // Retry chip: shown when the step has been retried at least once.
+                        if let retries = step.retries, retries > 0 {
+                            Text("retry \(retries)")
+                                .font(neon.mono(10).weight(.semibold))
+                                .foregroundStyle(neon.yellow)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(neon.yellow.opacity(0.15)))
+                                .overlay(Capsule().stroke(neon.yellow.opacity(0.35), lineWidth: 1))
+                        }
                     }
                     Text(step.agent_type)
                         .font(neon.mono(10))
@@ -472,6 +490,7 @@ extension ConduitUI {
 
         private func failedCard(_ p: PipelineStatus) -> some View {
             let failedStep = p.steps.first(where: { $0.isFailed }) ?? p.steps[safe: p.current_step]
+            let canResume = store.pipelineResume
 
             return VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
@@ -499,6 +518,93 @@ extension ConduitUI {
                     }
                     .buttonStyle(.plain)
                 }
+
+                // Resume (retry-from-failed) affordance — only when broker supports it.
+                if canResume {
+                    if showResumeArea {
+                        // Inline resume editor: optional prompt override + confirm.
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Override prompt (optional)")
+                                .font(neon.mono(10).weight(.semibold))
+                                .foregroundStyle(neon.textFaint)
+                                .textCase(.uppercase)
+                            // Fixed-height editor to avoid greedy-height footgun.
+                            TextEditor(text: $resumePromptDraft)
+                                .font(neon.mono(12))
+                                .foregroundStyle(neon.text)
+                                .scrollContentBackground(.hidden)
+                                .background(neon.surface2)
+                                .frame(height: 120)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(neon.borderStrong, lineWidth: 1)
+                                )
+
+                            HStack(spacing: 8) {
+                                Button {
+                                    showResumeArea = false
+                                    resumePromptDraft = ""
+                                } label: {
+                                    Text("Cancel")
+                                        .font(neon.sans(13).weight(.semibold))
+                                        .foregroundStyle(neon.textDim)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 10)
+                                        .background(Capsule().fill(neon.surface2))
+                                        .overlay(Capsule().stroke(neon.borderStrong, lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+
+                                Button {
+                                    let edited = !resumePromptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    Telemetry.breadcrumb("pipeline", "resume tapped",
+                                        data: ["id": pipelineID, "edited": edited ? "true" : "false"])
+                                    let prompt = edited ? resumePromptDraft.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+                                    resumePipeline(promptOverride: prompt)
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        if isResuming {
+                                            ProgressView()
+                                                .progressViewStyle(.circular)
+                                                .tint(neon.accentText)
+                                                .scaleEffect(0.7)
+                                        } else {
+                                            Image(systemName: "arrow.clockwise")
+                                                .font(.system(size: 13, weight: .bold))
+                                        }
+                                        Text(isResuming ? "Resuming..." : "Confirm retry")
+                                            .font(neon.sans(13).weight(.bold))
+                                    }
+                                    .foregroundStyle(neon.accentText)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(Capsule().fill(isResuming ? neon.surface2 : neon.accent))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(isResuming)
+                            }
+                        }
+                    } else {
+                        Button {
+                            showResumeArea = true
+                            resumePromptDraft = ""
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text("Retry step")
+                                    .font(neon.sans(13).weight(.semibold))
+                            }
+                            .foregroundStyle(neon.accent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Capsule().fill(neon.accent.opacity(0.12)))
+                            .overlay(Capsule().stroke(neon.accent.opacity(0.35), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -508,6 +614,73 @@ extension ConduitUI {
                 cornerRadius: 14,
                 border: neon.red.opacity(0.27)
             )
+        }
+
+        // MARK: - Resume (retry-from-failed)
+
+        private func resumePipeline(promptOverride: String?) {
+            let endpoint = store.endpoint
+            guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/pipeline/\(pipelineID)/resume"
+            guard let url = components?.url else { return }
+
+            isResuming = true
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 20
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let p = promptOverride,
+               let body = try? JSONSerialization.data(withJSONObject: ["prompt": p]) {
+                req.httpBody = body
+            } else {
+                req.httpBody = Data("{}".utf8)
+            }
+
+            Task { @MainActor in
+                defer { isResuming = false }
+                do {
+                    let (data, resp) = try await URLSession.shared.data(for: req)
+                    guard let http = resp as? HTTPURLResponse else { return }
+                    if http.statusCode == 409 {
+                        // 409 "not_failed" — pipeline was no longer in failed state.
+                        errorBanner = "Pipeline is not in a failed state (409)"
+                        Telemetry.breadcrumb("pipeline", "resume 409 not_failed",
+                            data: ["id": pipelineID])
+                        return
+                    }
+                    if http.statusCode >= 200 && http.statusCode < 300 {
+                        Telemetry.breadcrumb("pipeline", "resume ok",
+                            data: ["id": pipelineID])
+                        showResumeArea = false
+                        resumePromptDraft = ""
+                        // Parse the returned status and resume polling.
+                        if let parsed = try? JSONDecoder().decode(PipelineStatus.self, from: data) {
+                            pipeline = parsed
+                        }
+                        startPolling()
+                    } else {
+                        let msg = "Resume failed: HTTP \(http.statusCode)"
+                        errorBanner = msg
+                        Telemetry.capture(
+                            error: NSError(domain: "ios.pipeline", code: 12,
+                                userInfo: [NSLocalizedDescriptionKey: "pipeline resume failed"]),
+                            message: "pipeline resume failed",
+                            tags: ["surface": "ios", "phase": "pipeline"],
+                            extras: ["id": pipelineID, "status": "\(http.statusCode)"]
+                        )
+                    }
+                } catch {
+                    errorBanner = error.localizedDescription
+                    Telemetry.capture(
+                        error: error,
+                        message: "pipeline resume network error",
+                        tags: ["surface": "ios", "phase": "pipeline"],
+                        extras: ["id": pipelineID]
+                    )
+                }
+            }
         }
 
         // MARK: - Polling

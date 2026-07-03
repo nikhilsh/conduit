@@ -4578,6 +4578,22 @@ class SessionStore : ViewModel(), ConduitDelegate {
     val pipelineGatePreview: StateFlow<Boolean> = _pipelineGatePreview.asStateFlow()
 
     /**
+     * Whether the broker supports pipeline resume-from-failed
+     * (`GET /api/capabilities` -> `"pipeline_resume": true`).
+     * False on old brokers. Mirror of iOS `SessionStore.pipelineResume`.
+     */
+    private val _pipelineResume = MutableStateFlow(false)
+    val pipelineResume: StateFlow<Boolean> = _pipelineResume.asStateFlow()
+
+    /**
+     * Whether the broker supports pipeline templates
+     * (`GET /api/capabilities` -> `"pipeline_templates": true`).
+     * False on old brokers. Mirror of iOS `SessionStore.pipelineTemplates`.
+     */
+    private val _pipelineTemplates = MutableStateFlow(false)
+    val pipelineTemplates: StateFlow<Boolean> = _pipelineTemplates.asStateFlow()
+
+    /**
      * Refresh [modelCatalog] and [agentDescriptors] from the active
      * endpoint's capabilities in one request. Old brokers (missing keys)
      * and failures are no-ops for the affected flow.
@@ -4646,6 +4662,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
             JSONObject(raw).optBoolean("pipeline_gate_preview", false)
         }.getOrDefault(false)
         _pipelineGatePreview.value = gatePreview
+        // pipeline_resume: resume-from-failed; default false on old brokers.
+        val pipelineResume = runCatching {
+            JSONObject(raw).optBoolean("pipeline_resume", false)
+        }.getOrDefault(false)
+        _pipelineResume.value = pipelineResume
+        // pipeline_templates: save/load templates; default false on old brokers.
+        val pipelineTemplates = runCatching {
+            JSONObject(raw).optBoolean("pipeline_templates", false)
+        }.getOrDefault(false)
+        _pipelineTemplates.value = pipelineTemplates
     }
 
     /**
