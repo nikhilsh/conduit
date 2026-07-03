@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -391,6 +392,158 @@ func TestPipelineJSONRoundtrip(t *testing.T) {
 	}
 	if got.Gate.Step != 0 || got.Gate.Prev != "prev text" || got.Gate.Output != "out text" {
 		t.Errorf("Gate mismatch: %+v", got.Gate)
+	}
+}
+
+// TestResumeFailedPipeline verifies that Resume on a failed pipeline re-spawns
+// the failed step with Retries=1, uses the branch suffix -r1, preserves the
+// old session id in PrevSessionIDs, and transitions state back to running.
+func TestResumeFailedPipeline(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0: {{task}}", InputFromPrev: InputNone},
+	})
+
+	// Start the pipeline to get step 0 spawned with its initial session.
+	if err := orch.Start(p); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	origSessID := p.Steps[0].SessionID
+	if origSessID == "" {
+		t.Fatal("step 0 has no session ID after Start")
+	}
+	if len(sm.created) != 1 {
+		t.Fatalf("expected 1 CreateSession call; got %d", len(sm.created))
+	}
+
+	// Simulate failure.
+	if err := orch.Advance(p, 0, "exited(1)"); err != nil {
+		t.Fatalf("Advance(failed): %v", err)
+	}
+	if p.State != PipelineFailed {
+		t.Fatalf("state=%s, want failed", p.State)
+	}
+
+	// Reload so we're working with the persisted state.
+	p, err := Load(dir, p.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Resume without an amended prompt.
+	if err := orch.Resume(p, ""); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	// State should be running again.
+	if p.State != PipelineRunning {
+		t.Errorf("state=%s, want running after resume", p.State)
+	}
+
+	// Retries should be 1.
+	if p.Steps[0].Retries != 1 {
+		t.Errorf("Retries=%d, want 1", p.Steps[0].Retries)
+	}
+
+	// PrevSessionIDs must contain the original session id.
+	if len(p.Steps[0].PrevSessionIDs) != 1 || p.Steps[0].PrevSessionIDs[0] != origSessID {
+		t.Errorf("PrevSessionIDs=%v, want [%s]", p.Steps[0].PrevSessionIDs, origSessID)
+	}
+
+	// A new session must have been created.
+	if p.Steps[0].SessionID == origSessID {
+		t.Errorf("SessionID unchanged after resume; want a new id")
+	}
+	if p.Steps[0].SessionID == "" {
+		t.Error("SessionID is empty after resume")
+	}
+
+	// Branch suffix must be -r1.
+	if len(sm.created) < 2 {
+		t.Fatal("expected 2 CreateSession calls total; second call missing")
+	}
+	wantBranch := "pipeline-" + p.ID + "-step-0-r1"
+	if sm.created[1].branch != wantBranch {
+		t.Errorf("retry branch=%q, want %q", sm.created[1].branch, wantBranch)
+	}
+
+	// Persisted pipeline must reflect the updated step.
+	reloaded, err := Load(dir, p.ID)
+	if err != nil {
+		t.Fatalf("Load after resume: %v", err)
+	}
+	if reloaded.Steps[0].Retries != 1 {
+		t.Errorf("reloaded Retries=%d, want 1", reloaded.Steps[0].Retries)
+	}
+	if len(reloaded.Steps[0].PrevSessionIDs) != 1 {
+		t.Errorf("reloaded PrevSessionIDs=%v, want 1 entry", reloaded.Steps[0].PrevSessionIDs)
+	}
+}
+
+// TestResumeWithAmendedPrompt verifies that when amendedPrompt is non-empty it
+// is delivered verbatim to the new session without template rendering.
+func TestResumeWithAmendedPrompt(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "original template: {{task}}", InputFromPrev: InputNone},
+	})
+
+	if err := orch.Start(p); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := orch.Advance(p, 0, "exited(1)"); err != nil {
+		t.Fatalf("Advance(failed): %v", err)
+	}
+
+	p, err := Load(dir, p.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	const amended = "completely different custom prompt"
+	if err := orch.Resume(p, amended); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	// The new session must have received the amended prompt verbatim.
+	newSessID := p.Steps[0].SessionID
+	if newSessID == "" {
+		t.Fatal("new session ID is empty")
+	}
+	gotPrompt := sm.sessions[newSessID].prompt
+	if gotPrompt != amended {
+		t.Errorf("prompt=%q, want %q", gotPrompt, amended)
+	}
+}
+
+// TestResumeNotFailedReturnsError verifies that Resume returns ErrNotFailed
+// when the pipeline is not in the failed state (e.g. running).
+func TestResumeNotFailedReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone},
+	})
+
+	// Pipeline is in pending state — Resume must reject.
+	if err := orch.Resume(p, ""); !errors.Is(err, ErrNotFailed) {
+		t.Errorf("Resume on pending: got %v, want ErrNotFailed", err)
+	}
+
+	// Start it so it's running.
+	if err := orch.Start(p); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := orch.Resume(p, ""); !errors.Is(err, ErrNotFailed) {
+		t.Errorf("Resume on running: got %v, want ErrNotFailed", err)
 	}
 }
 

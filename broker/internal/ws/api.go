@@ -142,6 +142,13 @@ type capabilitiesResponse struct {
 		// and preview panel on this flag specifically (not the sibling Pipeline
 		// flag — past bug pattern).
 		PipelineGatePreview bool `json:"pipeline_gate_preview"`
+		// PipelineResume: POST /api/pipeline/{id}/resume is available.
+		// 409 "not_failed" when the pipeline is not in failed state.
+		// Optional JSON body {"prompt":"..."} to override the re-spawned prompt.
+		PipelineResume bool `json:"pipeline_resume"`
+		// PipelineTemplates: /api/pipeline-templates CRUD endpoints are available.
+		// GET list, POST create (returns {id}), DELETE /{id}.
+		PipelineTemplates bool `json:"pipeline_templates"`
 	} `json:"features"`
 	// Models is the per-assistant model+effort catalog discovered live from
 	// the agent CLIs (claude control-protocol initialize, codex app-server
@@ -199,6 +206,8 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.FanoutCompare = true       // POST /api/fanout/compare diff-stat endpoint
 	resp.Features.Pipeline = true            // sequential agent pipeline subsystem
 	resp.Features.PipelineGatePreview = true // gate.prev/output in GET + optional {"prev"} body in continue
+	resp.Features.PipelineResume = true      // POST /api/pipeline/{id}/resume
+	resp.Features.PipelineTemplates = true   // /api/pipeline-templates CRUD
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
 	// Pass the pushed-credential store as a nil INTERFACE when unset:

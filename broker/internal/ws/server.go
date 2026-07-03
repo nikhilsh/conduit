@@ -371,6 +371,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/pipelines", s.servePipelineRouter)
 	mux.HandleFunc("/api/pipeline", s.servePipelineRouter)
 	mux.HandleFunc("/api/pipeline/", s.servePipelineRouter)
+	// Pipeline templates: registered on a SEPARATE prefix so "templates" is
+	// not swallowed by the /api/pipeline/{id} wildcard.
+	// /api/pipeline-templates (exact) handles list + create;
+	// /api/pipeline-templates/ (prefix) handles /{id} delete.
+	mux.HandleFunc("/api/pipeline-templates", s.servePipelineTemplateRouter)
+	mux.HandleFunc("/api/pipeline-templates/", s.servePipelineTemplateRouter)
 	return mux
 }
 

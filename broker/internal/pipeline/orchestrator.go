@@ -17,6 +17,9 @@ var ErrNotAtGate = errors.New("pipeline is not awaiting gate")
 // that has already reached a terminal state (complete/failed/cancelled).
 var ErrAlreadyTerminal = errors.New("pipeline is in a terminal state")
 
+// ErrNotFailed is returned by Resume when the pipeline is not in the failed state.
+var ErrNotFailed = errors.New("pipeline is not failed")
+
 // SessionManager is the minimal interface the Orchestrator needs to interact
 // with the session manager. The ws layer wires the concrete *session.Manager
 // behind this interface to avoid an import cycle (pipeline → ws → pipeline).
@@ -120,6 +123,59 @@ func (o *Orchestrator) Cancel(p *Pipeline) error {
 	return nil
 }
 
+// Resume re-spawns the failed step k as a fresh session. The pipeline must
+// be in PipelineFailed state; returns ErrNotFailed otherwise.
+//
+// When amendedPrompt is non-empty it is delivered verbatim as the spawned
+// prompt (no re-templating). When empty the normal spawnStep rendering is
+// used — {{task}} and {{prev}} are recomputed from the previous step's
+// session output / HANDOFF-OUT as today (Gate is nil after a failure so
+// the gate-preview path is skipped and recomputation is always correct).
+//
+// The failed session's ID is preserved in Step.PrevSessionIDs before being
+// overwritten. Step.Retries is incremented and used as a branch-name suffix
+// to avoid a git collision with the prior attempt (pipeline-<id>-step-<k>-r<n>).
+func (o *Orchestrator) Resume(p *Pipeline, amendedPrompt string) error {
+	if p.State != PipelineFailed {
+		return ErrNotFailed
+	}
+	k := p.CurrentStep
+	if k >= len(p.Steps) {
+		return fmt.Errorf("pipeline %s: resume: current_step %d out of range", p.ID, k)
+	}
+	step := &p.Steps[k]
+
+	// Preserve failed session id for inspection before overwriting.
+	if step.SessionID != "" {
+		step.PrevSessionIDs = append(step.PrevSessionIDs, step.SessionID)
+	}
+	step.Retries++
+	// Reset step live-state fields so the monitor sees a fresh attempt.
+	step.SessionID = ""
+	step.Phase = ""
+	step.Started = ""
+	step.Ended = ""
+
+	log.Printf("pipeline %s: resume step %d retry=%d amended_prompt=%v",
+		p.ID, k, step.Retries, amendedPrompt != "")
+
+	p.State = PipelineRunning
+	p.Gate = nil // defensive: Gate should already be nil on a failed pipeline
+
+	if err := o.spawnStepOpts(p, k, amendedPrompt); err != nil {
+		p.State = PipelineFailed
+		_ = p.Save(o.conduitRoot)
+		return fmt.Errorf("pipeline %s: resume spawn step %d: %w", p.ID, k, err)
+	}
+	if err := p.Save(o.conduitRoot); err != nil {
+		return fmt.Errorf("pipeline %s: save after resume: %w", p.ID, err)
+	}
+	log.Printf("pipeline %s: resumed step %d session=%s branch-suffix=-r%d",
+		p.ID, k, p.Steps[k].SessionID, step.Retries)
+	go o.pollStep(p.ID, k)
+	return nil
+}
+
 // Advance is called when step k's session reaches an exited(*) phase.
 // It determines the next state per the pipeline state machine spec §4.
 func (o *Orchestrator) Advance(p *Pipeline, stepIndex int, phase string) error {
@@ -210,49 +266,82 @@ func (o *Orchestrator) spawnNext(p *Pipeline) error {
 	return nil
 }
 
-// spawnStep creates the child session for step k, filling in SessionID and Started.
-// It also builds {{prev}} from the previous step (or uses a pre-computed Gate.Prev
-// when available) and saves the text actually used to input.md.
+// spawnStep creates the child session for step k using the standard rendering
+// path ({{task}} and {{prev}} substituted from pipeline state and previous
+// step output). It is the normal first-attempt entry point.
 func (o *Orchestrator) spawnStep(p *Pipeline, k int) error {
+	return o.spawnStepOpts(p, k, "")
+}
+
+// spawnStepOpts is the shared implementation for spawning step k. When
+// overridePrompt is non-empty it is used verbatim (no template rendering);
+// otherwise the step's PromptTemplate is rendered as usual. The branch name
+// incorporates Step.Retries to avoid a git collision on re-spawns:
+//
+//	first attempt:  pipeline-<id>-step-<k>
+//	first retry:    pipeline-<id>-step-<k>-r1
+//	second retry:   pipeline-<id>-step-<k>-r2
+func (o *Orchestrator) spawnStepOpts(p *Pipeline, k int, overridePrompt string) error {
 	step := &p.Steps[k]
 
-	// Build the prompt by substituting {{task}} and {{prev}}.
-	prompt := step.PromptTemplate
-	prompt = strings.ReplaceAll(prompt, "{{task}}", p.Task)
-
-	if k > 0 && step.InputFromPrev != InputNone {
-		var prevText string
-		// Feature 1/2: if a GatePreview was computed for this step (k-1 had
-		// gate_after=true), use its Prev — which may have been amended by the
-		// Continue caller — instead of recomputing from disk.
-		if p.Gate != nil && p.Gate.Step == k-1 {
-			prevText = p.Gate.Prev
-			log.Printf("pipeline %s step %d: using gate preview prev (len=%d)", p.ID, k, len(prevText))
-		} else {
-			prev := p.Steps[k-1]
-			workdir := ""
-			if prev.SessionID != "" {
-				workdir = o.sessions.GetWorktreeDir(prev.SessionID)
-			}
-			transcriptText := ""
-			if prev.SessionID != "" {
-				transcriptText = o.sessions.GetLastAssistantText(prev.SessionID)
-			}
-			prevText = BuildPrev(workdir, transcriptText, step.InputFromPrev)
-		}
-		prompt = strings.ReplaceAll(prompt, "{{prev}}", prevText)
-		// Save the text actually used to input.md (overwrites the audit file
-		// written at gate entry if an amendment was applied).
-		if saveErr := SaveInput(o.conduitRoot, p.ID, k, prevText); saveErr != nil {
-			log.Printf("pipeline %s step %d: save input.md: %v", p.ID, k, saveErr)
-		}
+	var prompt string
+	if overridePrompt != "" {
+		// Resume with an explicit amended prompt — skip all template rendering.
+		prompt = overridePrompt
+		log.Printf("pipeline %s step %d: using override prompt (len=%d)", p.ID, k, len(overridePrompt))
 	} else {
-		// No prev substitution needed; remove any {{prev}} placeholder.
-		prompt = strings.ReplaceAll(prompt, "{{prev}}", "")
+		// Build the prompt by substituting {{task}} and {{prev}}.
+		prompt = step.PromptTemplate
+		prompt = strings.ReplaceAll(prompt, "{{task}}", p.Task)
+
+		if k > 0 && step.InputFromPrev != InputNone {
+			var prevText string
+			// If a GatePreview was computed for this step (k-1 had gate_after=true),
+			// use its Prev — which may have been amended by the Continue caller —
+			// instead of recomputing from disk.
+			if p.Gate != nil && p.Gate.Step == k-1 {
+				prevText = p.Gate.Prev
+				log.Printf("pipeline %s step %d: using gate preview prev (len=%d)", p.ID, k, len(prevText))
+			} else {
+				// For a resume after failure Gate is nil; recompute from the
+				// previous step's session (which already exited successfully).
+				// Use the last valid session id from the previous step.
+				prev := p.Steps[k-1]
+				prevSessID := prev.SessionID
+				// If the previous step's current session is empty but it has a
+				// PrevSessionIDs history, use the last one that succeeded. For
+				// the common case (previous step finished successfully and its
+				// session id is still set) this is a no-op.
+				if prevSessID == "" && len(prev.PrevSessionIDs) > 0 {
+					prevSessID = prev.PrevSessionIDs[len(prev.PrevSessionIDs)-1]
+				}
+				workdir := ""
+				if prevSessID != "" {
+					workdir = o.sessions.GetWorktreeDir(prevSessID)
+				}
+				transcriptText := ""
+				if prevSessID != "" {
+					transcriptText = o.sessions.GetLastAssistantText(prevSessID)
+				}
+				prevText = BuildPrev(workdir, transcriptText, step.InputFromPrev)
+			}
+			prompt = strings.ReplaceAll(prompt, "{{prev}}", prevText)
+			// Save the text actually used to input.md (overwrites the audit file
+			// written at gate entry if an amendment was applied).
+			if saveErr := SaveInput(o.conduitRoot, p.ID, k, prevText); saveErr != nil {
+				log.Printf("pipeline %s step %d: save input.md: %v", p.ID, k, saveErr)
+			}
+		} else {
+			// No prev substitution needed; remove any {{prev}} placeholder.
+			prompt = strings.ReplaceAll(prompt, "{{prev}}", "")
+		}
 	}
 
-	// Feature 3: named step branches. Format: "pipeline-<id>-step-<k>".
+	// Branch name: incorporate Retries to avoid a git collision on re-spawns.
 	branch := fmt.Sprintf("pipeline-%s-step-%d", p.ID, k)
+	if step.Retries > 0 {
+		branch = fmt.Sprintf("pipeline-%s-step-%d-r%d", p.ID, k, step.Retries)
+	}
 	sessID, err := o.sessions.CreateSession(step.AgentType, p.CWD, prompt, branch)
 	if err != nil {
 		return fmt.Errorf("create session (agent=%s): %w", step.AgentType, err)
