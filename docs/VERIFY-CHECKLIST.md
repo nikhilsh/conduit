@@ -20,7 +20,58 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
-_(nothing yet)_
+**Pipeline v2: fanout-as-a-step + TurnComplete advance fix — broker + apps. PRs #862 + #863 (design doc PR #858).**
+
+- **TurnComplete advance signal (broker)** — pipeline steps now also complete
+  when the session's turn finishes (`turn_active` false + at least one assistant
+  reply → phase `turn_complete`), not only on `exited(*)`. Fixes a shipped v1
+  gap: claude (stream-json) sessions never exit between turns, so pipelines
+  never advanced past a claude step in production (proven by local e2e; unit
+  fakes hid it). Completed steps keep their agent process alive — known v1.1
+  follow-up. [broker, **redeploy required**]
+- **Fanout-as-a-step (broker)** — a step may carry `fanout: {count, agent_types[]}`
+  (count 1–6); runs spawn in parallel on `pipeline-<id>-step-<k>-run-<i>`
+  branches; new `awaiting_pick` state + push when all runs settle (step fails
+  only if ALL runs fail); `POST /api/pipeline/{id}/pick {"run": i}` writes the
+  winner's session onto the step so all downstream handoff/gate code is
+  unchanged; losers' worktrees kept. `pipeline_fanout` capability.
+  [broker, **redeploy required**]
+- **Fanout UI (iOS + Android)** — Builder per-step "Fan out" toggle (count
+  stepper + per-run agent pickers; also saved into templates); Monitor shows
+  per-run status rows and an awaiting-pick panel composing the existing FanOut
+  compare view with a Pick action per non-failed run. [iOS + Android, **needs
+  on-device verify**: build a 2-run fanout step, watch runs settle, pick a
+  winner, pipeline continues]
+
+**Pipeline v2: resume-from-failed + templates — broker + apps. PRs #859 + #861.**
+
+- **Resume (broker)** — `POST /api/pipeline/{id}/resume` (409 unless failed)
+  re-spawns the failed step as a fresh session, optional `{"prompt"}` verbatim
+  override; `retries` increments, old session ids kept in `prev_session_ids`,
+  retry branches `pipeline-<id>-step-<k>-r<n>`. `pipeline_resume` capability.
+  [broker, **redeploy required**]
+- **Templates (broker)** — `GET/POST /api/pipeline-templates`,
+  `DELETE /api/pipeline-templates/{id}`; stored under
+  `<conduitRoot>/pipeline-templates/`; instantiate is client-side.
+  `pipeline_templates` capability. [broker, **redeploy required**]
+- **Resume + templates UI (iOS + Android)** — failed step gets "Retry step"
+  with optional prompt override + retry-N chips; Builder gets "Save as
+  template" and a "From template" picker with delete-confirm. [iOS + Android,
+  **needs on-device verify**: fail a step, retry with an edited prompt; save
+  and re-apply a template]
+
+**Live Activity: dismiss/update when the pending ask is answered — iOS. PR #860.**
+
+- Root cause was three interlocking app-side bugs: resolved pending items still
+  pinned the session in the bridge's `pendingSessions` (idle sweep never fired);
+  the frame mapping looked for the `[[conduit:resolved]]` marker which the
+  broker deliberately does NOT re-broadcast on the live WS (only on disk), so
+  live resolutions were invisible — now overridden from
+  `resolvedPendingInputIDs`; and item-ID dedup gates blocked re-processing when
+  only the resolved state changed. Breadcrumbs added at every Live Activity
+  end/update decision point. Works against both old and new brokers. [iOS,
+  **needs on-device verify**: answer an AskUserQuestion and confirm the Live
+  Activity leaves the "needs you" state without opening the app]
 
 ---
 
