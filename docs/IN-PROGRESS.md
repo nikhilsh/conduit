@@ -9,8 +9,10 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
 
 ## Active
 
-_(nothing actively building — #849 /clear routing gate shipped to
-VERIFY-CHECKLIST pending)_
+- **Queued-Next reply-flush belt-and-suspenders** (`fix/queued-next-reply-flush`, PR #850) —
+  add a second flush trigger on live assistant reply so queuedTurn entries are
+  never stranded by a missed/delayed turn_active status frame (iOS +
+  Android). Idempotent with the existing status-frame trigger.
 
 ## Deferred (not active)
 

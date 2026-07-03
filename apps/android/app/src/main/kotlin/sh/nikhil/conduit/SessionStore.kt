@@ -3793,7 +3793,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         return true
     }
 
-    fun sendChat(sessionId: String, msg: String) {
+    fun sendChat(sessionId: String, msg: String, bypassTurnGate: Boolean = false) {
         // Funnel: first ever turn sent — first session, no prior server-side conversation items.
         val priorItems = _conversationLog.value[sessionId].orEmpty().filter { !it.id.startsWith("local-") }
         if (_sessions.value.size <= 1 && priorItems.isEmpty()) {
@@ -3868,7 +3868,10 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // window -- the device-reported lost-send bug. Now the message is
         // always queued and persisted; the flush re-delivers it on connect /
         // foreground.
-        val turnActive = _statusBySession.value[sessionId]?.turnActive == true
+        // bypassTurnGate=true is used by flushOnReply to deliver a queued
+        // message even when turn_active has not yet flipped false (the
+        // assistant reply is itself proof the turn ended).
+        val turnActive = !bypassTurnGate && _statusBySession.value[sessionId]?.turnActive == true
         if (!pendingAsk) {
             val item = ConversationItem(
                 id = localId,
@@ -4141,6 +4144,32 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // The echo was already appended to the log when the message was first
         // queued, so we need only (re-)register it as a normal pending entry and
         // attempt delivery.
+        val ts = entry.ts
+        updatePendingChats { it.enqueue(sessionId, entry.localId, entry.message, ts) }
+        attemptDeliver(sessionId, entry.localId, entry.message)
+    }
+
+    /**
+     * Belt-and-suspenders flush called when a LIVE (not replayed) assistant
+     * reply arrives. A settled assistant reply is proof the turn ended, so we
+     * deliver the oldest queued-turn entry here even if the status frame
+     * reporting turnActive=false has not arrived yet (missed/delayed frame).
+     * Idempotent with [flushOnTurnComplete]: markDelivered removes the entry
+     * before re-delivery, so whichever trigger fires second finds null and
+     * is a no-op. The broker also dedups by client_msg_id.
+     * Mirror of iOS SessionStore.flushQueuedOnReply.
+     */
+    internal fun flushOnReply(sessionId: String) {
+        val entry = _pendingChats.value.flushOnTurnComplete(sessionId) ?: return
+        Telemetry.breadcrumb(
+            "chat",
+            "flush_on_reply",
+            mapOf("session" to sessionId, "local_id" to entry.localId, "chars" to entry.message.length.toString()),
+        )
+        // Remove BEFORE re-delivery so the queue never holds a duplicate.
+        // (The echo was created when sendChat first ran -- do NOT call sendChat
+        // again or the transcript gets a duplicate user bubble.)
+        updatePendingChats { it.markDelivered(sessionId, entry.localId) }
         val ts = entry.ts
         updatePendingChats { it.enqueue(sessionId, entry.localId, entry.message, ts) }
         attemptDeliver(sessionId, entry.localId, entry.message)
@@ -5577,6 +5606,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 _streamingMessage.update { it - sessionId }
                 _turnPhaseBySession.update { it - sessionId }
                 _streamingTurnTs.update { it - sessionId }
+                // Belt-and-suspenders: flush the oldest queued-turn entry now
+                // that we know the turn settled (the reply IS the proof). This
+                // handles the case where the status frame reporting
+                // turnActive=false was missed or delayed across a reconnect.
+                // Idempotent with flushOnTurnComplete (second call gets null).
+                flushOnReply(sessionId)
             } else {
                 Telemetry.breadcrumb(
                     "streaming", "replay skipped clear",
