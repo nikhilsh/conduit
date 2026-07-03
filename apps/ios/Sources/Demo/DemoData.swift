@@ -247,6 +247,32 @@ enum DemoData {
             resultSummary: nil,
             planSteps: []
         ),
+        // PLAN: roadmap the agent lays out after scaffolding the core
+        ConversationItem(
+            id: "demo-1-plan",
+            role: "assistant",
+            kind: "plan",
+            status: "done",
+            content: "Here's the roadmap I'm working through:",
+            ts: "2026-06-25T10:00:26Z",
+            files: [],
+            toolName: nil,
+            command: nil,
+            exitCode: nil,
+            durationMs: nil,
+            diffSummary: nil,
+            pendingOptions: [],
+            sourceAgent: nil,
+            targetAgent: nil,
+            taskText: nil,
+            resultSummary: nil,
+            planSteps: [
+                PlanStep(text: "scaffold todo.py with a JSON store", state: "done"),
+                PlanStep(text: "add / list / complete / delete commands", state: "done"),
+                PlanStep(text: "colored output with colorama", state: "todo"),
+                PlanStep(text: "unit tests for the CLI commands", state: "todo"),
+            ]
+        ),
         ConversationItem(
             id: "demo-1-6",
             role: "user",
@@ -387,6 +413,48 @@ enum DemoData {
             targetAgent: nil,
             taskText: nil,
             resultSummary: nil,
+            planSteps: []
+        ),
+        // SUBAGENT: audit of the CLI commands
+        ConversationItem(
+            id: "demo-1-subagent",
+            role: "system",
+            kind: "subagent",
+            status: "done",
+            content: "subagent: audited the CLI commands for edge cases\nChecked add / list / complete / delete; added empty-list and duplicate-title handling, and guarded delete against out-of-range indexes.",
+            ts: "2026-06-25T10:02:45Z",
+            files: [],
+            toolName: nil,
+            command: nil,
+            exitCode: nil,
+            durationMs: nil,
+            diffSummary: nil,
+            pendingOptions: [],
+            sourceAgent: nil,
+            targetAgent: nil,
+            taskText: nil,
+            resultSummary: nil,
+            planSteps: []
+        ),
+        // HANDOFF: claude -> codex to port the CLI to mobile
+        ConversationItem(
+            id: "demo-1-handoff",
+            role: "assistant",
+            kind: "handoff",
+            status: "done",
+            content: "Core CLI is done, colored, and edge-cases are guarded. Handing the mobile packaging + port to codex.",
+            ts: "2026-06-25T10:02:52Z",
+            files: [],
+            toolName: nil,
+            command: nil,
+            exitCode: nil,
+            durationMs: nil,
+            diffSummary: nil,
+            pendingOptions: [],
+            sourceAgent: "claude",
+            targetAgent: "codex",
+            taskText: "Package the to-do CLI and port it to the mobile app",
+            resultSummary: "Core CLI is done, colored, and edge-cases are guarded. Handing the mobile packaging + port to codex.",
             planSteps: []
         ),
         // PENDING-INPUT: assistant asking if user wants unit tests

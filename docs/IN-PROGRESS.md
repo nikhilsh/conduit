@@ -13,6 +13,12 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
   add a second flush trigger on live assistant reply so queuedTurn entries are
   never stranded by a missed/delayed turn_active status frame (iOS +
   Android). Idempotent with the existing status-frame trigger.
+- **Pipeline gate handoff preview + editable handoff + named step branches** —
+  broker (feat/pipeline-gate-broker) + apps (feat/pipeline-gate-apps).
+  Broker: `GatePreview` on `Pipeline`, gate entry populates `gate` in
+  pipeline.json, `Continue(amendedPrev)` for edit-handoff, named step branches
+  `pipeline-<id>-step-<k>`, `pipeline_gate_preview` capability flag.
+  Apps: gate preview panel + editable handoff field on the Monitor screen.
 
 ## Deferred (not active)
 
