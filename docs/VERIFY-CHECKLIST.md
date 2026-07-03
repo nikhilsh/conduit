@@ -20,6 +20,22 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**`/clear` gated on its own capability + send-routing diagnostics — iOS + Android. PR #849.**
+
+- Follow-up to the "no replies after `/clear`" device report (#844 verify). The
+  claude CLI + broker stream path was proven healthy via live repro (fresh /
+  resume / resume-of-cleared all reply), so the failure is client-side routing —
+  not the agent. Two changes: (1) `/clear`'s "supported?" check read
+  `supports.compact` instead of `supports.clear` on both apps (which didn't even
+  model the `clear` capability the broker sends since #844) — now gated
+  per-command with a compact fallback for old brokers; (2) a `chat / send
+  routing` breadcrumb on every send records `turn_active`/`pending_ask`/
+  `has_client`/`is_slash` so the next occurrence is self-diagnosing in Sentry.
+  [iOS + Android, **needs on-device verify**: `/clear` still works on a claude
+  session; and if "no replies after /clear" recurs, the Sentry breadcrumb shows
+  which branch swallowed the message. Broker turn-end status-broadcast ordering
+  is a documented, unfixed suspect.]
+
 **Streaming rail continuously draws down (looping), not once — iOS + Android. PR #848.**
 
 - The streaming spine rail drew down once (eased grow as the message got taller)
