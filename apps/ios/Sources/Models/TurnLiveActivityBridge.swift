@@ -82,8 +82,15 @@ public struct TurnLiveActivityBridgeCore {
     /// Sessions whose latest driving item is a pending-input (the agent
     /// is blocked on the user). Exempt from the idle sweep — an approval
     /// can wait minutes and the lock-screen card asking for it IS the
-    /// feature (round-3 §2). Cleared by the next tool/command/exit.
+    /// feature (round-3 §2). Cleared by the next tool/command/exit OR
+    /// when the pending item is resolved (pendingResolved = true).
     public private(set) var pendingSessions: Set<String> = []
+    /// Item ID of the unresolved pending-input item currently blocking
+    /// each session. Tracked so that when the same item reappears with
+    /// pendingResolved=true (already past lastSeenItemID in the cursor
+    /// walk), the bridge can detect the state flip and clear the session
+    /// from pendingSessions so the idle-timeout sweep can fire.
+    public private(set) var pendingItemIDBySession: [String: String] = [:]
 
     public let idleTimeout: TimeInterval
 
@@ -107,6 +114,7 @@ public struct TurnLiveActivityBridgeCore {
                 if prev != phase, !endedSessions.contains(sid) {
                     intents.append(.end(sessionID: sid))
                     endedSessions.insert(sid)
+                    pendingItemIDBySession[sid] = nil
                     // Don't fall through into the conversation-log
                     // scan — the session is dead, any stragglers in
                     // the log were already in flight.
@@ -116,10 +124,42 @@ public struct TurnLiveActivityBridgeCore {
                 lastSeenPhase[sid] = phase
             }
 
+            let conversation = session.conversation
+
+            // Resolution-state check (PR #843 follow-up fix): the broker
+            // does NOT re-broadcast a pending-input item after persisting
+            // its [[conduit:resolved]] marker — it only appends to the
+            // on-disk convlog. The app side detects resolution via
+            // resolvedPendingInputIDs (populated immediately on user
+            // answer) which the frame mapping reflects in pendingResolved.
+            // Because the resolved item has the same ID it was originally
+            // ingested under, the cursor walk below never re-processes it.
+            // We fix that here: if the session is in pendingSessions and
+            // the item that put it there is now pendingResolved=true in the
+            // frame, clear pendingSessions so the idle sweep can fire.
+            if pendingSessions.contains(sid), let pendingID = pendingItemIDBySession[sid] {
+                if let resolvedItem = conversation.first(where: {
+                    $0.id == pendingID && $0.kind == .pendingInput && $0.pendingResolved
+                }) {
+                    pendingSessions.remove(sid)
+                    pendingItemIDBySession[sid] = nil
+                    // Re-emit the resolved item so the controller's model
+                    // sees pendingResolved=true and flips status to
+                    // "running", allowing the idle tick to close the card.
+                    intents.append(.observe(
+                        sessionID: sid,
+                        agentName: session.agentName,
+                        item: resolvedItem
+                    ))
+                    Telemetry.breadcrumb("live_activity",
+                        "pending-ask resolved: re-observing item to flip status",
+                        data: ["session": sid, "itemID": pendingID])
+                }
+            }
+
             // Walk the conversation forward. Once we've passed the
             // last-seen id, every fresh tool/command/exit drives one
             // intent. Plain `.message` rows don't surface.
-            let conversation = session.conversation
             var pastLastSeen = (lastSeenItemID[sid] == nil)
             for item in conversation {
                 if !pastLastSeen {
@@ -137,17 +177,25 @@ public struct TurnLiveActivityBridgeCore {
                     lastActivityAt[sid] = item.timestamp
                     endedSessions.remove(sid)
                     // Pending-input marks the session as waiting on the
-                    // user; any tool/command resumes normal idle rules.
-                    if item.kind == .pendingInput {
+                    // user; any tool/command (or a resolved pending-input)
+                    // resumes normal idle rules.
+                    if item.kind == .pendingInput && !item.pendingResolved {
                         pendingSessions.insert(sid)
+                        pendingItemIDBySession[sid] = item.id
                     } else {
                         pendingSessions.remove(sid)
+                        if item.kind != .pendingInput {
+                            // A fresh tool/command supersedes any stale
+                            // pending item tracking for this session.
+                            pendingItemIDBySession[sid] = nil
+                        }
                     }
                 } else if item.kind == .exit {
                     if !endedSessions.contains(sid) {
                         intents.append(.end(sessionID: sid))
                         endedSessions.insert(sid)
                         pendingSessions.remove(sid)
+                        pendingItemIDBySession[sid] = nil
                     }
                 }
                 lastSeenItemID[sid] = item.id
@@ -265,6 +313,12 @@ public final class TurnLiveActivityBridge {
             _ = store.statusBySession
             _ = store.sessionLifecycle
             _ = store.sessions
+            // PR #843 follow-up: observe resolvedPendingInputIDs so that
+            // when the user answers a pending ask (resolvePendingInput sets
+            // this immediately), the bridge re-evaluates and can flip the
+            // Live Activity from "pending" to "running" without waiting for
+            // a broker WS re-broadcast (which never comes — see askcontrol.go).
+            _ = store.resolvedPendingInputIDs
         } onChange: { [weak self] in
             // onChange fires on a background actor by contract. Hop
             // back to the main actor before touching the store.
@@ -304,6 +358,16 @@ public final class TurnLiveActivityBridge {
         for sid in store.statusBySession.keys { ids.insert(sid) }
         for sid in store.sessionLifecycle.keys { ids.insert(sid) }
 
+        // Snapshot the optimistic-resolution set so the mapping below can
+        // mark items that the user has already answered as pendingResolved=true
+        // even before the broker appends the [[conduit:resolved]] marker to
+        // the on-disk convlog. The broker intentionally does NOT re-broadcast
+        // the resolved content over the live WS (see broker askcontrol.go
+        // recordPendingResolution comment) so the content-based check in
+        // TurnLiveActivityMapping.map always returns pendingResolved=false for
+        // in-flight sessions. This set covers that gap.
+        let optimisticResolved = store.resolvedPendingInputIDs
+
         for sid in ids.sorted() {
             let session = store.sessions.first(where: { $0.id == sid })
             let agentName = session?.assistant
@@ -316,7 +380,21 @@ public final class TurnLiveActivityBridge {
                 phase = store.statusBySession[sid]?.phase
             }
             let conversation = (store.conversationLog[sid] ?? [])
-                .compactMap(TurnLiveActivityMapping.map)
+                .compactMap { item -> TurnActivityItem? in
+                    guard var mapped = TurnLiveActivityMapping.map(item) else { return nil }
+                    // Apply the optimistic-resolution override: if the app already
+                    // recorded that the user answered this pending-input item (via
+                    // resolvePendingInput / answerPendingInput), mark it resolved
+                    // so the Live Activity stops showing "needs you" immediately.
+                    if mapped.kind == .pendingInput, !mapped.pendingResolved,
+                       optimisticResolved.contains(mapped.id) {
+                        mapped.pendingResolved = true
+                        Telemetry.breadcrumb("live_activity",
+                            "frame: pending item marked resolved via optimisticResolved",
+                            data: ["itemID": mapped.id, "session": sid])
+                    }
+                    return mapped
+                }
             sessions.append(
                 TurnLiveActivityFrame.Session(
                     sessionID: sid,

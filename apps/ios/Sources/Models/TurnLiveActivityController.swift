@@ -47,6 +47,15 @@ public final class TurnLiveActivityController {
     /// item (idempotent stream refresh) doesn't produce duplicate updates.
     private var lastSeenItemID: [String: String] = [:]
 
+    /// Last-seen pendingResolved state per pending-input item ID. Used to
+    /// detect when a pending-input item that was already consumed by the
+    /// dedup gate (lastSeenItemID) transitions from unresolved to resolved.
+    /// When that happens, observe() re-processes the item so the model can
+    /// flip status from "pending" to "running" and the idle tick can close
+    /// the activity. Keyed by item-id (not session-id) since the same item
+    /// id may appear across sessions in theory (though not in practice).
+    private var lastSeenPendingResolvedByItemID: [String: Bool] = [:]
+
     /// Last-seen lifecycle phase per session for the session-exit signal.
     private var lastSeenPhase: [String: String] = [:]
 
@@ -128,16 +137,44 @@ public final class TurnLiveActivityController {
     ) {
         var model = models[sessionID, default: TurnActivityModel()]
         if lastSeenItemID[sessionID] == item.id {
-            // Idempotent re-emit. Tick so an idle close still fires.
-            let effect = model.tick(now: Date())
-            apply(effect: effect, sessionID: sessionID)
-            models[sessionID] = model
-            return
+            // Same item ID as last time. Check if a pending-input item has
+            // transitioned from unresolved to resolved — the broker does not
+            // re-broadcast the resolved content over the WS, so the item id
+            // never changes but its pendingResolved flag can flip (set by
+            // the optimistic resolvedPendingInputIDs in the frame mapping).
+            // If the resolved state changed, fall through to re-apply so the
+            // model flips status from "pending" to "running".
+            let prevResolved = lastSeenPendingResolvedByItemID[item.id]
+            let resolvedStateChanged = item.kind == .pendingInput
+                && prevResolved != nil
+                && prevResolved != item.pendingResolved
+            if resolvedStateChanged {
+                Telemetry.breadcrumb("live_activity",
+                    "observe: pending-ask resolved-state flip, re-applying",
+                    data: ["session": sessionID, "itemID": item.id,
+                           "resolved": "\(item.pendingResolved)"])
+                // Fall through to the apply path below.
+            } else {
+                // Idempotent re-emit. Tick so an idle close still fires.
+                let effect = model.tick(now: Date())
+                apply(effect: effect, sessionID: sessionID)
+                models[sessionID] = model
+                return
+            }
         }
         lastSeenItemID[sessionID] = item.id
+        if item.kind == .pendingInput {
+            lastSeenPendingResolvedByItemID[item.id] = item.pendingResolved
+        }
+        Telemetry.breadcrumb("live_activity", "observe: applying item",
+            data: ["session": sessionID, "kind": item.kind.rawValue,
+                   "pendingResolved": "\(item.pendingResolved)",
+                   "isActive": "\(model.isActive)"])
         let effect = model.apply(
             item: item, sessionID: sessionID, agentName: agentName, sessionName: sessionName
         )
+        Telemetry.breadcrumb("live_activity", "observe: effect",
+            data: ["session": sessionID, "effect": "\(effect)"])
         apply(effect: effect, sessionID: sessionID)
         models[sessionID] = model
     }
@@ -299,7 +336,14 @@ public final class TurnLiveActivityController {
 
     private func updateActivity(state: TurnActivityContentState, sessionID: String) {
         #if canImport(ActivityKit)
-        guard let activityID = activeActivityIDs[sessionID] else { return }
+        guard let activityID = activeActivityIDs[sessionID] else {
+            Telemetry.breadcrumb("live_activity", "update skipped: no active activity",
+                data: ["session": sessionID, "status": state.status])
+            return
+        }
+        Telemetry.breadcrumb("live_activity", "update",
+            data: ["session": sessionID, "status": state.status,
+                   "activityID": activityID])
         let content = TurnActivityAttributes.ContentState(from: Self.stamped(state))
         Task {
             for activity in Activity<TurnActivityAttributes>.activities where activity.id == activityID {
