@@ -290,4 +290,119 @@ struct TurnLiveActivityBridgeTests {
         let intents = core.ingest(frame: frame, now: Date(timeIntervalSince1970: 100))
         #expect(intents.last == .tick)
     }
+
+    // MARK: - Pending-input idle-exempt and resolved-dismiss (PR #843 follow-up)
+
+    /// A pending-input session must be exempt from the idle-timeout sweep
+    /// while unresolved — an approval can wait minutes.
+    @Test func pendingInputIsExemptFromIdleSweep() {
+        var core = TurnLiveActivityBridgeCore(idleTimeout: 5)
+        let pendingItem = TurnActivityItem(
+            id: "p1", kind: .pendingInput,
+            timestamp: Date(timeIntervalSince1970: 100),
+            pendingResolved: false
+        )
+        let frame = TurnLiveActivityFrame(sessions: [
+            session(items: [pendingItem])
+        ])
+        _ = core.ingest(frame: frame, now: Date(timeIntervalSince1970: 100))
+        // Way past idle timeout — session is still pending, must NOT end.
+        let intents = core.ingest(frame: frame, now: Date(timeIntervalSince1970: 700))
+        #expect(!intents.contains(.end(sessionID: "s1")),
+            "pending-input session must be exempt from idle sweep")
+    }
+
+    /// When the pending-input item is marked resolved (pendingResolved=true),
+    /// the bridge must re-emit an observe so the controller model flips to
+    /// "running", and the idle sweep must be able to close the activity.
+    @Test func resolvedPendingInputExitsIdleExemptionAndAllowsClose() {
+        var core = TurnLiveActivityBridgeCore(idleTimeout: 5)
+        let t0 = Date(timeIntervalSince1970: 100)
+
+        // Step 1: pending ask arrives.
+        let unresolvedItem = TurnActivityItem(
+            id: "p1", kind: .pendingInput, timestamp: t0, pendingResolved: false
+        )
+        _ = core.ingest(
+            frame: TurnLiveActivityFrame(sessions: [session(items: [unresolvedItem])]),
+            now: t0
+        )
+        #expect(core.pendingSessions.contains("s1"))
+        #expect(core.pendingItemIDBySession["s1"] == "p1")
+
+        // Step 2: user answers -- same item id, pendingResolved=true.
+        let resolvedItem = TurnActivityItem(
+            id: "p1", kind: .pendingInput, timestamp: t0, pendingResolved: true
+        )
+        let resolveIntents = core.ingest(
+            frame: TurnLiveActivityFrame(sessions: [session(items: [resolvedItem])]),
+            now: t0.addingTimeInterval(1)
+        )
+        // Bridge must emit an observe with the resolved item.
+        let hasResolvedObserve = resolveIntents.contains(where: {
+            if case let .observe(sid, _, itm) = $0 {
+                return sid == "s1" && itm.id == "p1" && itm.pendingResolved
+            }
+            return false
+        })
+        #expect(hasResolvedObserve,
+            "bridge must re-emit observe for resolved pending-input item")
+        // Session must no longer be in pendingSessions after resolution.
+        #expect(!core.pendingSessions.contains("s1"),
+            "resolved pending-input must exit pendingSessions")
+        #expect(core.pendingItemIDBySession["s1"] == nil)
+
+        // Step 3: idle timeout fires after resolution — session must end.
+        let idleIntents = core.ingest(
+            frame: TurnLiveActivityFrame(sessions: [session(items: [resolvedItem])]),
+            now: t0.addingTimeInterval(10)
+        )
+        #expect(idleIntents.contains(.end(sessionID: "s1")),
+            "resolved pending-input must allow idle-timeout close")
+    }
+
+    /// A resolved pending-input arriving fresh (never previously seen by
+    /// the bridge) must NOT add the session to pendingSessions.
+    @Test func freshResolvedPendingInputDoesNotEnterPendingSessions() {
+        var core = TurnLiveActivityBridgeCore(idleTimeout: 5)
+        let t0 = Date(timeIntervalSince1970: 100)
+        let resolvedItem = TurnActivityItem(
+            id: "p1", kind: .pendingInput, timestamp: t0, pendingResolved: true
+        )
+        _ = core.ingest(
+            frame: TurnLiveActivityFrame(sessions: [session(items: [resolvedItem])]),
+            now: t0
+        )
+        #expect(!core.pendingSessions.contains("s1"),
+            "a freshly-resolved pending-input must not be added to pendingSessions")
+    }
+
+    /// A tool item following a resolved pending-input must clear any residual
+    /// pending state, and the idle sweep must then fire normally.
+    @Test func toolAfterResolvedPendingInputIdlesNormally() {
+        var core = TurnLiveActivityBridgeCore(idleTimeout: 5)
+        let t0 = Date(timeIntervalSince1970: 100)
+        let pending = TurnActivityItem(
+            id: "p1", kind: .pendingInput, timestamp: t0, pendingResolved: false
+        )
+        _ = core.ingest(
+            frame: TurnLiveActivityFrame(sessions: [session(items: [pending])]),
+            now: t0
+        )
+        // Agent resumes with a fresh tool call.
+        let tool = TurnActivityItem(id: "t1", kind: .tool, toolName: "Bash",
+                                    timestamp: t0.addingTimeInterval(2))
+        let afterTool = core.ingest(
+            frame: TurnLiveActivityFrame(sessions: [session(items: [pending, tool])]),
+            now: t0.addingTimeInterval(2)
+        )
+        #expect(!core.pendingSessions.contains("s1"))
+        let _ = afterTool // intents are emitted; we only care about state
+        // Idle fires after the tool's timeout.
+        let idleIntents = core.ingest(
+            frame: TurnLiveActivityFrame(sessions: [session(items: [pending, tool])]),
+            now: t0.addingTimeInterval(10)
+        )
+        #expect(idleIntents.contains(.end(sessionID: "s1")))
+    }
 }
