@@ -20,6 +20,17 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Real Claude thinking shown in the app — iOS + Android. PR #857.**
+
+- Consumes the broker's `thinking_streaming` (PR #854): a **collapsible "Thinking…"
+  disclosure** (collapsed by default, dimmed mono, above the streaming prose) plus
+  an **indicator peek** — while `turnPhase == "thinking"`, the latest thinking line
+  (last non-empty, capped ~80 chars) replaces the working indicator's canned verb
+  across ALL styles (incl. the new E/F). Ephemeral (clears at turn end; no
+  transcript persistence). Needs the broker redeployed (#854) to see it live.
+  [iOS + Android, **needs on-device verify**: drive a thinking-heavy Claude prompt
+  → the indicator shows real reasoning + a "Thinking…" block you can expand]
+
 **Two combined working-indicator styles (B+D) — iOS + Android. PR #855.**
 
 - Adds styles **E "Packets @ prompt"** (D's terminal card + shell header with B's
