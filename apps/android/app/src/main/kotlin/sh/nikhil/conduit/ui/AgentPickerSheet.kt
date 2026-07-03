@@ -48,6 +48,7 @@ import sh.nikhil.conduit.RemoteDirectoryListing
 import sh.nikhil.conduit.RemoteHarnessStatus
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
+import sh.nikhil.conduit.auth.OAuthProvider
 import sh.nikhil.conduit.descriptorFor
 import sh.nikhil.conduit.readinessCheckItems
 import sh.nikhil.conduit.ui.components.ConduitChip
@@ -95,6 +96,7 @@ fun AgentPickerSheet(
     // WS-H.3: agent-login sheet launched from "Sign in" on a not-signed-in
     // readiness row (informational, never blocking).
     var showAgentLogin by remember { mutableStateOf(false) }
+    var loginAutoStartProvider by remember { mutableStateOf<OAuthProvider?>(null) }
     // Box the session should run on (round 3: "I can't choose where to
     // start the session in"). null = the currently connected box; an
     // explicit pick of a different box routes the create through
@@ -138,7 +140,10 @@ fun AgentPickerSheet(
                 selectedServerId = resolvedServerId,
                 onSelectServer = { selectedServerId = it },
                 onPick = { pickedAgent = it },
-                onSignIn = { showAgentLogin = true },
+                onSignIn = { provider ->
+                    loginAutoStartProvider = OAuthProvider.fromRaw(provider)
+                    showAgentLogin = true
+                },
             )
         } else {
             DirectoryStep(
@@ -184,7 +189,12 @@ fun AgentPickerSheet(
 
     // WS-H.3: agent-login sheet launched from a readiness "Sign in" tap.
     if (showAgentLogin) {
-        AgentLoginSheet(store = store, onDismiss = { showAgentLogin = false })
+        AgentLoginSheet(
+            store = store,
+            autoStartProvider = loginAutoStartProvider,
+            onAutoStartConsumed = { loginAutoStartProvider = null },
+            onDismiss = { showAgentLogin = false },
+        )
     }
 }
 

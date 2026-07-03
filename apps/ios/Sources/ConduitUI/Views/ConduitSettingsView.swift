@@ -118,7 +118,7 @@ extension ConduitUI {
                     agentAccounts = AgentAccountStatus.current(descriptors: store.agentDescriptors)
                     reAuthProvider = nil
                 }) {
-                    ConduitUI.AgentLoginSheet(autoStartProvider: reAuthProvider)
+                    ConduitUI.AgentLoginSheet(autoStartProvider: $reAuthProvider)
                         .presentationDetents([.medium, .large])
                 }
             }

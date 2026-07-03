@@ -597,13 +597,18 @@ fun SettingsScreen(
         TerminalThemePickerSheet(appearance = appearance, current = terminalTheme, onDismiss = { showTerminalTheme = false })
     }
     if (showAgentLogin) {
-        AgentLoginSheet(store = store, autoStartProvider = reAuthProvider, onDismiss = {
+        AgentLoginSheet(
+            store = store,
+            autoStartProvider = reAuthProvider,
+            onAutoStartConsumed = { reAuthProvider = null },
+            onDismiss = {
             showAgentLogin = false
             reAuthProvider = null
             // Re-read the credential store so a fresh sign-in flips the
             // agent rows to `● signed in` immediately.
             agentAccounts = sh.nikhil.conduit.auth.AgentAccountStatus.current(context)
-        })
+            },
+        )
     }
     pendingForget?.let { target ->
         AlertDialog(

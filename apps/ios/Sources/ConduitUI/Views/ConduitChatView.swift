@@ -148,6 +148,9 @@ extension ConduitUI {
         /// §D 401 handling: present the agent login sheet when the user taps
         /// "Sign in on this box" on the agent-auth-failure banner.
         @State private var showAgentLogin = false
+        /// Consumed by AgentLoginSheet before OAuth starts so a sheet rebuild
+        /// after the browser closes cannot launch the provider a second time.
+        @State private var loginAutoStartProvider: OAuthProvider?
         /// How many of the most-recent transcript rows to render. Long chats
         /// were laggy because every row (markdown / tool parse) was laid out
         /// each render; we cap to the tail and let "Load earlier" widen it.
@@ -253,9 +256,7 @@ extension ConduitUI {
                 // agent-auth-failure banner. Preselect the session's provider
                 // so the user lands on the right login flow.
                 .sheet(isPresented: $showAgentLogin) {
-                    ConduitUI.AgentLoginSheet(
-                        autoStartProvider: store.agentAuthFailure[session.id]
-                    )
+                    ConduitUI.AgentLoginSheet(autoStartProvider: $loginAutoStartProvider)
                 }
                 // chat-shell-v2 (§2): resolve the arm once at the shell and
                 // inject it for the row tree to read. Log the exposure event
@@ -1290,6 +1291,7 @@ extension ConduitUI {
             if let provider = store.agentAuthFailure[session.id] {
                 let providerLabel = provider == .anthropic ? "Claude" : "Codex"
                 Button {
+                    loginAutoStartProvider = provider
                     showAgentLogin = true
                 } label: {
                     HStack(spacing: 8) {

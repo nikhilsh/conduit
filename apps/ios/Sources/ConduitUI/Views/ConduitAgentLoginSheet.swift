@@ -36,7 +36,11 @@ extension ConduitUI {
         /// instead of just listing accounts — so a fresh box can be signed into
         /// even when the device already has a global credential. nil = the
         /// normal accounts-list behaviour.
-        var autoStartProvider: OAuthProvider? = nil
+        @Binding var autoStartProvider: OAuthProvider?
+
+        init(autoStartProvider: Binding<OAuthProvider?> = .constant(nil)) {
+            self._autoStartProvider = autoStartProvider
+        }
 
         @State private var didAutoStart = false
         @State private var isWorking = false
@@ -63,7 +67,7 @@ extension ConduitUI {
         var body: some View {
             NavigationStack {
                 ZStack {
-                    ConduitUI.Palette.surface.color.ignoresSafeArea()
+                    GlassAppBackground()
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
                             // Fix 2: "Agent accounts" title shown as section header.
@@ -109,9 +113,9 @@ extension ConduitUI {
                         .padding(.top, 10)
                         .padding(.bottom, 12)
                         .background(
-                            ConduitUI.Palette.surface.color
+                            neon.bg
                                 .overlay(alignment: .top) {
-                                    Rectangle().fill(ConduitUI.Palette.separator.color).frame(height: 1)
+                                    Rectangle().fill(neon.border).frame(height: 1)
                                 }
                                 .ignoresSafeArea(edges: .bottom)
                         )
@@ -127,7 +131,7 @@ extension ConduitUI {
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.system(size: 22, weight: .semibold))
-                                .foregroundStyle(ConduitUI.Palette.textMuted.color)
+                                .foregroundStyle(neon.textDim)
                         }
                         .disabled(isWorking)
                         .accessibilityLabel("Close")
@@ -148,14 +152,14 @@ extension ConduitUI {
                 // fires once even if onAppear re-runs.
                 if let provider = autoStartProvider, !didAutoStart {
                     didAutoStart = true
+                    // Consume the intent in the presenting view before opening
+                    // another presentation layer. If SwiftUI reconstructs this
+                    // sheet when the browser closes, it must not auto-launch
+                    // the same provider again.
+                    autoStartProvider = nil
                     Telemetry.breadcrumb("agent_login", "auto-start from readiness",
                         data: ["provider": provider.rawValue])
-                    Task {
-                        switch provider {
-                        case .openai:    await loginChatGPT()
-                        case .anthropic: await beginClaude()
-                        }
-                    }
+                    launchLogin(provider)
                 }
             }
             .sheet(isPresented: Binding(
@@ -175,8 +179,8 @@ extension ConduitUI {
             VStack(alignment: .leading, spacing: 6) {
                 sectionLabel("Agent accounts")
                 Text("Sign in to the model providers you want to use through Conduit. You sign in in your own browser; Conduit ships the resulting credential to the broker so agents run on your account.")
-                    .font(.footnote)
-                    .foregroundStyle(ConduitUI.Palette.textMuted.color)
+                    .font(neon.sans(13))
+                    .foregroundStyle(neon.textDim)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -190,21 +194,21 @@ extension ConduitUI {
                     status: claudeStatus,
                     signedIn: signedInProviders.contains(.anthropic),
                     enabled: !isWorking,
-                    action: { Task { await beginClaude() } }
+                    action: { launchLogin(.anthropic) }
                 )
                 Divider()
-                    .background(ConduitUI.Palette.separator.color)
+                    .background(neon.border)
                 // ChatGPT / Codex row
                 let codexStatus = agentStatus(agent: "codex", provider: .openai)
                 agentRow(
                     status: codexStatus,
                     signedIn: signedInProviders.contains(.openai),
                     enabled: !isWorking,
-                    action: { Task { await loginChatGPT() } }
+                    action: { launchLogin(.openai) }
                 )
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .conduitGlassRoundedRect(cornerRadius: 14)
+            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
         }
 
         /// Build a fresh AgentAccountStatus snapshot for the given provider.
@@ -238,7 +242,7 @@ extension ConduitUI {
             // LINE 1 -- phone (device-local Keychain) sign-in status.
             let phoneText: String = !signedIn ? "Not signed in"
                 : status.expired ? "Signed in - expired" : "Signed in"
-            let phoneColor: Color = !signedIn ? ConduitUI.Palette.textMuted.color
+            let phoneColor: Color = !signedIn ? neon.textFaint
                 : status.expired ? neon.yellow : neon.green
             // LINE 2 -- connected-box readiness for THIS agent.
             let boxLine = AgentBoxStatus.make(
@@ -261,7 +265,7 @@ extension ConduitUI {
                     HStack(spacing: 7) {
                         Text(status.displayName)
                             .font(neon.sans(15).weight(.bold))
-                            .foregroundStyle(enabled ? ConduitUI.Palette.textPrimary.color : ConduitUI.Palette.textMuted.color)
+                            .foregroundStyle(enabled ? neon.text : neon.textFaint)
                         if let plan = status.planLabel {
                             Text(plan)
                                 .font(neon.mono(9).weight(.bold))
@@ -286,7 +290,7 @@ extension ConduitUI {
                     if let boxLine {
                         Text(boxLine.text)
                             .font(neon.mono(10))
-                            .foregroundStyle(boxLine.tone == .ready ? neon.green : ConduitUI.Palette.textMuted.color)
+                            .foregroundStyle(boxLine.tone == .ready ? neon.green : neon.textFaint)
                     }
                 }
                 Spacer(minLength: 8)
@@ -348,7 +352,7 @@ extension ConduitUI {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(ConduitUI.Palette.textMuted.color)
+                    .foregroundStyle(neon.textDim)
                     .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
             }
@@ -362,51 +366,81 @@ extension ConduitUI {
             VStack(alignment: .leading, spacing: 10) {
                 sectionLabel("Paste Claude code")
                 Text("After signing in, Claude shows a code. Copy it and paste it here.")
-                    .font(.caption2)
-                    .foregroundStyle(ConduitUI.Palette.textMuted.color)
+                    .font(neon.sans(12))
+                    .foregroundStyle(neon.textDim)
                 TextField("code#state", text: $pastedCode)
-                    .textFieldStyle(.roundedBorder)
+                    .font(neon.mono(14))
+                    .foregroundStyle(neon.text)
+                    .tint(neon.accent)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled(true)
                     .disabled(isWorking)
-                Button(action: { Task { await finishClaude() } }) {
-                    Text("Submit code")
-                        .font(.footnote.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 11)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(neon.surface2)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(neon.borderStrong, lineWidth: 1)
+                            )
+                    )
+                ConduitUI.ActionButton("Submit code", variant: .primary) {
+                    submitClaudeCode()
                 }
-                .buttonStyle(.borderedProminent)
                 .disabled(isWorking || pastedCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .opacity(
+                    isWorking || pastedCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? 0.45 : 1
+                )
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .conduitGlassRoundedRect(cornerRadius: 14)
+            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
         }
 
         private func statusPill(text: String, tint: Color) -> some View {
             Text(text)
-                .font(.footnote)
+                .font(neon.sans(13))
                 .foregroundStyle(tint)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .conduitGlassRoundedRect(cornerRadius: 14)
+                .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
         }
 
         private func sectionLabel(_ text: String) -> some View {
             Text(text.uppercased())
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .font(neon.mono(11).weight(.bold))
                 .tracking(0.6)
-                .foregroundStyle(ConduitUI.Palette.textMuted.color)
+                .foregroundStyle(neon.textFaint)
         }
 
         // MARK: Actions
 
+        /// Claim the UI synchronously before creating an async task. Relying on
+        /// the next SwiftUI render to disable the menu/button leaves a window
+        /// where two taps can enqueue two browser presentations.
+        @MainActor
+        private func launchLogin(_ provider: OAuthProvider) {
+            guard !isWorking else {
+                Telemetry.breadcrumb("agent_login", "duplicate launch dropped",
+                    data: ["provider": provider.rawValue])
+                return
+            }
+            isWorking = true
+            Task {
+                switch provider {
+                case .openai:    await loginChatGPT()
+                case .anthropic: await beginClaude()
+                }
+            }
+        }
+
         /// ChatGPT/Codex — one-shot loopback flow (no paste step).
         @MainActor
         private func loginChatGPT() async {
-            isWorking = true
             statusMessage = "Opening ChatGPT sign-in…"
             errorMessage = nil
             awaitingPaste = false
@@ -435,7 +469,6 @@ extension ConduitUI {
         /// to external Safari and stranded the user outside the app.
         @MainActor
         private func beginClaude() async {
-            isWorking = true
             errorMessage = nil
             defer { isWorking = false }
             Telemetry.breadcrumb("agent_login", "anthropic: begin code-paste, opening in-app browser")
@@ -455,12 +488,22 @@ extension ConduitUI {
 
         /// Claude/Anthropic step 2 — exchange the pasted code.
         @MainActor
-        private func finishClaude() async {
-            guard let client = pasteClient else {
-                errorMessage = "Start the Claude sign-in first."
+        private func submitClaudeCode() {
+            guard !isWorking else {
+                Telemetry.breadcrumb("agent_login", "duplicate anthropic code submit dropped")
                 return
             }
             isWorking = true
+            Task { await finishClaude() }
+        }
+
+        @MainActor
+        private func finishClaude() async {
+            guard let client = pasteClient else {
+                errorMessage = "Start the Claude sign-in first."
+                isWorking = false
+                return
+            }
             statusMessage = "Exchanging the Claude code…"
             errorMessage = nil
             defer { isWorking = false }

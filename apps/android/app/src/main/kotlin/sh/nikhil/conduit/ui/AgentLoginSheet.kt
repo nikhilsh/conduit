@@ -2,6 +2,7 @@ package sh.nikhil.conduit.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -33,6 +35,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -86,6 +89,9 @@ fun AgentLoginSheet(
     /** When non-null, auto-start OAuth for this provider on open (one-tap
      *  re-auth from the ⋮ menu). Mirror of iOS `autoStartProvider`. */
     autoStartProvider: OAuthProvider? = null,
+    /** Clears the one-shot intent in the presenting composable before the
+     * browser opens, preventing a recreation from launching it again. */
+    onAutoStartConsumed: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -173,6 +179,10 @@ fun AgentLoginSheet(
     }
 
     fun loginChatGPT() {
+        if (isWorking) {
+            Telemetry.breadcrumb("agent_login", "duplicate launch dropped", mapOf("provider" to OAuthProvider.OPENAI.raw))
+            return
+        }
         isWorking = true
         statusMessage = "Opening ChatGPT sign-in…"
         errorMessage = null
@@ -196,6 +206,10 @@ fun AgentLoginSheet(
     }
 
     fun beginClaude() {
+        if (isWorking) {
+            Telemetry.breadcrumb("agent_login", "duplicate launch dropped", mapOf("provider" to OAuthProvider.ANTHROPIC.raw))
+            return
+        }
         isWorking = true
         errorMessage = null
         Telemetry.breadcrumb("agent_login", "anthropic: begin code-paste, opening browser")
@@ -217,6 +231,10 @@ fun AgentLoginSheet(
     }
 
     fun finishClaude() {
+        if (isWorking) {
+            Telemetry.breadcrumb("agent_login", "duplicate anthropic code submit dropped")
+            return
+        }
         val client = pasteClient
         val req = pasteRequest
         if (client == null || req == null) {
@@ -253,6 +271,7 @@ fun AgentLoginSheet(
     // lands directly in the browser/paste flow. Mirror of iOS
     // `AgentLoginSheet(autoStartProvider:)`.
     LaunchedEffect(autoStartProvider) {
+        if (autoStartProvider != null) onAutoStartConsumed()
         when (autoStartProvider) {
             OAuthProvider.ANTHROPIC -> beginClaude()
             OAuthProvider.OPENAI -> loginChatGPT()
@@ -264,11 +283,16 @@ fun AgentLoginSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = neon.surfaceSolid,
+        containerColor = neon.bg,
         shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
     ) {
-        // Fix 2: TopAppBar with trailing X to close (replaces the old "Cancel" text).
-        TopAppBar(
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(neon.appBg),
+        ) {
+            // Fix 2: TopAppBar with trailing X to close (replaces the old "Cancel" text).
+            TopAppBar(
             title = {
                 Text(
                     "Agent accounts",
@@ -288,20 +312,22 @@ fun AgentLoginSheet(
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
-        )
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
+            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
             // Fix 2: one card, one row per provider with avatar tint, name,
             // signed-in status, and a Manage / Sign in trailing action.
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                modifier = Modifier.fillMaxWidth(),
+                color = androidx.compose.ui.graphics.Color.Transparent,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .neonCardSurface(neon = neon, shape = RoundedCornerShape(16.dp), fill = neon.surface),
             ) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
                     // Claude row
@@ -343,8 +369,10 @@ fun AgentLoginSheet(
             if (awaitingPaste) {
                 Surface(
                     shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                    modifier = Modifier.fillMaxWidth(),
+                    color = androidx.compose.ui.graphics.Color.Transparent,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .neonCardSurface(neon = neon, shape = RoundedCornerShape(16.dp), fill = neon.surface),
                 ) {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -353,7 +381,8 @@ fun AgentLoginSheet(
                         Text(
                             "After signing in, Claude shows a code. Copy it and paste it here.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontFamily = neon.sans,
+                            color = neon.textDim,
                         )
                         OutlinedTextField(
                             value = pastedCode,
@@ -362,13 +391,31 @@ fun AgentLoginSheet(
                             singleLine = true,
                             enabled = !isWorking,
                             modifier = Modifier.fillMaxWidth(),
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                color = neon.text,
+                                fontFamily = neon.mono,
+                            ),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = neon.accent,
+                                unfocusedBorderColor = neon.borderStrong,
+                                focusedLabelColor = neon.accent,
+                                unfocusedLabelColor = neon.textDim,
+                                cursorColor = neon.accent,
+                            ),
                         )
                         Button(
                             onClick = { finishClaude() },
                             enabled = !isWorking && pastedCode.trim().isNotEmpty(),
                             modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = neon.green,
+                                contentColor = neon.accentText,
+                                disabledContainerColor = neon.green.copy(alpha = 0.35f),
+                                disabledContentColor = neon.accentText.copy(alpha = 0.55f),
+                            ),
                         ) {
-                            Text("Submit code")
+                            Text("Submit code", fontFamily = neon.sans, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -378,6 +425,7 @@ fun AgentLoginSheet(
             errorMessage?.let { StatusPill(text = it, isError = true) }
 
             Spacer(Modifier.height(8.dp))
+            }
         }
     }
 }
@@ -533,19 +581,26 @@ private fun ProviderRow(
 
 @Composable
 private fun StatusPill(text: String, isError: Boolean) {
+    val neon = LocalNeonTheme.current
+    val tint = if (isError) neon.red else neon.accent
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = if (isError)
-            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f)
-        else
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        modifier = Modifier.fillMaxWidth(),
+        color = androidx.compose.ui.graphics.Color.Transparent,
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(
+                neon = neon,
+                shape = RoundedCornerShape(12.dp),
+                fill = neon.surface,
+                borderColor = tint.copy(alpha = 0.45f),
+            ),
     ) {
         Text(
             text,
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
             style = MaterialTheme.typography.bodySmall,
-            color = if (isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface,
+            fontFamily = neon.sans,
+            color = tint,
         )
     }
 }
