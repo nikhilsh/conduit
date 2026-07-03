@@ -37,6 +37,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -47,11 +48,35 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 import java.net.HttpURLConnection
 import java.net.URL
+
+// MARK: Fanout data classes
+
+/** One parallel run within a fanout step. */
+data class FanoutRun(
+    val index: Int,
+    val agentType: String,
+    val sessionId: String?,
+    val branch: String?,
+    val phase: String?,
+) {
+    val isDone: Boolean get() = phase == "exited(0)" || phase == "exited"
+    val isFailed: Boolean get() = phase != null && phase.startsWith("exited") && !isDone
+    val isRunning: Boolean get() = phase == "running" || phase == "ready"
+}
+
+/** Fanout configuration + runtime state on a pipeline step. */
+data class FanoutStatus(
+    val count: Int,
+    val agentTypes: List<String>,
+    val runs: List<FanoutRun>,
+    val winner: Int?,
+)
 
 /** Data classes for pipeline state. */
 data class PipelineStep(
@@ -67,7 +92,11 @@ data class PipelineStep(
     val retries: Int = 0,
     /** Previous session IDs for retried executions of this step. */
     val prevSessionIds: List<String> = emptyList(),
-)
+    /** Fanout config and runtime state; null for normal steps. */
+    val fanout: FanoutStatus? = null,
+) {
+    val isFanout: Boolean get() = fanout != null
+}
 
 /**
  * Gate metadata returned by the broker when a pipeline is in the
@@ -111,6 +140,37 @@ private fun parsePipeline(json: JSONObject): Pipeline {
                     }
                 }
             }
+            // Parse optional fanout block
+            val fanoutObj = s.optJSONObject("fanout")
+            val fanout: FanoutStatus? = fanoutObj?.let { fo ->
+                val runsArr = fo.optJSONArray("runs")
+                val runs = buildList {
+                    if (runsArr != null) {
+                        for (r in 0 until runsArr.length()) {
+                            val run = runsArr.getJSONObject(r)
+                            add(FanoutRun(
+                                index = run.optInt("index", r),
+                                agentType = run.optString("agent_type", "claude"),
+                                sessionId = run.optString("session_id", "").takeIf { it.isNotEmpty() },
+                                branch = run.optString("branch", "").takeIf { it.isNotEmpty() },
+                                phase = run.optString("phase", "").takeIf { it.isNotEmpty() },
+                            ))
+                        }
+                    }
+                }
+                val agentTypesArr = fo.optJSONArray("agent_types")
+                val agentTypes = buildList {
+                    if (agentTypesArr != null) {
+                        for (a in 0 until agentTypesArr.length()) add(agentTypesArr.optString(a, ""))
+                    }
+                }
+                FanoutStatus(
+                    count = fo.optInt("count", 0),
+                    agentTypes = agentTypes,
+                    runs = runs,
+                    winner = fo.optInt("winner", -1).takeIf { it >= 0 },
+                )
+            }
             steps.add(
                 PipelineStep(
                     index = s.optInt("index", i),
@@ -123,6 +183,7 @@ private fun parsePipeline(json: JSONObject): Pipeline {
                     phase = s.optString("phase", "").takeIf { it.isNotEmpty() },
                     retries = s.optInt("retries", 0),
                     prevSessionIds = prevSessionIds,
+                    fanout = fanout,
                 ),
             )
         }
@@ -149,7 +210,7 @@ private fun parsePipeline(json: JSONObject): Pipeline {
     )
 }
 
-private val TERMINAL_STATES = setOf("done", "failed", "cancelled")
+private val TERMINAL_STATES = setOf("done", "failed", "cancelled", "complete")
 
 /**
  * Pipeline monitor screen. Polls GET /api/pipeline/{id} every 5 seconds
@@ -169,6 +230,7 @@ fun PipelineMonitorScreen(
     val endpoint by store.endpoint.collectAsState()
     val pipelineGatePreview by store.pipelineGatePreview.collectAsState()
     val pipelineResume by store.pipelineResume.collectAsState()
+    val pipelineFanout by store.pipelineFanout.collectAsState()
     val scope = rememberCoroutineScope()
 
     var pipeline by remember { mutableStateOf<Pipeline?>(null) }
@@ -184,6 +246,11 @@ fun PipelineMonitorScreen(
     var showResumeArea by remember { mutableStateOf(false) }
     var resumePromptDraft by remember { mutableStateOf("") }
     var isResuming by remember { mutableStateOf(false) }
+    // Fanout pick state
+    var pickCompareRuns by remember { mutableStateOf<List<FanOutCompareRun>>(emptyList()) }
+    var isLoadingCompare by remember { mutableStateOf(false) }
+    var isPicking by remember { mutableStateOf(false) }
+    var pickLoadedForId by remember { mutableStateOf("") }
 
     Telemetry.breadcrumb(
         "pipeline",
@@ -413,7 +480,249 @@ fun PipelineMonitorScreen(
                                 onOpenSession(sid)
                             }
                         },
+                        onTapRun = { sessionId ->
+                            Telemetry.breadcrumb(
+                                "pipeline",
+                                "fanout_run_opened",
+                                mapOf("pipeline_id" to pipelineId, "session_id" to sessionId),
+                            )
+                            onOpenSession(sessionId)
+                        },
                     )
+                }
+
+                // Awaiting pick panel (fanout)
+                if (p.state == "awaiting_pick" && pipelineFanout) {
+                    val fanoutStep = p.steps.firstOrNull { it.index == p.currentStep && it.isFanout }
+                    val fanoutRuns = fanoutStep?.fanout?.runs ?: emptyList()
+
+                    // Trigger compare load
+                    LaunchedEffect(pipelineId, p.state) {
+                        if (pickLoadedForId != pipelineId && fanoutRuns.isNotEmpty()) {
+                            val sessionIds = fanoutRuns.mapNotNull { it.sessionId }
+                            if (sessionIds.isNotEmpty()) {
+                                Telemetry.breadcrumb(
+                                    "pipeline",
+                                    "pick_shown",
+                                    mapOf("pipeline_id" to pipelineId, "run_count" to fanoutRuns.size.toString()),
+                                )
+                                isLoadingCompare = true
+                                val result = withContext(Dispatchers.IO) {
+                                    val base = endpoint.httpBaseUrl ?: return@withContext Result.failure(Exception("no endpoint"))
+                                    runCatching {
+                                        val body = JSONObject().apply {
+                                            put("session_ids", JSONArray(sessionIds))
+                                            put("base", p.base)
+                                        }
+                                        val conn = (URL("$base/api/fanout/compare").openConnection() as HttpURLConnection).apply {
+                                            requestMethod = "POST"
+                                            doOutput = true
+                                            setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                                            setRequestProperty("Content-Type", "application/json")
+                                            connectTimeout = 10_000
+                                            readTimeout = 20_000
+                                        }
+                                        try {
+                                            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                                            val code = conn.responseCode
+                                            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                                            val text = stream?.bufferedReader()?.use { it.readText() } ?: "{}"
+                                            conn.disconnect()
+                                            text
+                                        } catch (e: Exception) {
+                                            conn.disconnect()
+                                            throw e
+                                        }
+                                    }
+                                }
+                                isLoadingCompare = false
+                                result.onSuccess { raw ->
+                                    val obj = runCatching { JSONObject(raw) }.getOrNull()
+                                    val runsArr = obj?.optJSONArray("runs")
+                                    val parsed = buildList {
+                                        if (runsArr != null) {
+                                            for (r in 0 until runsArr.length()) {
+                                                val run = runsArr.getJSONObject(r)
+                                                add(FanOutCompareRun(
+                                                    sessionId = run.optString("session_id", ""),
+                                                    label = run.optString("label", ""),
+                                                    phase = run.optString("phase", ""),
+                                                    filesChanged = run.optInt("files_changed", 0),
+                                                    insertions = run.optInt("insertions", 0),
+                                                    deletions = run.optInt("deletions", 0),
+                                                    diffStat = run.optString("diff_stat", ""),
+                                                    agentSummary = run.optString("agent_summary", ""),
+                                                    error = run.optString("error", ""),
+                                                ))
+                                            }
+                                        }
+                                    }
+                                    pickCompareRuns = parsed
+                                    pickLoadedForId = pipelineId
+                                }.onFailure { e ->
+                                    Telemetry.capture(
+                                        error = e,
+                                        message = "pipeline pick compare error",
+                                        tags = mapOf("surface" to "android", "phase" to "pipeline-monitor"),
+                                        extras = mapOf("pipeline_id" to pipelineId),
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Pick panel card
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(neon.accent.copy(alpha = 0.08f))
+                            .border(1.dp, neon.accent.copy(alpha = 0.30f), RoundedCornerShape(14.dp))
+                            .padding(14.dp),
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                "Pick the winning run",
+                                fontFamily = neon.sans,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 14.sp,
+                                color = neon.accent,
+                            )
+                            Text(
+                                "All runs have finished. Compare them and pick the one to continue the pipeline.",
+                                fontFamily = neon.sans,
+                                fontSize = 13.sp,
+                                color = neon.textDim,
+                            )
+
+                            if (isLoadingCompare) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        color = neon.accent,
+                                        strokeWidth = 2.dp,
+                                    )
+                                    Text(
+                                        "Loading compare...",
+                                        fontFamily = neon.sans,
+                                        fontSize = 13.sp,
+                                        color = neon.textDim,
+                                    )
+                                }
+                            } else if (pickCompareRuns.isNotEmpty()) {
+                                pickCompareRuns.forEach { run ->
+                                    val runEntry = fanoutRuns.firstOrNull { it.sessionId == run.sessionId }
+                                    val runIdx = runEntry?.index ?: 0
+                                    val isWinner = fanoutStep?.fanout?.winner == runIdx
+                                    val canPick = run.error.isEmpty() && !isPicking && !isWinner
+                                    PickRunCard(
+                                        run = run,
+                                        runIndex = runIdx,
+                                        isWinner = isWinner,
+                                        canPick = canPick,
+                                        isPicking = isPicking,
+                                        neon = neon,
+                                        onOpen = { onOpenSession(run.sessionId) },
+                                        onPick = {
+                                            isPicking = true
+                                            Telemetry.breadcrumb(
+                                                "pipeline",
+                                                "pick_tapped",
+                                                mapOf("pipeline_id" to pipelineId, "run" to runIdx.toString()),
+                                            )
+                                            scope.launch {
+                                                val result = withContext(Dispatchers.IO) {
+                                                    postEndpoint(
+                                                        "/api/pipeline/$pipelineId/pick",
+                                                        JSONObject().put("run", runIdx),
+                                                    )
+                                                }
+                                                isPicking = false
+                                                result.onSuccess { json ->
+                                                    Telemetry.breadcrumb(
+                                                        "pipeline",
+                                                        "pick_ok",
+                                                        mapOf("pipeline_id" to pipelineId, "run" to runIdx.toString()),
+                                                    )
+                                                    pickCompareRuns = emptyList()
+                                                    pickLoadedForId = ""
+                                                    val parsed = parsePipeline(json)
+                                                    pipeline = parsed
+                                                }.onFailure { e ->
+                                                    Telemetry.capture(
+                                                        error = e,
+                                                        message = "pipeline pick error",
+                                                        tags = mapOf("surface" to "android", "phase" to "pipeline-monitor"),
+                                                        extras = mapOf("pipeline_id" to pipelineId, "run" to runIdx.toString()),
+                                                    )
+                                                    actionError = e.message ?: "Pick failed"
+                                                }
+                                            }
+                                        },
+                                    )
+                                }
+                            } else {
+                                // Fallback: show runs from fanout without compare data
+                                fanoutRuns.forEach { run ->
+                                    val isWinner = fanoutStep?.fanout?.winner == run.index
+                                    val canPick = run.isDone && !isPicking && !isWinner
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        AgentAvatar(assistant = run.agentType, size = 22.dp)
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                "Run ${run.index + 1} — ${run.agentType}",
+                                                fontFamily = neon.mono,
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 12.sp,
+                                                color = neon.text,
+                                            )
+                                            Text(
+                                                run.phase ?: "queued",
+                                                fontFamily = neon.mono,
+                                                fontSize = 10.sp,
+                                                color = if (run.isFailed) neon.red else neon.textFaint,
+                                            )
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(50))
+                                                .background(if (canPick) neon.accent else neon.surface2)
+                                                .clickable(enabled = canPick) {
+                                                    isPicking = true
+                                                    scope.launch {
+                                                        val result = withContext(Dispatchers.IO) {
+                                                            postEndpoint("/api/pipeline/$pipelineId/pick", JSONObject().put("run", run.index))
+                                                        }
+                                                        isPicking = false
+                                                        result.onSuccess { json ->
+                                                            pipeline = parsePipeline(json)
+                                                        }.onFailure { e ->
+                                                            actionError = e.message ?: "Pick failed"
+                                                        }
+                                                    }
+                                                }
+                                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                                        ) {
+                                            Text(
+                                                if (isWinner) "Winner" else "Pick",
+                                                fontFamily = neon.mono,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 11.sp,
+                                                color = if (canPick) neon.accentText else neon.textFaint,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Awaiting gate card
@@ -871,9 +1180,15 @@ fun PipelineMonitorScreen(
 
 /** Derive a display state string for a step given pipeline state. */
 private fun resolveStepState(step: PipelineStep, pipeline: Pipeline): String {
+    // Fanout step at current position while awaiting pick
+    if (step.isFanout && step.index == pipeline.currentStep && pipeline.state == "awaiting_pick") {
+        return "pick"
+    }
     val phase = step.phase
     if (phase.isNullOrEmpty()) {
-        return if (step.index < pipeline.currentStep) "queued" else "queued"
+        // Fanout step with runs but no step-level session is "running"
+        if (step.isFanout && step.fanout?.runs?.isNotEmpty() == true) return "running"
+        return "queued"
     }
     if (!phase.startsWith("exited")) return "running"
     val open = phase.indexOf('(')
@@ -889,9 +1204,10 @@ private fun resolveStepState(step: PipelineStep, pipeline: Pipeline): String {
 private fun PipelineStateChip(state: String, neon: NeonTheme) {
     val color = when (state) {
         "running" -> neon.accent
-        "done" -> neon.green
+        "done", "complete" -> neon.green
         "failed" -> neon.red
         "awaiting_gate" -> neon.yellow
+        "awaiting_pick" -> neon.accent
         "cancelled" -> neon.textFaint
         else -> neon.textFaint
     }
@@ -918,12 +1234,14 @@ private fun PipelineStepRow(
     stepState: String,
     neon: NeonTheme,
     onTap: () -> Unit,
+    onTapRun: (String) -> Unit = {},
 ) {
     val stateColor = when (stepState) {
         "running" -> neon.accent
         "done" -> neon.green
         "failed" -> neon.red
         "awaiting-gate" -> neon.yellow
+        "pick" -> neon.accent
         else -> neon.textFaint
     }
     val isTappable = step.sessionId != null
@@ -934,72 +1252,321 @@ private fun PipelineStepRow(
             .neonCardSurface(neon = neon, shape = RoundedCornerShape(12.dp), fill = neon.surface)
             .then(if (isTappable) Modifier.clickable(onClick = onTap) else Modifier),
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp).fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            AgentAvatar(assistant = step.agentType, size = 30.dp)
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text(
-                        step.role.ifEmpty { step.agentType },
-                        fontFamily = neon.sans,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp,
-                        color = neon.text,
-                    )
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(neon.surface2)
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
+        Column(modifier = Modifier.padding(12.dp).fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                AgentAvatar(assistant = step.agentType, size = 30.dp)
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         Text(
-                            "Step ${step.index + 1}",
-                            fontFamily = neon.mono,
-                            fontSize = 10.sp,
-                            color = neon.textFaint,
+                            step.role.ifEmpty { step.agentType },
+                            fontFamily = neon.sans,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            color = neon.text,
                         )
-                    }
-                    // Retry chip: shown when the step has been retried at least once.
-                    if (step.retries > 0) {
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(50))
-                                .background(neon.yellow.copy(alpha = 0.15f))
-                                .border(1.dp, neon.yellow.copy(alpha = 0.35f), RoundedCornerShape(50))
+                                .background(neon.surface2)
                                 .padding(horizontal = 6.dp, vertical = 2.dp),
                         ) {
                             Text(
-                                "retry ${step.retries}",
+                                "Step ${step.index + 1}",
                                 fontFamily = neon.mono,
-                                fontWeight = FontWeight.SemiBold,
                                 fontSize = 10.sp,
-                                color = neon.yellow,
+                                color = neon.textFaint,
                             )
                         }
+                        // Fanout badge
+                        if (step.isFanout) {
+                            step.fanout?.let { fo ->
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(neon.accent.copy(alpha = 0.14f))
+                                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                                ) {
+                                    Text(
+                                        "${fo.count}x",
+                                        fontFamily = neon.mono,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.sp,
+                                        color = neon.accent,
+                                    )
+                                }
+                            }
+                        }
+                        // Retry chip
+                        if (step.retries > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(neon.yellow.copy(alpha = 0.15f))
+                                    .border(1.dp, neon.yellow.copy(alpha = 0.35f), RoundedCornerShape(50))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            ) {
+                                Text(
+                                    "retry ${step.retries}",
+                                    fontFamily = neon.mono,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 10.sp,
+                                    color = neon.yellow,
+                                )
+                            }
+                        }
+                    }
+                    if (step.inputFromPrev.isNotEmpty() && step.inputFromPrev != "none") {
+                        Text(
+                            "input: ${step.inputFromPrev}",
+                            fontFamily = neon.mono,
+                            fontSize = 11.sp,
+                            color = neon.textFaint,
+                        )
                     }
                 }
-                if (step.inputFromPrev.isNotEmpty() && step.inputFromPrev != "none") {
-                    Text(
-                        "input: ${step.inputFromPrev}",
-                        fontFamily = neon.mono,
-                        fontSize = 11.sp,
-                        color = neon.textFaint,
+                PipelineStepStateChip(state = stepState, neon = neon)
+                if (stateColor == neon.accent && stepState != "pick") {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        color = neon.accent,
+                        strokeWidth = 1.5.dp,
                     )
                 }
             }
-            PipelineStepStateChip(state = stepState, neon = neon)
-            if (stateColor == neon.accent) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(12.dp),
-                    color = neon.accent,
-                    strokeWidth = 1.5.dp,
+
+            // Fanout sub-run cluster
+            if (step.isFanout) {
+                val runs = step.fanout?.runs ?: emptyList()
+                if (runs.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        runs.forEach { run ->
+                            val runColor = when {
+                                step.fanout?.winner == run.index -> neon.green
+                                run.isFailed -> neon.red
+                                run.isRunning -> neon.accent
+                                run.isDone -> neon.green
+                                else -> neon.textFaint
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(
+                                        if (run.sessionId != null) {
+                                            Modifier.clickable { onTapRun(run.sessionId) }
+                                        } else Modifier,
+                                    )
+                                    .alpha(if (run.isFailed) 0.5f else 1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                AgentAvatar(assistant = run.agentType, size = 18.dp)
+                                Text(
+                                    run.agentType,
+                                    fontFamily = neon.mono,
+                                    fontSize = 11.sp,
+                                    color = if (run.isFailed) neon.textFaint else neon.textDim,
+                                )
+                                Text(
+                                    "run ${run.index + 1}",
+                                    fontFamily = neon.mono,
+                                    fontSize = 10.sp,
+                                    color = neon.textFaint,
+                                )
+                                Spacer(Modifier.weight(1f))
+                                if (step.fanout?.winner == run.index) {
+                                    Text(
+                                        "winner",
+                                        fontFamily = neon.mono,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 9.sp,
+                                        color = neon.green,
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(runColor.copy(alpha = 0.13f))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                                ) {
+                                    Text(
+                                        run.phase ?: "queued",
+                                        fontFamily = neon.mono,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 9.sp,
+                                        color = runColor,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PickRunCard(
+    run: FanOutCompareRun,
+    runIndex: Int,
+    isWinner: Boolean,
+    canPick: Boolean,
+    isPicking: Boolean,
+    neon: NeonTheme,
+    onOpen: () -> Unit,
+    onPick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (run.error.isNotEmpty()) neon.red.copy(alpha = 0.05f) else neon.surface2)
+            .border(
+                1.dp,
+                if (run.error.isNotEmpty()) neon.red.copy(alpha = 0.20f) else neon.border,
+                RoundedCornerShape(10.dp),
+            )
+            .alpha(if (run.error.isNotEmpty()) 0.65f else 1f)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AgentAvatar(assistant = run.label.ifEmpty { "claude" }, size = 20.dp)
+            Text(
+                run.label.ifEmpty { "Run ${runIndex + 1}" },
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                color = neon.text,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (isWinner) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(neon.green.copy(alpha = 0.15f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        "winner",
+                        fontFamily = neon.mono,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 9.sp,
+                        color = neon.green,
+                    )
+                }
+            }
+            val phaseColor = if (run.error.isNotEmpty()) neon.red else neon.green
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(phaseColor.copy(alpha = 0.13f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    run.phase.ifEmpty { "done" },
+                    fontFamily = neon.mono,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 9.sp,
+                    color = phaseColor,
                 )
+            }
+        }
+
+        if (run.filesChanged > 0) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("${run.filesChanged} files", fontFamily = neon.mono, fontSize = 11.sp, color = neon.textDim)
+                Text("+${run.insertions}", fontFamily = neon.mono, fontSize = 11.sp, color = neon.green)
+                Text("-${run.deletions}", fontFamily = neon.mono, fontSize = 11.sp, color = neon.red)
+            }
+        }
+
+        if (run.agentSummary.isNotEmpty()) {
+            Text(
+                run.agentSummary,
+                fontFamily = neon.sans,
+                fontSize = 12.sp,
+                color = neon.textDim,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        if (run.error.isNotEmpty()) {
+            Text(
+                run.error,
+                fontFamily = neon.sans,
+                fontSize = 11.sp,
+                color = neon.red,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        if (run.error.isEmpty()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // Open button
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(50))
+                        .background(neon.surface2)
+                        .border(1.dp, neon.borderStrong, RoundedCornerShape(50))
+                        .clickable(onClick = onOpen)
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Open",
+                        fontFamily = neon.mono,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        color = neon.accent,
+                    )
+                }
+                // Pick button
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(50))
+                        .background(if (canPick) neon.accent else neon.surface2)
+                        .clickable(enabled = canPick, onClick = onPick)
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (isPicking) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            color = neon.accentText,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text(
+                            if (isWinner) "Picked" else "Pick",
+                            fontFamily = neon.mono,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = if (canPick) neon.accentText else neon.textFaint,
+                        )
+                    }
+                }
             }
         }
     }
@@ -1012,6 +1579,7 @@ private fun PipelineStepStateChip(state: String, neon: NeonTheme) {
         "done" -> neon.green
         "failed" -> neon.red
         "awaiting-gate" -> neon.yellow
+        "pick" -> neon.accent
         else -> neon.textFaint
     }
     Box(

@@ -2064,6 +2064,12 @@ final class SessionStore {
     /// False on old brokers; Save/Load template affordances hide when false.
     private(set) var pipelineTemplates: Bool = false
 
+    /// Whether the broker supports fanout-as-a-step
+    /// (`GET /api/capabilities` -> `"pipeline_fanout": true`).
+    /// False on old brokers; the fan-out toggle in the builder and the
+    /// pick panel in the monitor hide when false.
+    private(set) var pipelineFanout: Bool = false
+
     /// Single-flight + at-most-once-per-(box,version) guard for the
     /// post-connect broker auto-update (Fix: broker auto-update on reconnect).
     /// `reconnect()`/`selectSavedServer()` short-circuit to a WS-only bounce
@@ -2095,6 +2101,7 @@ final class SessionStore {
             let pipeline_gate_preview: Bool?
             let pipeline_resume: Bool?
             let pipeline_templates: Bool?
+            let pipeline_fanout: Bool?
         }
         Telemetry.breadcrumb(
             "model_catalog", "refresh start",
@@ -2139,6 +2146,8 @@ final class SessionStore {
         pipelineResume = caps.pipeline_resume ?? false
         // pipeline_templates: save/load templates; default false on old brokers.
         pipelineTemplates = caps.pipeline_templates ?? false
+        // pipeline_fanout: fanout-as-a-step; default false on old brokers.
+        pipelineFanout = caps.pipeline_fanout ?? false
 
         // WS-H.1: parse the readiness block; nil on old brokers → consumers treat as unknown.
         if let r = caps.readiness {

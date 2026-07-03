@@ -4594,6 +4594,15 @@ class SessionStore : ViewModel(), ConduitDelegate {
     val pipelineTemplates: StateFlow<Boolean> = _pipelineTemplates.asStateFlow()
 
     /**
+     * Whether the broker supports fanout-as-a-step
+     * (`GET /api/capabilities` -> `"pipeline_fanout": true`).
+     * False on old brokers; the fan-out toggle in the builder and the
+     * pick panel in the monitor hide when false.
+     */
+    private val _pipelineFanout = MutableStateFlow(false)
+    val pipelineFanout: StateFlow<Boolean> = _pipelineFanout.asStateFlow()
+
+    /**
      * Refresh [modelCatalog] and [agentDescriptors] from the active
      * endpoint's capabilities in one request. Old brokers (missing keys)
      * and failures are no-ops for the affected flow.
@@ -4672,6 +4681,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
             JSONObject(raw).optBoolean("pipeline_templates", false)
         }.getOrDefault(false)
         _pipelineTemplates.value = pipelineTemplates
+        // pipeline_fanout: fanout-as-a-step; default false on old brokers.
+        val pipelineFanout = runCatching {
+            JSONObject(raw).optBoolean("pipeline_fanout", false)
+        }.getOrDefault(false)
+        _pipelineFanout.value = pipelineFanout
     }
 
     /**
