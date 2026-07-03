@@ -574,6 +574,62 @@ struct SessionStoreTests {
             "turnActive=false status must clear streamingTurnTs")
     }
 
+    // MARK: - flush-on-idle-status: level-triggered flush (broker-restart deadlock)
+
+    /// Deadlock fix: a queuedTurn entry left over after a broker restart must be
+    /// delivered when an idle status frame arrives, even with NO turn_active
+    /// true→false edge. When the broker restarts mid-turn the reconnect worker
+    /// fires `.connecting` (clearStaleTurnState zeroes turn_active), then the
+    /// recovered session comes back idle. Because the prior turn_active is
+    /// already false there is no edge for flushQueuedOnTurnComplete, and if the
+    /// `.connected` promotion did not fire first the queued entry is stuck
+    /// forever ("message sent but the agent never picks it up"). The
+    /// level-triggered branch in ingestStatus delivers it.
+    @Test func queuedTurnFlushedOnIdleStatusWithoutEdge() {
+        let store = SessionStore()
+        let sessionID = "test-flush-idle-\(UUID().uuidString)"
+
+        // Turn active → the user's message is parked in "Queued Next".
+        let activeStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "running",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: true,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(activeStatus)
+        store.sendChat(sessionID: sessionID, message: "stuck after restart")
+        #expect(!store.pendingChats.queuedTurnEntries(for: sessionID).isEmpty,
+            "precondition: message must be queued while the turn is active")
+
+        // Broker restarts: the reconnect worker fires .connecting, which
+        // clearStaleTurnState zeroes turn_active WITHOUT promoting the queued
+        // entry (promotion only happens on .connected).
+        store.ingestConnectionHealth(sessionID, .connecting(attempt: 1, maxAttempts: 5))
+
+        // The recovered session's status frame arrives idle. Prior turn_active
+        // is already false, so there is NO true→false edge — only the
+        // level-triggered flush can deliver the stuck entry.
+        let idleStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "running",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: false,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(idleStatus)
+
+        #expect(store.pendingChats.queuedTurnEntries(for: sessionID).isEmpty,
+            "queued entry must flush on an idle status frame even without a turn-active edge")
+        let userMessages = (store.conversationLog[sessionID] ?? []).filter { $0.role == "user" }
+        #expect(userMessages.contains(where: { $0.content == "stuck after restart" }),
+            "flushed message must have a user echo in the conversation log")
+    }
+
     // MARK: - flushQueuedOnReply: belt-and-suspenders flush on live assistant reply
 
     /// A queuedTurn entry IS delivered (removed from queue, echo created) when

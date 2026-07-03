@@ -5649,6 +5649,24 @@ final class SessionStore {
         // Flush one queued-turn entry now that the agent is idle.
         if turnJustCompleted {
             flushQueuedOnTurnComplete(sessionID: status.session)
+        } else if !newTurnActive,
+                  pendingChats.flushOnTurnComplete(sessionID: status.session) != nil,
+                  pendingChats.flushable(for: status.session).isEmpty {
+            // Level-triggered flush (deadlock fix): the app reconnected/opened
+            // to a session that is ALREADY idle yet still holds a queued-turn
+            // entry. This happens when the broker restarts mid-turn — the app
+            // still believes turn_active=true (so the user's next message was
+            // parked in "Queued Next"), but the recovered session comes back
+            // idle, so the true→false edge above never fires and neither the
+            // edge- nor reply-triggered flush ever runs. Without this the
+            // queued message is stuck forever ("message sent but the agent
+            // never picks it up" after every broker restart). The guard on an
+            // empty flushable() set keeps delivery one-at-a-time: a just-
+            // flushed .normal entry blocks the next queued entry until it acks
+            // or draws a reply, preserving the natural per-turn serialization.
+            Telemetry.breadcrumb("chat", "flush-on-idle-status",
+                data: ["session": status.session])
+            flushQueuedOnTurnComplete(sessionID: status.session)
         }
         // Safety net: when turnActive transitions false, clear any lingering
         // streaming state. This covers cancelled turns and clock-skew cases
