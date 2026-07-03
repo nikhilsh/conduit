@@ -460,6 +460,7 @@ fun ChatPage(
     // §D 401 handling: "Sign in on this box" banner state.
     val agentAuthFailureMap by store.agentAuthFailure.collectAsState()
     var showAgentLogin by remember { mutableStateOf(false) }
+    var loginAutoStartProvider by remember { mutableStateOf<OAuthProvider?>(null) }
     val listState = rememberLazyListState()
 
     // Backward-pagination state. Observe the store's pagination map so the
@@ -1070,7 +1071,10 @@ fun ChatPage(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { showAgentLogin = true }
+                        .clickable {
+                            loginAutoStartProvider = authFailureProvider
+                            showAgentLogin = true
+                        }
                         .background(neon.surface)
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1198,7 +1202,8 @@ fun ChatPage(
     if (showAgentLogin && !readOnly) {
         AgentLoginSheet(
             store = store,
-            autoStartProvider = agentAuthFailureMap[session.id],
+            autoStartProvider = loginAutoStartProvider,
+            onAutoStartConsumed = { loginAutoStartProvider = null },
             onDismiss = { showAgentLogin = false },
         )
     }

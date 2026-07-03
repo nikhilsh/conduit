@@ -236,7 +236,7 @@ extension ConduitUI {
             // WS-H.3: agent-login sheet launched from "Sign in" on a
             // not-signed-in readiness row (informational, never blocking).
             .sheet(isPresented: $showAgentLogin) {
-                ConduitUI.AgentLoginSheet(autoStartProvider: loginAutoStartProvider)
+                ConduitUI.AgentLoginSheet(autoStartProvider: $loginAutoStartProvider)
             }
             .onAppear {
                 // Funnel: agent picker opened (new-session flow or post-pair deep link).
