@@ -11,7 +11,7 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
 
 - **Stream extended-thinking to apps** — broker surfaces Claude's reasoning
   blocks as `thinking_streaming` view_events so apps can show live reasoning.
-  Branch `feat/stream-thinking-broker`, PR #TBD.
+  Branch `feat/stream-thinking-broker`, PR #854.
 
 ## Deferred (not active)
 
