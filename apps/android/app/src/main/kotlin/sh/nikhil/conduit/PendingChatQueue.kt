@@ -298,6 +298,30 @@ data class PendingChatQueue(
         )
     }
 
+    /**
+     * After a broker-restart reconnect the turn gate is cleared, so any
+     * [PendingChatKind.queuedTurn] entries that were held waiting for the
+     * (now-dead) turn to end should be promoted to [PendingChatKind.normal]
+     * so the next [flushable] delivers them. [steering] and [retrying] are
+     * also promoted: the steer target is gone with the restarted broker.
+     * Idempotent; a no-op when there are no queued-turn entries.
+     * Mirror of iOS `PendingChatQueue.promoteQueuedTurnToNormal`.
+     */
+    fun promoteQueuedTurnToNormal(sessionId: String): PendingChatQueue {
+        val list = bySession[sessionId] ?: return this
+        val next = list.map { entry ->
+            if (entry.kind == PendingChatKind.queuedTurn ||
+                entry.kind == PendingChatKind.steering ||
+                entry.kind == PendingChatKind.retrying
+            ) {
+                entry.copy(kind = PendingChatKind.normal, failed = false, attempts = 0, sent = false)
+            } else {
+                entry
+            }
+        }
+        return copy(bySession = bySession + (sessionId to next))
+    }
+
     /** Drop an entire session's queue (session deleted / forgotten). */
     fun clear(sessionId: String): PendingChatQueue = copy(bySession = bySession - sessionId)
 

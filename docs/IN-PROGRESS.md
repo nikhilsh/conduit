@@ -9,6 +9,7 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
 
 ## Active
 
+- **Fix stale turn-active after broker restart** (iOS + Android) -- clear stale turnActive + streaming state on connection drop so the composer un-sticks without a force-quit; promote queuedTurn entries to normal on reconnect so they flush. Branch `fix/ios-stale-turn-active-after-broker-restart`.
 - **Thinking block + indicator peek** (iOS + Android) -- consume `thinking_streaming` view_event; collapsible "Thinking..." disclosure above streaming prose; live reasoning line fed to WorkingIndicator peek. Branch `feat/thinking-app-ui`, PR #857.
 
 ## Deferred (not active)
