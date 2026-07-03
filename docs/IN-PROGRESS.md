@@ -9,7 +9,7 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
 
 ## Active
 
-- **Queued-Next reply-flush belt-and-suspenders** (`fix/queued-next-reply-flush`, PR #850) —
+- **Queued-Next reply-flush belt-and-suspenders** (`fix/queued-next-reply-flush`, PR #851) —
   add a second flush trigger on live assistant reply so queuedTurn entries are
   never stranded by a missed/delayed turn_active status frame (iOS +
   Android). Idempotent with the existing status-frame trigger.
