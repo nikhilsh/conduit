@@ -20,6 +20,12 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+_(nothing yet)_
+
+---
+
+## v0.0.212
+
 **Real Claude thinking shown in the app — iOS + Android. PR #857.**
 
 - Consumes the broker's `thinking_streaming` (PR #854): a **collapsible "Thinking…"
