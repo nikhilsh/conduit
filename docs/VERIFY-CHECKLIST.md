@@ -20,6 +20,21 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Flush stuck queued-next message on idle status frame after broker restart (iOS + Android). PR #866.**
+
+- Follow-up net to #865. If a message was parked in "Queued Next" while a turn
+  was active and the broker then restarts, the recovered session comes back
+  ALREADY idle — so there is no `turn_active` true→false edge and (if the
+  `.connected` promotion didn't fire first) the queued message stays stuck
+  forever. Fix: a level-triggered flush in `ingestStatus` delivers one queued
+  entry whenever a status frame reports the turn idle AND a `queuedTurn`/
+  `retrying` entry exists AND nothing is already in-flight (guards against
+  double-send; idempotent with the edge- and reply-triggered flushes and the
+  `.connected` promotion). Regression tests added on both platforms.
+- **Verify on device:** open a session, get the agent working, queue a message
+  ("Queued Next"), restart the broker, wait for reconnect — the queued message
+  should auto-deliver and the agent should reply without any further tap.
+
 **Fix stale turn-active after broker restart (iOS + Android). PR #865.**
 
 - After the broker process restarts, the app kept a stale `turn_active=true` and
