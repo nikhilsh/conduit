@@ -444,15 +444,24 @@ extension ConduitUI {
             .frame(width: 84, height: 84)
         }
 
-        /// Honest stand-in for the design's model line: the broker doesn't
-        /// report a model string, so show the agent + reasoning effort we
-        /// do have rather than fabricating "sonnet-4.5".
+        /// Agent/model line for the Usage ring. Uses the live model from the
+        /// broker when available (status.model), prettified via the catalog
+        /// display name when present, with the reasoning effort appended.
         private var modelLine: String {
-            let effort = store.statusBySession[session.id]?.reasoningEffort ?? session.reasoningEffort
-            if let effort, !effort.isEmpty {
-                return "\(liveAssistant.lowercased()) · \(effort)"
+            let status = store.statusBySession[session.id]
+            let catalog = store.modelCatalog[liveAssistant.lowercased()]
+            let displayModel: String
+            if let m = status?.model, !m.isEmpty {
+                let entry = catalog?.first(where: { $0.id == m })
+                displayModel = (entry?.displayName.isEmpty == false) ? entry!.displayName : m
+            } else {
+                displayModel = liveAssistant.lowercased()
             }
-            return liveAssistant.lowercased()
+            let effort = status?.reasoningEffort ?? session.reasoningEffort
+            if let effort, !effort.isEmpty {
+                return "\(displayModel) · \(effort)"
+            }
+            return displayModel
         }
 
         // MARK: 3 · Limits (this session's agent only)
@@ -630,6 +639,13 @@ extension ConduitUI {
                     detailRow("Box", boxLine, mono: true)
                     hairline
                     detailRow("Started", startedLabel, mono: true)
+                    if let m = store.statusBySession[session.id]?.model, !m.isEmpty {
+                        hairline
+                        let catalog = store.modelCatalog[liveAssistant.lowercased()]
+                        let entry = catalog?.first(where: { $0.id == m })
+                        let label = (entry?.displayName.isEmpty == false) ? entry!.displayName : m
+                        detailRow("Model", label, mono: true)
+                    }
                     if let wt = liveWorktree, !wt.isEmpty {
                         hairline
                         detailRow("Worktree", wt, mono: true)

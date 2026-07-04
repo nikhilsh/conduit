@@ -915,6 +915,8 @@ async fn handle_text(
         #[serde(default)]
         worktree_name: Option<String>,
         #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
         code: Option<i32>,
         #[serde(default)]
         view: Option<String>,
@@ -980,6 +982,7 @@ async fn handle_text(
                 git_ahead: env.git_ahead,
                 git_behind: env.git_behind,
                 worktree_name: env.worktree_name,
+                model: env.model,
             };
             delegate.on_status(status);
             if let Some(p) = env.preview {

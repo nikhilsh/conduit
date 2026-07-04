@@ -1182,6 +1182,31 @@ func (s *Session) structuredTurnPhase() (phase string, present bool) {
 	return tp.TurnPhase(), true
 }
 
+// structuredModel returns the model the session's chat backend is using,
+// and whether the answer is authoritative (present=true means a backend
+// is wired and returned a non-empty value, or the override carries one).
+// Priority: (a) modelReporter.CurrentModel() from the live backend (stream-json
+// latches it from the first assistant message; codex/ACP know it at spawn);
+// (b) the SpawnOverride.Model set at session creation. Returns ("", false)
+// when the model is genuinely unknown (old broker, no override, no turn yet).
+func (s *Session) structuredModel() (model string, present bool) {
+	s.mu.Lock()
+	chat := s.chat
+	override := s.override
+	s.mu.Unlock()
+	if chat != nil {
+		if mr, ok := chat.(modelReporter); ok {
+			if m := mr.CurrentModel(); m != "" {
+				return m, true
+			}
+		}
+	}
+	if m := strings.TrimSpace(override.Model); m != "" {
+		return m, true
+	}
+	return "", false
+}
+
 // SendChat routes a composer message to the structured chat channel when
 // the session runs in stream-json mode (chat_mode="stream-json"). It
 // returns true when it handled the message, so the websocket handler skips

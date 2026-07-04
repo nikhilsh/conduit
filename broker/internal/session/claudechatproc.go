@@ -41,6 +41,11 @@ type chatProcess struct {
 	// "writing" (streaming text), "working" (tool executing), "thinking"
 	// (extended reasoning). Empty when idle. Guarded by mu.
 	turnPhase string
+	// currentModel is the model identifier the agent reported in its most
+	// recent assistant message (e.g. "claude-sonnet-4-6"). Latched once from
+	// the first non-synthetic assistant line; stable for the session lifetime.
+	// Guarded by mu; satisfies the modelReporter interface.
+	currentModel string
 	// expectingClear is set when the outgoing user message was "/clear".
 	// It gates the confirmation system message that is published at turn-end
 	// and suppresses the synthetic "(no content)" assistant line the CLI
@@ -141,7 +146,7 @@ func startChatProcess(
 				if idle != nil {
 					idle()
 				}
-			}, onSubagent, cp.markTurnPhase)
+			}, onSubagent, cp.markTurnPhase, cp.markCurrentModel)
 		// EOF / agent exit: whatever turn was in flight is over.
 		cp.markTurnActive(false)
 		cp.markTurnPhase("")
@@ -268,6 +273,26 @@ func (c *chatProcess) TurnPhase() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.turnPhase
+}
+
+// markCurrentModel latches the model identifier once it is known from the
+// agent's stream output (first non-synthetic assistant message). Safe for
+// concurrent callers; ignores empty or duplicate updates.
+func (c *chatProcess) markCurrentModel(model string) {
+	if model == "" {
+		return
+	}
+	c.mu.Lock()
+	c.currentModel = model
+	c.mu.Unlock()
+}
+
+// CurrentModel returns the model the agent reported (e.g. "claude-sonnet-4-6").
+// Implements modelReporter. Returns "" until the first assistant message arrives.
+func (c *chatProcess) CurrentModel() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.currentModel
 }
 
 // SendRaw writes one pre-encoded stream-json line (a control_response)

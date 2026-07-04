@@ -539,6 +539,13 @@ func (c *codexAppServerProcess) TurnActive() bool {
 	return c.turnActive
 }
 
+// CurrentModel returns the model the codex app-server was spawned with
+// (from the session's SpawnOverride). Implements modelReporter; returns ""
+// when no model override was set (codex uses its configured default).
+func (c *codexAppServerProcess) CurrentModel() string {
+	return strings.TrimSpace(c.override.Model)
+}
+
 // published / closing snapshot so the caller can decide what notice (if any) to
 // surface. Idempotent: a second terminus for the same turn returns active=false
 // and the caller does nothing. Caller must NOT hold c.mu.

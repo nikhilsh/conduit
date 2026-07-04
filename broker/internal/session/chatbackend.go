@@ -52,3 +52,13 @@ type turnPhaser interface {
 // adapter.Protocol ("stream-json", "codex-app-server", "codex-exec") resolves
 // to a registered AgentBackend. An empty protocol (or one with no registered
 // backend) is the legacy TUI-scrape path. See backendFor / backendRegistry.
+
+// modelReporter is an OPTIONAL chatBackend capability: a backend that can
+// report the model the agent is actually using. Backends that know their
+// live model (stream-json latches it from assistant messages; codex/ACP
+// know it at spawn time) implement this. Callers type-assert before using.
+type modelReporter interface {
+	// CurrentModel returns the model identifier the backend is using
+	// (e.g. "claude-sonnet-4-6"). Returns "" when unknown.
+	CurrentModel() string
+}
