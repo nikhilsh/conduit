@@ -1109,6 +1109,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
      */
     private val _lastTurnActive = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
+    /**
+     * FIX 1: sessions already logged for "already hydrated" skip. ConcurrentHashMap
+     * key-set because [onStatus] -> [refreshSessions] runs on UniFFI worker threads.
+     * Prevents per-frame ring-buffer spam (one breadcrumb per session lifetime).
+     */
+    private val conversationHydratedLogged: MutableSet<String> =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
     /** SSH-bootstrap progress, observed by the SSH login sheet. */
     private val _sshBootstrap = MutableStateFlow<SshBootstrapState>(SshBootstrapState.Idle)
     val sshBootstrap: StateFlow<SshBootstrapState> = _sshBootstrap.asStateFlow()
@@ -5558,7 +5566,22 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     updateLifecycle { it + (s.id to SessionLifecycle.Exited(code)) }
                 }
             }
-            refreshConversation(s.id)
+            // FIX 1: skip the O(N) FFI deep-copy for sessions that already
+            // have hydrated content. Only cold-join (empty log) needs the
+            // pull; new content arrives via onChatEvent which calls
+            // refreshConversation directly for the affected session.
+            val hasContent = _conversationLog.value[s.id].orEmpty().isNotEmpty()
+            if (hasContent) {
+                if (conversationHydratedLogged.add(s.id)) {
+                    Telemetry.breadcrumb(
+                        "perf",
+                        "conversation refresh skipped -- already hydrated",
+                        mapOf("session" to s.id),
+                    )
+                }
+            } else {
+                refreshConversation(s.id)
+            }
         }
     }
 

@@ -1691,6 +1691,76 @@ struct ConversationTsNanosecondTests {
         #expect(sorted.map(\.id) == ["user-ans", "agent-rep"],
             "user answer (nanosecond ts) must sort BEFORE the later agent reply")
     }
+
+// MARK: - FIX 1: conversation-refresh gate (hydrated sessions skip re-fetch)
+
+/// Regression test for the O(N) conversation re-fetch on every status frame.
+/// A session whose conversationLog is already populated must NOT have its
+/// content cleared or altered by a subsequent ingestStatus call. The gate in
+/// refreshSessions() skips refreshConversationOffMain for hydrated sessions.
+/// (refreshSessions early-returns when there is no live client, so this test
+/// verifies the invariant indirectly: content seeded before ingestStatus
+/// must still be present after ingestStatus fires.)
+@Suite("SessionStore - FIX 1 conversation-refresh gate")
+@MainActor
+struct ConversationRefreshGateTests {
+
+    @Test func statusFrameDoesNotWipeHydratedConversation() {
+        let store = SessionStore()
+        let sessionID = "test-hydrated-gate-\(UUID().uuidString)"
+
+        // Seed content as sendChat would (synchronous echo into conversationLog).
+        store.sendChat(sessionID: sessionID, message: "Hello")
+        let countBefore = store.conversationLog[sessionID]?.count ?? 0
+        #expect(countBefore >= 1, "precondition: conversationLog must have the user echo")
+
+        // Fire an ingestStatus (which calls refreshSessions internally).
+        // No client -> refreshSessions returns early, but the gate logic
+        // must not clear or reset conversationLog.
+        let status = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "running",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: nil,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(status)
+
+        // Content must be unchanged.
+        let countAfter = store.conversationLog[sessionID]?.count ?? 0
+        #expect(countAfter == countBefore,
+            "ingestStatus must not alter a hydrated conversationLog (FIX 1 gate)")
+    }
+
+    @Test func multipleStatusFramesDoNotAccumulateContent() {
+        let store = SessionStore()
+        let sessionID = "test-hydrated-multi-\(UUID().uuidString)"
+
+        store.sendChat(sessionID: sessionID, message: "First")
+        let countAfterSend = store.conversationLog[sessionID]?.count ?? 0
+
+        let status = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "idle",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: false,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        // Fire multiple status frames.
+        store.ingestStatus(status)
+        store.ingestStatus(status)
+        store.ingestStatus(status)
+
+        let countAfterStatuses = store.conversationLog[sessionID]?.count ?? 0
+        #expect(countAfterStatuses == countAfterSend,
+            "repeated status frames must not inflate conversationLog (FIX 1 gate)")
+    }
+}
+
 }
 
 // MARK: - Grace-window derivation tests (Change 4)

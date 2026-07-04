@@ -1041,6 +1041,18 @@ final class SessionStore {
     /// At most one debounced flush in flight at a time.
     private var terminalPersistScheduled = false
 
+    // FIX 3: pendingChats debounce -- coalesce rapid mutations into a single
+    // trailing write (~200ms) so N sends-per-turn that each mutate
+    // pendingChats don't each block the main thread with a JSON encode +
+    // UserDefaults write. The queue is the durability layer so a pending
+    // write is always flushed synchronously on background/termination.
+    private var pendingChatsDirty = false
+    private var pendingChatsPersistScheduled = false
+
+    // FIX 1: track sessions already logged for "already hydrated" skip to
+    // avoid spamming the Sentry ring buffer with per-frame breadcrumbs.
+    private var conversationHydratedLogged = Set<String>()
+
     /// Per-session xterm.js serialized render state, captured by
     /// `WKTerminalView.dismantleUIView` (tab switch / background) and
     /// replayed by the next attach so the user doesn't see an empty
@@ -1235,7 +1247,10 @@ final class SessionStore {
     /// reconnect. The transcript echo reads `pendingChats` to draw the
     /// clock / "failed" indicator. Mirror of Android `_pendingChats`.
     var pendingChats: PendingChatQueue = SessionStore.loadPendingChats() {
-        didSet { SessionStore.persistPendingChats(pendingChats) }
+        // FIX 3: debounce -- schedule a coalesced write instead of encoding
+        // + writing on every mutation. Background flush in the didEnterBackground
+        // observer guarantees durability even when many sends land in quick succession.
+        didSet { schedulePendingChatsPersist() }
     }
 
     /// Per-box set of found-session IDs the user has hidden via the overflow
@@ -1466,6 +1481,10 @@ final class SessionStore {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.flushTerminalPersist()
+                // FIX 3: flush any pending debounced write immediately so a
+                // subsequent kill never loses an unsent message (durable-send
+                // guarantee -- the outbox is the last line of defence).
+                self?.flushPendingChatsPersist()
                 self?.pauseAllSessions()
             }
         }
@@ -5124,6 +5143,18 @@ final class SessionStore {
                 }
             }
             for s in self.sessions {
+                // FIX 1: skip the O(N) FFI deep-copy for sessions that are
+                // already hydrated. Only cold-join (empty log) needs a fresh
+                // pull; new content arrives via ingestChat which calls
+                // refreshConversationOffMain directly for the affected session.
+                guard conversationLog[s.id]?.isEmpty ?? true else {
+                    if conversationHydratedLogged.insert(s.id).inserted {
+                        Telemetry.breadcrumb("perf",
+                            "conversation refresh skipped -- already hydrated",
+                            data: ["session": s.id])
+                    }
+                    continue
+                }
                 refreshConversationOffMain(sessionID: s.id)
             }
             return
@@ -5181,7 +5212,19 @@ final class SessionStore {
         // Fan out the per-session conversation pulls OFF the main thread:
         // doing N blocking FFI clones on the @MainActor every status delta
         // was the App Hang source. Results apply back on the main actor.
+        // FIX 1: gate on empty conversationLog -- skip sessions already
+        // hydrated so only cold-join sessions pay the FFI cost per status
+        // frame. ingestChat calls refreshConversationOffMain directly for
+        // the session that received new content (condition b).
         for s in self.sessions {
+            guard conversationLog[s.id]?.isEmpty ?? true else {
+                if conversationHydratedLogged.insert(s.id).inserted {
+                    Telemetry.breadcrumb("perf",
+                        "conversation refresh skipped -- already hydrated",
+                        data: ["session": s.id])
+                }
+                continue
+            }
             refreshConversationOffMain(sessionID: s.id)
         }
     }
@@ -6386,6 +6429,33 @@ final class SessionStore {
         if let data = try? JSONEncoder().encode(queue.bySession) {
             UserDefaults.standard.set(data, forKey: pendingChatsKey)
         }
+    }
+
+    // FIX 3: debounced pendingChats persistence. A trailing 200ms timer
+    // coalesces burst mutations (N sends in quick succession) into one
+    // JSON encode + UserDefaults write. The dirty flag ensures the last
+    // state is always captured even when the timer fires after a mutation
+    // burst. flushPendingChatsPersist() is called synchronously in the
+    // didEnterBackground handler to guarantee the outbox survives a kill.
+    private func schedulePendingChatsPersist() {
+        pendingChatsDirty = true
+        guard !pendingChatsPersistScheduled else { return }
+        pendingChatsPersistScheduled = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000) // 200ms trailing
+            self.pendingChatsPersistScheduled = false
+            self.flushPendingChatsPersist()
+        }
+    }
+
+    /// Write pendingChats to UserDefaults immediately. Idempotent when
+    /// nothing is dirty. Called by the background observer for durability.
+    func flushPendingChatsPersist() {
+        guard pendingChatsDirty else { return }
+        pendingChatsDirty = false
+        Telemetry.breadcrumb("perf", "pendingChats flush",
+            data: ["sessions": String(pendingChats.bySession.count)])
+        SessionStore.persistPendingChats(pendingChats)
     }
 
     /// Ingest a broker AI session title (task: ai-session-titles). Stores
