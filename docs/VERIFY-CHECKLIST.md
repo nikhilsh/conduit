@@ -20,6 +20,22 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Send/turn-state reliability: Stop retry + queued-message stuck-state fixes (iOS + Android). PR #878.**
+
+- Composer Stop now retries once (~1s) if the interrupt WS write fails or the
+  connection is reconnecting, and never optimistically clears turn state the
+  broker didn't acknowledge. Queued-next flush delivers under the ORIGINAL
+  message id (no more orphaned forever-faded bubble after a broker-restart
+  flush). A session that exits/dies clears its queued entries and marks their
+  echoes failed instead of stranding them invisibly. Reconcile demotes a
+  recently-live session to History only after two consecutive misses (broker
+  startup race).
+- **Verify on device:** (a) tap Stop while the connection is flaky — the turn
+  stops or the button stays active, no silent drop; (b) queue a message
+  mid-turn, restart the broker — the message delivers and its ORIGINAL bubble
+  goes solid; (c) kill a session's agent — queued messages surface as failed
+  with retry.
+
 **Fix lint errors from transactional-handoffs commit — broker. PR #876.**
 
 - Corrects lint errors introduced by the transactional handoff commit; broker only, no runtime behaviour change, no device verification required.
