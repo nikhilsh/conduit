@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -466,6 +467,12 @@ enum class ButtonVariant { Primary, Secondary, Ghost }
  * (added in this PR as a library extension) so the neon chrome surface
  * recolors the border and glow to the button's accent — matching the
  * iOS ConduitUI.Components.ConduitButton.secondary fidelity.
+ *
+ * [enabled] mirrors iOS's caller-side `.disabled(_:)` + dimmed opacity:
+ * when false the button ignores taps and renders at 45% opacity. Added
+ * because several call sites previously had to fall back to a raw M3
+ * `Button` just to get a disabled state (see `FoundSessionsSheet`) — this
+ * closes that gap in the shared component instead of forking another one.
  */
 @Composable
 fun ConduitButton(
@@ -474,6 +481,7 @@ fun ConduitButton(
     modifier: Modifier = Modifier,
     variant: ButtonVariant = ButtonVariant.Primary,
     tint: Color? = null,
+    enabled: Boolean = true,
 ) {
     val neon = LocalNeonTheme.current
     val accent = tint ?: if (variant == ButtonVariant.Primary) neon.green else neon.accent
@@ -481,6 +489,7 @@ fun ConduitButton(
     val shape = RoundedCornerShape(14.dp)
     val base = modifier
         .fillMaxWidth()
+        .alpha(if (enabled) 1f else 0.45f)
         .then(
             when (variant) {
                 ButtonVariant.Primary ->
@@ -497,7 +506,7 @@ fun ConduitButton(
                         .border(1.dp, accent.copy(alpha = 0.35f), shape)
             },
         )
-        .clickable(onClick = onClick)
+        .clickable(enabled = enabled, onClick = onClick)
         .padding(vertical = 14.dp)
     Box(base, contentAlignment = Alignment.Center) {
         Text(

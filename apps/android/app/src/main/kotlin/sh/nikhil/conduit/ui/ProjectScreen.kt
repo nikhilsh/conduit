@@ -356,32 +356,16 @@ fun ProjectScreen(
         SessionInfoScreen(store = store, session = session, onDismiss = { showInfo = false })
     }
 
-    // Title-menu Rename (fix 2) — same local-rename semantics as Session
-    // Info's dialog (store.renameSession; the broker name stays).
+    // Title-menu Rename -- Conduit redesign: shared RenameSessionSheet
+    // (store.renameSession; the broker name stays). Was a plain
+    // AlertDialog + OutlinedTextField; now the same neon-themed sheet
+    // SessionInfoScreen's inline rename uses, so the two can't drift.
     if (showRename) {
-        AlertDialog(
-            onDismissRequest = { showRename = false },
-            title = { Text("Rename session") },
-            text = {
-                OutlinedTextField(
-                    value = renameDraft,
-                    onValueChange = { renameDraft = it },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        store.renameSession(session.id, renameDraft.trim())
-                        showRename = false
-                    },
-                    enabled = renameDraft.trim().isNotEmpty(),
-                ) { Text("Rename") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRename = false }) { Text("Cancel") }
-            },
+        RenameSessionSheet(
+            store = store,
+            session = session,
+            initialDraft = renameDraft,
+            onDismiss = { showRename = false },
         )
     }
 
