@@ -1761,3 +1761,4 @@ struct ConversationRefreshGateTests {
     }
 }
 
+}
