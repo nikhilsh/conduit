@@ -154,6 +154,7 @@ struct SavedSessionsStoreTests {
                 messageCount: 1,
                 isExited: false
             )
+            store.flushPendingPersist() // drain the 1-s debounce synchronously before reloading
         }
         // Second instance — must pick up the on-disk state.
         let restored = SavedSessionsStore(storeURL: url)
