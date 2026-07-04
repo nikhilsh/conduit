@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallSplit
@@ -538,40 +537,14 @@ fun SessionInfoScreen(
     }
 
     if (showRename) {
-        AlertDialog(
-            onDismissRequest = { showRename = false },
-            title = { Text("Rename session") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "Choose a label for this session. The broker name stays the same — this rename is local to your device.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                    ) {
-                        BasicTextField(
-                            value = renameDraft,
-                            onValueChange = { renameDraft = it },
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(
-                                color = MaterialTheme.colorScheme.onSurface,
-                            ),
-                            modifier = Modifier.padding(12.dp).fillMaxWidth(),
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    store.renameSession(session.id, renameDraft)
-                    showRename = false
-                }) { Text("Save") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRename = false }) { Text("Cancel") }
-            },
+        // Conduit redesign: shared RenameSessionSheet (was a plain
+        // AlertDialog + BasicTextField, no validation). Same composable
+        // ProjectScreen's title-menu rename uses.
+        RenameSessionSheet(
+            store = store,
+            session = session,
+            initialDraft = renameDraft,
+            onDismiss = { showRename = false },
         )
     }
 
