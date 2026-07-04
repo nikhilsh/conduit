@@ -80,6 +80,8 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
     val savedServers by store.savedServers.collectAsState()
     val endpoint by store.endpoint.collectAsState()
     val harness by store.harness.collectAsState()
+    // Change 4: display-only harness with grace-window suppression.
+    val visibleHarness by store.visibleHarness.collectAsState()
     val connected = harness is HarnessState.Live || harness is HarnessState.Linked
 
     // Rename dialog state (hoisted above the grid so the AlertDialog floats
@@ -135,7 +137,8 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Home", fontFamily = neon.sans, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = neon.text)
             Spacer(Modifier.weight(1f))
-            val (label, color) = when (harness) {
+            // Use visibleHarness for status label: suppresses "reconnecting" during grace window (Change 4).
+            val (label, color) = when (visibleHarness) {
                 is HarnessState.Live, is HarnessState.Linked -> (if (endpoint.isComplete) endpoint.displayHost else "online") to neon.green
                 is HarnessState.Connecting, is HarnessState.Reconnecting -> "connecting" to neon.yellow
                 else -> "offline" to neon.textFaint
@@ -201,7 +204,7 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
                     server = server,
                     host = sub,
                     isActive = isActive,
-                    harness = harness,
+                    harness = visibleHarness,
                     reachable = reachabilityMap[server.id],
                     onConnect = {
                         Telemetry.breadcrumb(

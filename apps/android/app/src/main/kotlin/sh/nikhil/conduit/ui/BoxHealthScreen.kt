@@ -120,6 +120,8 @@ fun BoxHealthScreen(
     val neon = LocalNeonTheme.current
     val endpoint by store.endpoint.collectAsState()
     val harness by store.harness.collectAsState()
+    // Change 4: display-only harness with grace-window suppression.
+    val visibleHarness by store.visibleHarness.collectAsState()
     val sessions by store.sessions.collectAsState()
     val statuses by store.statusBySession.collectAsState()
     val scope = rememberCoroutineScope()
@@ -201,11 +203,12 @@ fun BoxHealthScreen(
         }
     }
 
+    // Use visibleHarness for status display: suppresses "reconnecting..." during grace window (Change 4).
     val (statusText, statusColor) = when {
         !isActive -> "tap reconnect" to neon.textFaint
-        harness is HarnessState.Live || harness is HarnessState.Linked -> "connected" to neon.green
-        harness is HarnessState.Connecting -> "connecting…" to neon.yellow
-        harness is HarnessState.Reconnecting -> "reconnecting…" to neon.yellow
+        visibleHarness is HarnessState.Live || visibleHarness is HarnessState.Linked -> "connected" to neon.green
+        visibleHarness is HarnessState.Connecting -> "connecting…" to neon.yellow
+        visibleHarness is HarnessState.Reconnecting -> "reconnecting…" to neon.yellow
         else -> "offline" to neon.textFaint
     }
 

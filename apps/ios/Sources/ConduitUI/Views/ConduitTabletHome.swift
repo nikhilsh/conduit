@@ -72,7 +72,8 @@ extension ConduitUI {
 
         private var connectionChip: some View {
             let (label, color): (String, Color) = {
-                switch store.harness {
+                // Use visibleHarness: suppresses "reconnecting" during grace window (Change 4).
+                switch store.visibleHarness {
                 case .live, .linked:           return (store.endpoint.isComplete ? store.endpoint.displayHost : "online", neon.green)
                 case .connecting, .reconnecting: return ("connecting", neon.yellow)
                 case .disconnected, .failed:   return ("offline", neon.textFaint)
@@ -171,7 +172,8 @@ extension ConduitUI {
             let isActive = store.endpoint == server.endpoint
             let color: Color = {
                 guard isActive else { return neon.textFaint }
-                switch store.harness {
+                // Use visibleHarness: suppresses reconnecting color during grace window (Change 4).
+                switch store.visibleHarness {
                 case .live, .linked:             return neon.green
                 case .connecting, .reconnecting: return neon.yellow
                 case .disconnected, .failed:     return neon.textFaint
@@ -238,7 +240,8 @@ extension ConduitUI {
         private var snapshot: ConduitUI.HomeSnapshot {
             let endpointHost = store.endpoint.isComplete ? store.endpoint.displayHost : nil
             let harness: ConduitUI.HomeSnapshotHarness = {
-                switch store.harness {
+                // Use visibleHarness so snapshot suppresses reconnecting during grace window (Change 4).
+                switch store.visibleHarness {
                 case .disconnected:  return .disconnected
                 case .connecting:    return .connecting
                 case .linked, .live: return .live

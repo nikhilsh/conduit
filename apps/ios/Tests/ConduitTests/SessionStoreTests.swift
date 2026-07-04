@@ -1692,3 +1692,103 @@ struct ConversationTsNanosecondTests {
             "user answer (nanosecond ts) must sort BEFORE the later agent reply")
     }
 }
+
+// MARK: - Grace-window derivation tests (Change 4)
+
+/// Tests the "assume connected" grace window: when the app foregrounds and the
+/// Rust core fires a reconnect cycle within ~5s, `visibleHarness` must stay at
+/// the last-known good state for ~4s so the "Reconnecting..." banner never
+/// flickers on a fast reconnect.
+///
+/// Timer-tick tests are deliberately avoided: we only test the DERIVATION
+/// (suppressed = last good state; unsuppressed = real state) so CI does not
+/// flake on sleep timing.
+@Suite("SessionStore - grace-window visible-harness derivation")
+@MainActor
+struct GraceWindowTests {
+
+    /// Default: visibleHarness mirrors harness when no grace window is active.
+    @Test func visibleHarnessMirrorsHarnessWithoutGrace() {
+        let store = SessionStore()
+        let sessionID = "gw-mirror-\(UUID().uuidString)"
+        // No foregroundedAt set -- grace window cannot activate.
+        store.ingestConnectionHealth(sessionID, .connecting(attempt: 1, maxAttempts: 3))
+        // Underlying harness is reconnecting.
+        if case .reconnecting = store.harness {} else {
+            Issue.record("harness must be reconnecting after .connecting health event")
+        }
+        // visibleHarness must also be reconnecting (no suppression).
+        #expect(!store.suppressGraceReconnecting,
+            "suppressGraceReconnecting must be false when foreground was not recorded")
+        if case .reconnecting = store.visibleHarness {} else {
+            Issue.record("visibleHarness must equal harness when grace window is inactive")
+        }
+    }
+
+    /// Within the 5s window: connecting fires -> suppression active -> visibleHarness = lastGood.
+    @Test func graceWindowSuppressesReconnectingWithinWindow() {
+        let store = SessionStore()
+        let sessionID = "gw-suppress-\(UUID().uuidString)"
+
+        // Establish a known-good connected state first (sets lastReachableHarness).
+        store.ingestConnectionHealth(sessionID, .connected)
+
+        // Record foreground (within 5s window).
+        store.recordForegroundedAtForTesting(Date())
+
+        // Simulate the Rust core firing ConnectionHealth.connecting (broker redial).
+        store.ingestConnectionHealth(sessionID, .connecting(attempt: 1, maxAttempts: 3))
+
+        // Underlying harness is reconnecting.
+        if case .reconnecting = store.harness {} else {
+            Issue.record("harness must be reconnecting after .connecting")
+        }
+        // suppression must be active.
+        #expect(store.suppressGraceReconnecting,
+            "grace window must activate when connecting fires within 5s of foreground")
+        // visibleHarness must NOT be reconnecting during grace window.
+        if case .reconnecting = store.visibleHarness {
+            Issue.record("visibleHarness must NOT be reconnecting during grace window")
+        }
+    }
+
+    /// Outside the 5s window: no suppression even if foregroundedAt is set.
+    @Test func graceWindowDoesNotActivateAfterWindowExpires() {
+        let store = SessionStore()
+        let sessionID = "gw-expired-\(UUID().uuidString)"
+
+        store.ingestConnectionHealth(sessionID, .connected)
+        // Foreground was 10s ago -- outside the 5s window.
+        store.recordForegroundedAtForTesting(Date().addingTimeInterval(-10))
+
+        store.ingestConnectionHealth(sessionID, .connecting(attempt: 1, maxAttempts: 3))
+
+        #expect(!store.suppressGraceReconnecting,
+            "grace window must NOT activate when foreground was >5s ago")
+        // visibleHarness == harness (reconnecting).
+        if case .reconnecting = store.visibleHarness {} else {
+            Issue.record("visibleHarness must be reconnecting when grace window did not activate")
+        }
+    }
+
+    /// connected clears suppression immediately (reconnect succeeded before expiry).
+    @Test func graceWindowClearedOnConnected() {
+        let store = SessionStore()
+        let sessionID = "gw-clear-\(UUID().uuidString)"
+
+        store.ingestConnectionHealth(sessionID, .connected)
+        store.recordForegroundedAtForTesting(Date())
+        store.ingestConnectionHealth(sessionID, .connecting(attempt: 1, maxAttempts: 3))
+        #expect(store.suppressGraceReconnecting, "precondition: suppression must be active")
+
+        // Reconnect succeeds.
+        store.ingestConnectionHealth(sessionID, .connected)
+
+        #expect(!store.suppressGraceReconnecting,
+            "connected must clear grace window suppression immediately")
+        // visibleHarness is live/linked after reconnect.
+        if case .reconnecting = store.visibleHarness {
+            Issue.record("visibleHarness must not be reconnecting after connected")
+        }
+    }
+}
