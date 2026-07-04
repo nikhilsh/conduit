@@ -20,6 +20,43 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Fix lint errors from transactional-handoffs commit — broker. PR #876.**
+
+- Corrects lint errors introduced by the transactional handoff commit; broker only, no runtime behaviour change, no device verification required.
+
+**Per-session observability decomposition plan — docs. PR #872.**
+
+- Adds `docs/PLAN-PER-SESSION-OBSERVABILITY.md`; no runtime change, no device verification required.
+
+**Session Info shows live model — broker + core + iOS + Android. PR #874.**
+
+- Status frames now carry the session's live model identifier (stream-reported; falls back to the spawn override). Both iOS and Android surface a Model row in the Session Info sheet.
+- **Verify on device:** open Session Info after a completed turn — the model id/display name should be present. Absent when connected to a pre-#874 broker (graceful degradation expected).
+
+**Broker restart resilience: persistent chat dedup + exact-PID agent reap — broker. PR #873. Redeploy required.**
+
+- Chat dedup state is written to disk per session so duplicate agent turns no longer appear after a broker restart + app re-send. Pre-restart agent processes are reaped by exact PID + start-time before recovery respawn, eliminating interleaved conversation writes. PID record is also refreshed on agent switch.
+- **Verify on device:** restart the broker mid-turn, then re-send the interrupted message — exactly one agent response should appear.
+
+**Broker token cuts + status coalescing — broker. PR #870. Redeploy required.**
+
+- KB `INDEX.md` is no longer embedded in every API call (pointer + `kb-search` hint only; saves ~1 k tokens/call). `AskUserQuestion` nudge pushes are deduplicated. Quick-reply events are skipped when no client is subscribed. Turn-phase-only status broadcasts are coalesced to at most 1/s; turn start/end remain immediate.
+- **Verify on device:** agent sessions should consume visibly fewer tokens per call; quick replies still arrive when a client is watching; `AskUserQuestion` still prompts correctly from claude.
+
+**Core: skip 1 s first-dial delay on foreground/network nudge — core. PR #869.**
+
+- The unconditional 1 s delay before the first reconnect dial is bypassed when the reconnect is triggered by a foreground or network-reachability nudge rather than the normal retry loop. Timing benefit rides with the foreground refresh work in PR #875; no additional device verify step beyond that item.
+
+**Foreground refresh + assume-connected grace — iOS + Android. PR #875.**
+
+- On foreground the app immediately fires parallel HTTP fetches for the session list and conversation content alongside the WebSocket redial (no blank-then-populate). After a successful reconnect the app performs a one-shot conversation refresh. The "Reconnecting" banner is suppressed for ~4 s after foreground (presentation only; honest state is shown once the grace period expires). Also fixes the harness getting stuck on "Reconnecting" with no sessions after a successful reconnect.
+- **Verify on device:** background the app for 1+ minute, then foreground — content should be fresh within ~1–2 s with no "Reconnecting" flash. With a genuinely dead broker the reconnecting banner should surface after ~4 s.
+
+**App perf surgical fixes — iOS + Android. PR #871.**
+
+- Conversation re-fetch gated to cold-join events only (was O(N) FFI deep-copies per status frame). Off-screen streaming animation task loops cancelled (eliminated 4 concurrent loops per open session). `pendingChats` and `SavedSessionsStore` persistence debounced with a background-thread flush (removes main-thread blocking on every update).
+- **Verify on device:** with 5+ sessions open and one actively streaming, home list scrolling stays smooth; reopening a session shows full chat content with no missing messages.
+
 **Transactional Claude ↔ Codex mid-session handoff — broker + iOS + Android.**
 
 - Broker generates a bounded handoff from durable conversation/workspace state,
