@@ -223,6 +223,12 @@ func (o *Orchestrator) Advance(p *Pipeline, stepIndex int, phase string) error {
 			log.Printf("pipeline %s: save after fail: %v", p.ID, err)
 		}
 		log.Printf("pipeline %s: FAILED at step %d (phase=%s)", p.ID, stepIndex, phase)
+		// Resume always re-spawns a brand new session for the failed step
+		// (SessionID is reset to "" before a fresh CreateSession — see
+		// Resume) — the failed session's process is never read or reused
+		// again, so it is safe, and better on a RAM-constrained box, to
+		// reap it now rather than leak it until Cancel/GC.
+		o.terminateStepSession(p, stepIndex)
 		return nil
 	}
 
@@ -231,8 +237,14 @@ func (o *Orchestrator) Advance(p *Pipeline, stepIndex int, phase string) error {
 }
 
 // spawnNext spawns step k+1 (or marks COMPLETE if k was the last step).
+// prevIdx (the step that just finished, k) is reaped once the step at
+// prevIdx+1 has been spawned (or, when this was the last step, once
+// COMPLETE is reached) — by that point its handoff has already been read
+// via BuildPrev/GetLastAssistantText/GetWorktreeDir inside spawnStep, so
+// its agent process is no longer needed. See terminateStepSession.
 func (o *Orchestrator) spawnNext(p *Pipeline) error {
-	next := p.CurrentStep + 1
+	prevIdx := p.CurrentStep
+	next := prevIdx + 1
 	if next >= len(p.Steps) {
 		// All steps done.
 		p.Gate = nil // clear gate preview on completion
@@ -241,6 +253,7 @@ func (o *Orchestrator) spawnNext(p *Pipeline) error {
 			return fmt.Errorf("pipeline %s: save complete: %w", p.ID, err)
 		}
 		log.Printf("pipeline %s: COMPLETE", p.ID)
+		o.terminateStepSession(p, prevIdx)
 		return nil
 	}
 	p.CurrentStep = next
@@ -249,6 +262,7 @@ func (o *Orchestrator) spawnNext(p *Pipeline) error {
 		p.Gate = nil // clear gate preview on spawn failure
 		p.State = PipelineFailed
 		_ = p.Save(o.conduitRoot)
+		o.terminateStepSession(p, prevIdx)
 		return fmt.Errorf("pipeline %s: spawn step %d: %w", p.ID, next, err)
 	}
 	// Clear gate preview after the step is successfully spawned.
@@ -257,6 +271,7 @@ func (o *Orchestrator) spawnNext(p *Pipeline) error {
 		return fmt.Errorf("pipeline %s: save after spawn step %d: %w", p.ID, next, err)
 	}
 	log.Printf("pipeline %s: spawned step %d session=%s", p.ID, next, p.Steps[next].SessionID)
+	o.terminateStepSession(p, prevIdx)
 	go o.pollStep(p.ID, next)
 	return nil
 }
@@ -412,13 +427,14 @@ func (o *Orchestrator) pollStep(pipelineID string, stepIndex int) {
 		}
 		if o.sessions.TurnComplete(sessID) {
 			// Structured-chat turn completed (claude / ACP backend).
-			// NOTE: the session process stays alive after this advance (we do NOT
-			// CancelSession here). That is intentional: the GetLastAssistantText/
-			// GetWorktreeDir reads on the next step (BuildPrev, GatePreview) and
-			// the tap-to-inspect UX all need the session to remain accessible.
-			// Sessions are reclaimed by the normal session GC or when the pipeline
-			// is CANCELLED. RAM implication: completed-step agent processes stay
-			// alive until pipeline teardown. This is a known v1.1 follow-up.
+			// NOTE: the session process stays alive through this Advance call
+			// (we do NOT CancelSession here) because the GetLastAssistantText/
+			// GetWorktreeDir reads for the next step (BuildPrev, GatePreview)
+			// still need it. Advance/afterStepSuccess/spawnNext reap it once
+			// that harvest is done — see terminateStepSession. The
+			// tap-to-inspect UX keeps working after that: Session.Close kills
+			// only the process, not the session record or its transcript/
+			// worktree.
 			log.Printf("pipeline %s: step %d session %s turn_complete", pipelineID, stepIndex, sessID)
 			if advErr := o.Advance(p, stepIndex, "turn_complete"); advErr != nil {
 				log.Printf("pipeline %s: advance step %d (turn_complete): %v", pipelineID, stepIndex, advErr)
@@ -600,6 +616,17 @@ func (o *Orchestrator) advanceFanout(p *Pipeline, stepIndex int) error {
 			log.Printf("pipeline %s: save after fanout all-failed: %v", p.ID, err)
 		}
 		log.Printf("pipeline %s: FAILED at step %d (all fanout runs failed)", p.ID, stepIndex)
+		// Same reasoning as the single-step FAILED path: Resume re-spawns
+		// fresh runs, never these, so reap every run's process now.
+		for _, run := range fc.Runs {
+			if run.SessionID == "" {
+				continue
+			}
+			if err := o.sessions.CancelSession(run.SessionID); err != nil {
+				log.Printf("pipeline %s: fanout all-failed: terminate run %d session %s: %v",
+					p.ID, run.Index, run.SessionID, err)
+			}
+		}
 		return nil
 	}
 
@@ -648,6 +675,25 @@ func (o *Orchestrator) Pick(p *Pipeline, runIdx int) error {
 
 	log.Printf("pipeline %s: PICK step %d winner=run %d session=%s", p.ID, k, runIdx, winner.SessionID)
 
+	// Terminate the losing runs' live agent processes now that the winner
+	// is committed. Their worktrees/artifacts are left untouched —
+	// CancelSession/Session.Close kills only the process, never the
+	// session record or its workspace. The winner's own session follows
+	// the normal rule (reaped once its handoff is harvested, below).
+	for i := range fc.Runs {
+		if i == runIdx {
+			continue
+		}
+		loser := &fc.Runs[i]
+		if loser.SessionID == "" {
+			continue
+		}
+		if err := o.sessions.CancelSession(loser.SessionID); err != nil {
+			log.Printf("pipeline %s: pick step %d: terminate loser run %d session %s: %v",
+				p.ID, k, loser.Index, loser.SessionID, err)
+		}
+	}
+
 	return o.afterStepSuccess(p, k)
 }
 
@@ -682,10 +728,39 @@ func (o *Orchestrator) afterStepSuccess(p *Pipeline, k int) error {
 		log.Printf("pipeline %s: AWAITING_GATE at step %d (prev len=%d, output len=%d)",
 			p.ID, k, len(gp.Prev), len(gp.Output))
 		o.sendGatePush(p, k)
+		// gp.Output/gp.Prev above are the ONLY reads of step k's live
+		// session for this gate; Continue (including the amend-prev path)
+		// reads exclusively from the persisted Gate, never the live
+		// session (see spawnStepOpts: p.Gate.Prev is used verbatim when
+		// p.Gate.Step == k-1). Safe to reap step k's process now.
+		o.terminateStepSession(p, k)
 		return nil
 	}
 
 	return o.spawnNext(p)
+}
+
+// terminateStepSession terminates the live agent process backing step k's
+// SessionID, once the pipeline no longer needs to read from it (its handoff
+// text has already been harvested via GetLastAssistantText/GetWorktreeDir
+// and persisted into GatePreview.Prev/Output or the next step's rendered
+// prompt). Idempotent and safe if the session already exited on its own —
+// CancelSession is a documented no-op when the session is already gone, and
+// Session.Close itself is guarded by a sync.Once. It only kills the process;
+// the session record, its transcript, and its worktree are left intact for
+// tap-to-inspect and the fanout "artifacts preserved" invariant. Errors are
+// logged, never fatal — failing to reap must not block pipeline progress.
+func (o *Orchestrator) terminateStepSession(p *Pipeline, k int) {
+	if k < 0 || k >= len(p.Steps) {
+		return
+	}
+	sessID := p.Steps[k].SessionID
+	if sessID == "" {
+		return
+	}
+	if err := o.sessions.CancelSession(sessID); err != nil {
+		log.Printf("pipeline %s: terminate step %d session %s: %v", p.ID, k, sessID, err)
+	}
 }
 
 // sendPickPush sends a push notification informing the user that all fanout
