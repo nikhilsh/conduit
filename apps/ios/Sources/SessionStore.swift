@@ -6093,7 +6093,7 @@ final class SessionStore {
             connectionHealthBySession[sessionID] = health
             if !sessionLifecycle.isEmpty {
                 harness = .live
-            } else if harness == .disconnected {
+            } else {
                 harness = .linked
             }
             // Change 4: record the last good harness and clear any active
