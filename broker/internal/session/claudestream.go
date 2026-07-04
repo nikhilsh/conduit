@@ -197,3 +197,26 @@ func parseClaudeStreamLine(line []byte) ([]ClaudeChatEvent, bool) {
 	}
 	return out, true
 }
+
+// parseClaudeStreamModel extracts the model identifier from an "assistant"
+// stream-json line. Returns "" when the line is not an assistant event, the
+// model is absent, or the model is the synthetic sentinel "<synthetic>".
+// The minimal struct avoids allocating the full content slice on every line.
+func parseClaudeStreamModel(line []byte) string {
+	if !bytes.Contains(line, []byte(`"assistant"`)) {
+		return ""
+	}
+	var ev struct {
+		Type    string `json:"type"`
+		Message struct {
+			Model string `json:"model"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return ""
+	}
+	if ev.Type != "assistant" || ev.Message.Model == "" || ev.Message.Model == "<synthetic>" {
+		return ""
+	}
+	return ev.Message.Model
+}

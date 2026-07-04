@@ -58,6 +58,7 @@ func TestClaudeClearCommand(t *testing.T) {
 		},
 		nil, // onSubagent
 		nil, // onPhaseChange
+		nil, // onModel
 	)
 
 	// (a) The "(no content)" assistant line must NOT appear.

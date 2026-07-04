@@ -59,6 +59,9 @@ dictionary SessionStatus {
     u32? git_ahead = null;
     u32? git_behind = null;
     string? worktree_name = null;
+    // The model the agent is actually using (e.g. "claude-sonnet-4-6").
+    // null on old brokers or when unknown (no turn yet, no override).
+    string? model = null;
 };
 
 dictionary ProjectSession {

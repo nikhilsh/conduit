@@ -3704,7 +3704,8 @@ data class SessionStatus (
     var `gitDirty`: kotlin.UInt? = null, 
     var `gitAhead`: kotlin.UInt? = null, 
     var `gitBehind`: kotlin.UInt? = null, 
-    var `worktreeName`: kotlin.String? = null
+    var `worktreeName`: kotlin.String? = null, 
+    var `model`: kotlin.String? = null
 ) {
     
     companion object
@@ -3755,6 +3756,7 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalUInt.read(buf),
             FfiConverterOptionalUInt.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -3797,7 +3799,8 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalUInt.allocationSize(value.`gitDirty`) +
             FfiConverterOptionalUInt.allocationSize(value.`gitAhead`) +
             FfiConverterOptionalUInt.allocationSize(value.`gitBehind`) +
-            FfiConverterOptionalString.allocationSize(value.`worktreeName`)
+            FfiConverterOptionalString.allocationSize(value.`worktreeName`) +
+            FfiConverterOptionalString.allocationSize(value.`model`)
     )
 
     override fun write(value: SessionStatus, buf: ByteBuffer) {
@@ -3840,6 +3843,7 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalUInt.write(value.`gitAhead`, buf)
             FfiConverterOptionalUInt.write(value.`gitBehind`, buf)
             FfiConverterOptionalString.write(value.`worktreeName`, buf)
+            FfiConverterOptionalString.write(value.`model`, buf)
     }
 }
 

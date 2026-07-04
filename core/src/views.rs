@@ -157,6 +157,12 @@ pub struct SessionStatus {
     /// the session is not in a dedicated worktree.
     #[serde(default)]
     pub worktree_name: Option<String>,
+    /// The model the agent is actually using (e.g. "claude-sonnet-4-6").
+    /// Populated by the broker from the stream-json assistant messages (stream-json
+    /// backend) or the spawn override (codex/ACP). None on old brokers or when
+    /// the model is unknown (no turn yet, no override).
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

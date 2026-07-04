@@ -112,7 +112,7 @@ func TestProcessClaudeStreamOutputThinkingStreaming(t *testing.T) {
 		if json.Unmarshal(p, &ev) == nil {
 			all = append(all, ev)
 		}
-	}, nil, nil, nil, nil, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	// Collect by view.
 	var thinkingEvs, chatStreamEvs, chatFinalEvs []evEnvelope
@@ -212,7 +212,7 @@ func TestProcessClaudeStreamOutputThinkingReset(t *testing.T) {
 		if json.Unmarshal(p, &ev) == nil && ev.View == "thinking_streaming" {
 			thinkingEvs = append(thinkingEvs, ev)
 		}
-	}, nil, nil, nil, nil, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	if len(thinkingEvs) != 2 {
 		t.Fatalf("want 2 thinking_streaming events (one per turn), got %d: %+v", len(thinkingEvs), thinkingEvs)

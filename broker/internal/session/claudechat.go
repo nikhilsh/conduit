@@ -182,7 +182,7 @@ func encodeClaudeUserMessage(text string) ([]byte, error) {
 // generator (task: ai-session-titles) which mints/refines the session
 // name from the conversation. gen / titleGen may be nil (feature disabled
 // / non-claude), in which case turn-end is a no-op for that one.
-func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta), onControl func(controlRequest, string), onInit func(string), onTurnEnd func(), onSubagent *subagentRegistryHandle, onPhaseChange func(string)) error {
+func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta), onControl func(controlRequest, string), onInit func(string), onTurnEnd func(), onSubagent *subagentRegistryHandle, onPhaseChange func(string), onModel func(string)) error {
 	sc := bufio.NewScanner(r)
 	// Assistant turns can be large; raise the line cap well past bufio's
 	// 64KB default.
@@ -336,6 +336,14 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 		if msg, ok := claudeCompactNotice(line); ok {
 			publishChatSystem(publish, msg)
 			continue
+		}
+		// Latch the model from the assistant message before the event
+		// extractor (parseClaudeStreamLine) strips it away. Only fires
+		// on "assistant" lines with a real model (not "<synthetic>").
+		if onModel != nil {
+			if m := parseClaudeStreamModel(line); m != "" {
+				onModel(m)
+			}
 		}
 		evs, ok := parseClaudeStreamLine(line)
 		if !ok {

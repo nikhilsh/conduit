@@ -63,6 +63,12 @@ func (s *Session) StatusPayload() map[string]any {
 	if tp, present := s.structuredTurnPhase(); present && tp != "" {
 		payload["turn_phase"] = tp
 	}
+	// model is the agent-reported model id (e.g. "claude-sonnet-4-6").
+	// Priority: live backend report > SpawnOverride. Omitted when unknown
+	// so old apps/brokers see no key and don't render a stale value.
+	if m, present := s.structuredModel(); present {
+		payload["model"] = m
+	}
 	if cwd := s.WorkspaceDir(); cwd != "" {
 		payload["cwd"] = cwd
 	}

@@ -353,7 +353,7 @@ fun SessionInfoScreen(
                                         color = neon.text,
                                     )
                                     Text(
-                                        modelLine(agent, status?.reasoningEffort ?: session.reasoningEffort),
+                                        modelLine(agent, status?.reasoningEffort ?: session.reasoningEffort, status?.model, catalog),
                                         style = MaterialTheme.typography.bodySmall,
                                         fontFamily = neon.mono,
                                         color = neon.textDim,
@@ -481,6 +481,14 @@ fun SessionInfoScreen(
                         )
                         Hairline(neon)
                         InfoDetailRow("Started", startedTimeLabel(status?.startedAt ?: session.startedAt), neon)
+                        val liveModel = status?.model?.takeIf { it.isNotBlank() }
+                        if (liveModel != null) {
+                            Hairline(neon)
+                            val catalog = catalogs[session.assistant]
+                            val modelLabel = catalog?.firstOrNull { it.id == liveModel }
+                                ?.displayName?.takeIf { it.isNotBlank() } ?: liveModel
+                            InfoDetailRow("Model", modelLabel, neon)
+                        }
                         val liveWorktree = status?.worktreeName?.takeIf { it.isNotBlank() }
                             ?: session.worktreeName?.takeIf { it.isNotBlank() }
                         if (liveWorktree != null) {
@@ -1060,8 +1068,14 @@ private fun terminalAttachCmd(endpoint: Endpoint, savedServers: List<SavedServer
     return "ssh ${ssh.username}@${ssh.host}$portFlag '$innerCmd'"
 }
 
-private fun modelLine(agent: String, effort: String?): String =
-    if (!effort.isNullOrBlank()) "${agent.lowercase()} · $effort" else agent.lowercase()
+private fun modelLine(agent: String, effort: String?, model: String? = null, catalog: List<SessionStore.AgentModel>? = null): String {
+    val displayModel = if (!model.isNullOrBlank()) {
+        catalog?.firstOrNull { it.id == model }?.displayName?.takeIf { it.isNotBlank() } ?: model
+    } else {
+        agent.lowercase()
+    }
+    return if (!effort.isNullOrBlank()) "$displayModel · $effort" else displayModel
+}
 
 private fun fmtK(n: Long): String = when {
     n >= 1_000_000L -> "%.1fM".format(n / 1_000_000.0)

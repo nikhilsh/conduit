@@ -933,6 +933,10 @@ internal open class UniffiVTableCallbackInterfaceSshProgressDelegate(
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -983,10 +987,14 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_conduit_core_fn_method_conduitclient_notify_network_change(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_conduit_core_fn_method_conduitclient_pause_session(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_conduit_core_fn_method_conduitclient_refresh_account_usage(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,
     ): Long
     fun uniffi_conduit_core_fn_method_conduitclient_resize(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`rows`: Short,`cols`: Short,
     ): Long
+    fun uniffi_conduit_core_fn_method_conduitclient_resume_session(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_conduit_core_fn_method_conduitclient_send_chat(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`msg`: RustBuffer.ByValue,`clientMsgId`: RustBuffer.ByValue,
     ): Long
     fun uniffi_conduit_core_fn_method_conduitclient_send_file(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`filename`: RustBuffer.ByValue,`mime`: RustBuffer.ByValue,`payload`: RustBuffer.ByValue,
@@ -1193,9 +1201,13 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_conduit_core_checksum_method_conduitclient_notify_network_change(
     ): Short
+    fun uniffi_conduit_core_checksum_method_conduitclient_pause_session(
+    ): Short
     fun uniffi_conduit_core_checksum_method_conduitclient_refresh_account_usage(
     ): Short
     fun uniffi_conduit_core_checksum_method_conduitclient_resize(
+    ): Short
+    fun uniffi_conduit_core_checksum_method_conduitclient_resume_session(
     ): Short
     fun uniffi_conduit_core_checksum_method_conduitclient_send_chat(
     ): Short
@@ -1329,10 +1341,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_conduit_core_checksum_method_conduitclient_notify_network_change() != 14476.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_conduit_core_checksum_method_conduitclient_pause_session() != 63807.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_conduit_core_checksum_method_conduitclient_refresh_account_usage() != 21233.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_conduit_core_checksum_method_conduitclient_resize() != 29584.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_conduit_core_checksum_method_conduitclient_resume_session() != 8111.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_conduit_core_checksum_method_conduitclient_send_chat() != 8352.toShort()) {
@@ -1936,9 +1954,13 @@ public interface ConduitClientInterface {
     
     fun `notifyNetworkChange`()
     
+    fun `pauseSession`(`sessionId`: kotlin.String)
+    
     suspend fun `refreshAccountUsage`(`sessionId`: kotlin.String)
     
     suspend fun `resize`(`sessionId`: kotlin.String, `rows`: kotlin.UShort, `cols`: kotlin.UShort)
+    
+    fun `resumeSession`(`sessionId`: kotlin.String)
     
     suspend fun `sendChat`(`sessionId`: kotlin.String, `msg`: kotlin.String, `clientMsgId`: kotlin.String)
     
@@ -2237,6 +2259,18 @@ open class ConduitClient: Disposable, AutoCloseable, ConduitClientInterface {
     
 
     
+    @Throws(ConduitException::class)override fun `pauseSession`(`sessionId`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(ConduitException) { _status ->
+    UniffiLib.INSTANCE.uniffi_conduit_core_fn_method_conduitclient_pause_session(
+        it, FfiConverterString.lower(`sessionId`),_status)
+}
+    }
+    
+    
+
+    
     @Throws(ConduitException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `refreshAccountUsage`(`sessionId`: kotlin.String) {
@@ -2279,6 +2313,18 @@ open class ConduitClient: Disposable, AutoCloseable, ConduitClientInterface {
         ConduitException.ErrorHandler,
     )
     }
+
+    
+    @Throws(ConduitException::class)override fun `resumeSession`(`sessionId`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(ConduitException) { _status ->
+    UniffiLib.INSTANCE.uniffi_conduit_core_fn_method_conduitclient_resume_session(
+        it, FfiConverterString.lower(`sessionId`),_status)
+}
+    }
+    
+    
 
     
     @Throws(ConduitException::class)
@@ -3631,6 +3677,7 @@ data class SessionStatus (
     var `sessionName`: kotlin.String?, 
     var `viewers`: kotlin.UInt?, 
     var `turnActive`: kotlin.Boolean? = null, 
+    var `turnPhase`: kotlin.String? = null, 
     var `reasoningEffort`: kotlin.String?, 
     var `cwd`: kotlin.String?, 
     var `startedAt`: kotlin.String?, 
@@ -3657,7 +3704,8 @@ data class SessionStatus (
     var `gitDirty`: kotlin.UInt? = null, 
     var `gitAhead`: kotlin.UInt? = null, 
     var `gitBehind`: kotlin.UInt? = null, 
-    var `worktreeName`: kotlin.String? = null
+    var `worktreeName`: kotlin.String? = null, 
+    var `model`: kotlin.String? = null
 ) {
     
     companion object
@@ -3685,6 +3733,7 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterOptionalULong.read(buf),
             FfiConverterOptionalULong.read(buf),
             FfiConverterOptionalULong.read(buf),
@@ -3706,6 +3755,7 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalUInt.read(buf),
             FfiConverterOptionalUInt.read(buf),
             FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
         )
     }
@@ -3722,6 +3772,7 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalString.allocationSize(value.`sessionName`) +
             FfiConverterOptionalUInt.allocationSize(value.`viewers`) +
             FfiConverterOptionalBoolean.allocationSize(value.`turnActive`) +
+            FfiConverterOptionalString.allocationSize(value.`turnPhase`) +
             FfiConverterOptionalString.allocationSize(value.`reasoningEffort`) +
             FfiConverterOptionalString.allocationSize(value.`cwd`) +
             FfiConverterOptionalString.allocationSize(value.`startedAt`) +
@@ -3748,7 +3799,8 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalUInt.allocationSize(value.`gitDirty`) +
             FfiConverterOptionalUInt.allocationSize(value.`gitAhead`) +
             FfiConverterOptionalUInt.allocationSize(value.`gitBehind`) +
-            FfiConverterOptionalString.allocationSize(value.`worktreeName`)
+            FfiConverterOptionalString.allocationSize(value.`worktreeName`) +
+            FfiConverterOptionalString.allocationSize(value.`model`)
     )
 
     override fun write(value: SessionStatus, buf: ByteBuffer) {
@@ -3763,6 +3815,7 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalString.write(value.`sessionName`, buf)
             FfiConverterOptionalUInt.write(value.`viewers`, buf)
             FfiConverterOptionalBoolean.write(value.`turnActive`, buf)
+            FfiConverterOptionalString.write(value.`turnPhase`, buf)
             FfiConverterOptionalString.write(value.`reasoningEffort`, buf)
             FfiConverterOptionalString.write(value.`cwd`, buf)
             FfiConverterOptionalString.write(value.`startedAt`, buf)
@@ -3790,6 +3843,7 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalUInt.write(value.`gitAhead`, buf)
             FfiConverterOptionalUInt.write(value.`gitBehind`, buf)
             FfiConverterOptionalString.write(value.`worktreeName`, buf)
+            FfiConverterOptionalString.write(value.`model`, buf)
     }
 }
 

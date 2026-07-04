@@ -2409,10 +2409,11 @@ public struct SessionStatus {
     public var gitAhead: UInt32?
     public var gitBehind: UInt32?
     public var worktreeName: String?
+    public var model: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(session: String, assistant: String, phase: String, health: String, rows: UInt16, cols: UInt16, yolo: Bool, preview: PreviewInfo?, sessionName: String?, viewers: UInt32?, turnActive: Bool? = nil, turnPhase: String? = nil, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?, totalInputTokens: UInt64? = nil, totalOutputTokens: UInt64? = nil, totalCachedTokens: UInt64? = nil, totalCostUsd: Double? = nil, contextUsedTokens: UInt64? = nil, contextWindowTokens: UInt64? = nil, linesAdded: UInt32? = nil, linesRemoved: UInt32? = nil, commits: UInt32? = nil, prNumber: UInt32? = nil, prState: String? = nil, prUrl: String? = nil, prProvider: String? = nil, account5hPct: Double? = nil, account5hResetsAt: String? = nil, account7dPct: Double? = nil, account7dResetsAt: String? = nil, gitBranch: String? = nil, gitDirty: UInt32? = nil, gitAhead: UInt32? = nil, gitBehind: UInt32? = nil, worktreeName: String? = nil) {
+    public init(session: String, assistant: String, phase: String, health: String, rows: UInt16, cols: UInt16, yolo: Bool, preview: PreviewInfo?, sessionName: String?, viewers: UInt32?, turnActive: Bool? = nil, turnPhase: String? = nil, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?, totalInputTokens: UInt64? = nil, totalOutputTokens: UInt64? = nil, totalCachedTokens: UInt64? = nil, totalCostUsd: Double? = nil, contextUsedTokens: UInt64? = nil, contextWindowTokens: UInt64? = nil, linesAdded: UInt32? = nil, linesRemoved: UInt32? = nil, commits: UInt32? = nil, prNumber: UInt32? = nil, prState: String? = nil, prUrl: String? = nil, prProvider: String? = nil, account5hPct: Double? = nil, account5hResetsAt: String? = nil, account7dPct: Double? = nil, account7dResetsAt: String? = nil, gitBranch: String? = nil, gitDirty: UInt32? = nil, gitAhead: UInt32? = nil, gitBehind: UInt32? = nil, worktreeName: String? = nil, model: String? = nil) {
         self.session = session
         self.assistant = assistant
         self.phase = phase
@@ -2452,6 +2453,7 @@ public struct SessionStatus {
         self.gitAhead = gitAhead
         self.gitBehind = gitBehind
         self.worktreeName = worktreeName
+        self.model = model
     }
 }
 
@@ -2576,6 +2578,9 @@ extension SessionStatus: Equatable, Hashable {
         if lhs.worktreeName != rhs.worktreeName {
             return false
         }
+        if lhs.model != rhs.model {
+            return false
+        }
         return true
     }
 
@@ -2619,6 +2624,7 @@ extension SessionStatus: Equatable, Hashable {
         hasher.combine(gitAhead)
         hasher.combine(gitBehind)
         hasher.combine(worktreeName)
+        hasher.combine(model)
     }
 }
 
@@ -2668,7 +2674,8 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
                 gitDirty: FfiConverterOptionUInt32.read(from: &buf), 
                 gitAhead: FfiConverterOptionUInt32.read(from: &buf), 
                 gitBehind: FfiConverterOptionUInt32.read(from: &buf), 
-                worktreeName: FfiConverterOptionString.read(from: &buf)
+                worktreeName: FfiConverterOptionString.read(from: &buf), 
+                model: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -2712,6 +2719,7 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
         FfiConverterOptionUInt32.write(value.gitAhead, into: &buf)
         FfiConverterOptionUInt32.write(value.gitBehind, into: &buf)
         FfiConverterOptionString.write(value.worktreeName, into: &buf)
+        FfiConverterOptionString.write(value.model, into: &buf)
     }
 }
 

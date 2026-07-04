@@ -210,6 +210,10 @@ type acpProcess struct {
 	// permTimer auto-cancels an unanswered permission after askAnswerTimeout so a
 	// never-tapped card can't wedge the turn forever. nil when none is pending.
 	permTimer *time.Timer
+	// currentModel is the model identifier reported by the agent during
+	// session/new (acpSessionNewResult.currentModel). Latched in
+	// latchSessionResult; satisfies the modelReporter interface.
+	currentModel string
 }
 
 // newACPProcess spawns `<agent> --acp` and runs the initialize → session
@@ -360,6 +364,9 @@ func (c *acpProcess) latchSessionResult(r acpSessionNewResult, fresh bool) {
 		c.sessionID = r.sessionID
 	}
 	c.modes = r.modes
+	if r.currentModel != "" {
+		c.currentModel = r.currentModel
+	}
 	c.mu.Unlock()
 	if fresh && first && c.onSession != nil {
 		c.onSession(r.sessionID)
@@ -459,6 +466,15 @@ func (c *acpProcess) TurnActive() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.turnActive
+}
+
+// CurrentModel returns the model the ACP session started with, as reported
+// by the agent in the session/new result. Implements modelReporter; returns ""
+// when the agent did not advertise a current model.
+func (c *acpProcess) CurrentModel() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.currentModel
 }
 
 // Close stops the agent: refuse further Sends, cancel any pending permission,
