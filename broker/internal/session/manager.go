@@ -677,6 +677,14 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	s.pty = f
 	s.cmd = cmd
 	_ = pty.Setsize(f, &pty.Winsize{Rows: s.rows, Cols: s.cols})
+	// Record the agent PID + proc start-time so recoverSessionLocked can reap
+	// the orphaned process before spawning a replacement (Fix 2). Best-effort:
+	// a procStartTime failure (non-Linux or transient) is silently skipped.
+	if cmd.Process != nil {
+		if st, err := procStartTime(cmd.Process.Pid); err == nil {
+			writeAgentPIDRecord(s.sessionDir, cmd.Process.Pid, st)
+		}
+	}
 	if s.termgrid != nil {
 		if err := s.termgrid.Create(s.ID, s.rows, s.cols); err != nil {
 			// Non-fatal — fall back to ring snapshots for this session.
@@ -1561,6 +1569,11 @@ func cleanupAgentHomeCredentials(homeDir, sessionID string) {
 
 // Done returns a channel closed when the session ends.
 func (s *Session) Done() <-chan struct{} { return s.closed }
+
+// StateDir returns the session-local state directory where per-session files
+// (meta.json, scrollback.bin, conversation.jsonl, dedup.json, agent_pid.json)
+// are stored. Read-only after applyPaths; safe to call without holding mu.
+func (s *Session) StateDir() string { return s.sessionDir }
 
 // ReasoningEffort returns the per-agent label set in the adapter toml
 // (e.g. "low" / "medium" / "high"). Returns "" when the toml didn't

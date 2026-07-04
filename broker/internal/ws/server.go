@@ -469,6 +469,14 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pre-populate the dedup table from the persisted state for this session
+	// so a broker-restart resend of an already-delivered message is still
+	// caught. No-op for new sessions (file absent) and for sessions already
+	// in memory (merge keeps the fresher in-memory entry). Best-effort.
+	if s.chatDedup != nil {
+		s.chatDedup.loadSession(sess.StateDir(), sess.ID)
+	}
+
 	// Initial client dimensions: prefer the rows/cols query params if
 	// present (mobile clients pass these on connect). Falls back to
 	// 0,0 — which makes SnapshotForSize use the session's current PTY
@@ -1008,6 +1016,11 @@ func (c *client) handleText(payload []byte) {
 			duplicate := false
 			if env.ClientMsgID != "" && c.srv != nil && c.srv.chatDedup != nil {
 				duplicate = c.srv.chatDedup.markSeen(c.sess.ID, env.ClientMsgID)
+				if !duplicate {
+					// Persist the new id so a broker restart can reload it and
+					// still recognise a resend as a duplicate. Best-effort.
+					c.srv.chatDedup.persistSession(c.sess.StateDir(), c.sess.ID)
+				}
 			}
 			if !duplicate {
 				// Structured chat channel (chat_mode="stream-json", task

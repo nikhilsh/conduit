@@ -71,6 +71,11 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	// goroutine's lock-free read of s.previewPort.
 	previewPort := m.allocatePreviewPortLocked()
 	sessionDir := filepath.Join(m.conduitRoot, "sessions", id)
+	// KillMode=process means the previous broker's agent process survives a
+	// broker restart. Reap it (exact recorded PID + start-time check, never by
+	// name) BEFORE spawning the replacement, or both processes interleave
+	// writes into the same conversation store.
+	reapOrphanAgent(sessionDir, procStartTime)
 	// Use the adapter's manifest config_dir for conversation discovery so
 	// a third-party adapter with a non-standard config directory is found.
 	// Falls back gracefully: if ConfigDir is empty (shouldn't happen after

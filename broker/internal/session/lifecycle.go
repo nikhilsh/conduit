@@ -788,6 +788,16 @@ func (s *Session) switchToAdapter(adapter agents.Adapter) error {
 	s.reasonCode = "agent_switched"
 	s.mu.Unlock()
 
+	// Update the agent PID record so a subsequent broker restart can identify
+	// the switched-to PTY process as the orphan to reap. Only when a new PTY
+	// process was actually created (structured↔structured switches keep the
+	// old terminal). Best-effort.
+	if cmd != nil && cmd.Process != nil {
+		if st, err := procStartTime(cmd.Process.Pid); err == nil {
+			writeAgentPIDRecord(s.sessionDir, cmd.Process.Pid, st)
+		}
+	}
+
 	if err := s.persistHandoffSection(handoffHTML); err != nil {
 		fmt.Fprintf(os.Stderr, "session %s: persist switch handoff: %v\n", s.ID, err)
 	}
