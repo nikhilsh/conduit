@@ -274,6 +274,11 @@ type Session struct {
 	// Guarded by mu; lazily initialized on first use.
 	kbSurfaced map[string]bool
 
+	// peerMsgTimes is the sliding-window record of inbound peer-session
+	// messages (see peerchat.go's peerRateCheck) — the ping-pong loop guard.
+	// Guarded by mu.
+	peerMsgTimes []time.Time
+
 	// override carries the optional per-session reasoning-effort / model
 	// overrides supplied at creation (the fork-onto-a-different-model
 	// path). Zero value = adapter defaults unchanged. Read-only after
@@ -1320,31 +1325,7 @@ func (s *Session) SendChat(msg string) bool {
 		}
 		s.mu.Unlock()
 	}
-	err := s.chat.Send(agentMsg)
-	if err != nil && s.chatRespawn != nil {
-		// The long-lived stream-json agent died underneath us (any send
-		// error means its stdin is gone — crash, OOM, kill). Self-heal:
-		// spawn a fresh agent and retry once, rather than dropping the
-		// message. Skip when the session itself is tearing down.
-		s.mu.Lock()
-		closing := s.closing
-		s.mu.Unlock()
-		if !closing {
-			if fresh, rerr := s.chatRespawn(); rerr == nil {
-				s.mu.Lock()
-				old := s.chat
-				s.chat = fresh
-				s.mu.Unlock()
-				if old != nil {
-					_ = old.Close()
-				}
-				log.Printf("session %s: chat agent respawned after send error: %v", s.ID, err)
-				err = fresh.Send(agentMsg)
-			} else {
-				fmt.Fprintf(os.Stderr, "session %s: chat respawn: %v\n", s.ID, rerr)
-			}
-		}
-	}
+	err := s.chatSendWithHeal(agentMsg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "session %s: chat send: %v\n", s.ID, err)
 		// Surface the failure in the Chat tab — stderr-only here is the
@@ -1371,6 +1352,36 @@ func (s *Session) SendChat(msg string) bool {
 		_ = s.persistMetadata()
 	}
 	return true
+}
+
+// chatSendWithHeal delivers agentMsg on the structured chat channel with a
+// one-shot self-heal: if the long-lived agent died underneath us (any send
+// error means its stdin is gone — crash, OOM, kill), spawn a fresh agent and
+// retry once rather than dropping the message. Skipped when the session
+// itself is tearing down. Callers hold s.interactionMu.
+func (s *Session) chatSendWithHeal(agentMsg string) error {
+	err := s.chat.Send(agentMsg)
+	if err != nil && s.chatRespawn != nil {
+		s.mu.Lock()
+		closing := s.closing
+		s.mu.Unlock()
+		if !closing {
+			if fresh, rerr := s.chatRespawn(); rerr == nil {
+				s.mu.Lock()
+				old := s.chat
+				s.chat = fresh
+				s.mu.Unlock()
+				if old != nil {
+					_ = old.Close()
+				}
+				log.Printf("session %s: chat agent respawned after send error: %v", s.ID, err)
+				err = fresh.Send(agentMsg)
+			} else {
+				fmt.Fprintf(os.Stderr, "session %s: chat respawn: %v\n", s.ID, rerr)
+			}
+		}
+	}
+	return err
 }
 
 // InterruptTurn stops the agent's current turn (the composer Stop button)

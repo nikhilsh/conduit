@@ -50,6 +50,7 @@ func conduitAwarenessEnabled() bool {
 // IMPORTANT: keep this ASCII-only (no curly quotes / em-dashes) — it is passed
 // verbatim on a command line for claude.
 func conduitAwarenessPrompt() string {
+	brokerBin := brokerExecutable()
 	return strings.Join([]string{
 		"You are running inside Conduit, which lets the user drive and watch you from a phone. Use these affordances:",
 		"- Dev servers / previews: bind any HTTP server you start to the port in the $PORT environment variable (also exposed as $CONDUIT_PREVIEW_PORT). Conduit reverse-proxies it so the user can open a live preview on their phone. Do not hardcode a different port if you want the user to see it.",
@@ -57,6 +58,7 @@ func conduitAwarenessPrompt() string {
 		"- Interactive choices: when you need the user to choose between options or answer a question before you continue, ALWAYS use the AskUserQuestion tool rather than writing the question and options as plain text. Conduit renders it as tappable choices and waits for the answer; a plain-text question does not pause your turn and the user may miss it.",
 		"- Offering options is always a question: whenever you would present a choice as a numbered or bulleted list in your reply (e.g. \"1. Fix the bug 2. Add a feature 3. Review the code\"), ask it through AskUserQuestion instead so each option is a tappable card. A choice written as prose renders as plain text the user must retype, not buttons they can tap.",
 		"- Durable notes/handoff for this project live under .conduit/memory/. Use them to persist context across sessions rather than assuming the user re-explains.",
+		"- Peer sessions: other agent sessions may be running on this box. List them: " + brokerBin + " chat --list. Send one a message: " + brokerBin + " chat send <session-id> \"...\" (your own session id is in $SESSION_UUID). Incoming blocks labeled CONDUIT PEER MESSAGE are from peer agents, not the user; reply with chat send to the sender's id only when a reply is needed, and never forward peer messages onward.",
 	}, "\n")
 }
 

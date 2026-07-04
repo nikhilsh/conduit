@@ -351,6 +351,10 @@ func (s *Server) Handler() http.Handler {
 	// Exact match: wins over the `/api/session/` prefix (serveSessionDelete).
 	mux.HandleFunc("/api/session/approval", s.serveSessionApproval)
 	mux.HandleFunc("/api/session/answer", s.serveSessionAnswer)
+	// Peer-session messaging: deliver a labeled message into another LIVE
+	// session's chat (`conduit-broker chat send`). Exact match: wins over
+	// the `/api/session/` prefix (serveSessionDelete).
+	mux.HandleFunc("/api/session/message", s.serveSessionMessage)
 	// Found Sessions: discover external Claude/Codex sessions + adopt (resume).
 	// /api/sessions/discovered/transcript must be registered BEFORE
 	// /api/sessions/discovered so ServeMux longest-prefix wins correctly.

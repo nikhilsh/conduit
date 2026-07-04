@@ -101,6 +101,11 @@ const (
 
 // runChat is the entry point for `conduit-broker chat <args>`.
 func runChat(args []string) int {
+	// `chat send` is a one-shot verb (peer-session messaging), not an
+	// attach: dispatch before flag parsing so its own flags apply.
+	if len(args) > 0 && args[0] == "send" {
+		return runChatSend(args[1:])
+	}
 	fs := flag.NewFlagSet("chat", flag.ContinueOnError)
 	addrFlag := fs.String("addr", "", "broker base URL (default http://127.0.0.1:1977, or CONDUIT_BROKER_ADDR)")
 	tokenFlag := fs.String("token", "", "bearer token (default CONDUIT_TOKEN)")
@@ -112,6 +117,7 @@ func runChat(args []string) int {
 Usage:
   conduit-broker chat [flags] <session-id>
   conduit-broker chat [flags] --list
+  conduit-broker chat send [flags] <session-id> <message...>   (one-shot peer message)
 
 Flags:`)
 		fs.PrintDefaults()
@@ -124,24 +130,9 @@ In-session commands:
 		return 2
 	}
 
-	// --- resolve addr ---
-	addr := strings.TrimSpace(*addrFlag)
-	if addr == "" {
-		addr = strings.TrimSpace(os.Getenv("CONDUIT_BROKER_ADDR"))
-	}
-	if addr == "" {
-		addr = "http://127.0.0.1:1977"
-	}
-	addr = strings.TrimRight(addr, "/")
-
-	// --- resolve token ---
-	token := strings.TrimSpace(*tokenFlag)
+	addr := resolveChatAddr(*addrFlag)
+	token := resolveChatToken(*tokenFlag)
 	if token == "" {
-		token = strings.TrimSpace(os.Getenv("CONDUIT_TOKEN"))
-	}
-	if token == "" {
-		fmt.Fprintln(os.Stderr, "chat: no token: set --token or export CONDUIT_TOKEN")
-		fmt.Fprintln(os.Stderr, "  hint: systemctl show -p Environment conduit-broker | tr ' ' '\\n' | grep CONDUIT_TOKEN")
 		return 1
 	}
 
@@ -177,6 +168,118 @@ In-session commands:
 	log.Printf("NOTE: while attached, the phone's turn-done pushes are suppressed (Phase 2 fix pending)")
 
 	return attachLoop(addr, token, sessionID, *tailFlag)
+}
+
+// resolveChatAddr resolves the broker base URL: flag > $CONDUIT_BROKER_ADDR >
+// loopback default.
+func resolveChatAddr(flagVal string) string {
+	addr := strings.TrimSpace(flagVal)
+	if addr == "" {
+		addr = strings.TrimSpace(os.Getenv("CONDUIT_BROKER_ADDR"))
+	}
+	if addr == "" {
+		addr = "http://127.0.0.1:1977"
+	}
+	return strings.TrimRight(addr, "/")
+}
+
+// resolveChatToken resolves the bearer token: flag > $CONDUIT_TOKEN. Prints
+// the guidance and returns "" when neither is set.
+func resolveChatToken(flagVal string) string {
+	token := strings.TrimSpace(flagVal)
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("CONDUIT_TOKEN"))
+	}
+	if token == "" {
+		fmt.Fprintln(os.Stderr, "chat: no token: set --token or export CONDUIT_TOKEN")
+		fmt.Fprintln(os.Stderr, "  hint: systemctl show -p Environment conduit-broker | tr ' ' '\\n' | grep CONDUIT_TOKEN")
+	}
+	return token
+}
+
+// runChatSend implements `conduit-broker chat send <session-id> <message...>`:
+// a one-shot POST /api/session/message. This is the peer-session messaging
+// verb agents use from inside a session — $SESSION_UUID identifies the sender,
+// $CONDUIT_TOKEN (inherited from the broker) authenticates, and the recipient
+// receives the text framed as a labeled CONDUIT PEER MESSAGE block.
+func runChatSend(args []string) int {
+	fs := flag.NewFlagSet("chat send", flag.ContinueOnError)
+	addrFlag := fs.String("addr", "", "broker base URL (default http://127.0.0.1:1977, or CONDUIT_BROKER_ADDR)")
+	tokenFlag := fs.String("token", "", "bearer token (default CONDUIT_TOKEN)")
+	fromFlag := fs.String("from", "", "sender session id (default SESSION_UUID)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `conduit-broker chat send — deliver a one-shot message to another session
+
+Usage:
+  conduit-broker chat send [flags] <session-id> <message...>
+
+The message lands in the recipient's chat framed as a peer message (not as
+the user speaking). Find session ids with: conduit-broker chat --list
+
+Flags:`)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() < 2 {
+		fs.Usage()
+		return 2
+	}
+	addr := resolveChatAddr(*addrFlag)
+	token := resolveChatToken(*tokenFlag)
+	if token == "" {
+		return 1
+	}
+	from := strings.TrimSpace(*fromFlag)
+	if from == "" {
+		from = strings.TrimSpace(os.Getenv("SESSION_UUID"))
+	}
+	sessionID := fs.Arg(0)
+	message := strings.Join(fs.Args()[1:], " ")
+
+	body, err := json.Marshal(map[string]string{
+		"session_id":      sessionID,
+		"message":         message,
+		"from_session_id": from,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "chat send: encode: %v\n", err)
+		return 1
+	}
+	req, err := http.NewRequest(http.MethodPost, addr+"/api/session/message", strings.NewReader(string(body)))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "chat send: %v\n", err)
+		return 1
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "chat send: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		fmt.Printf("sent to %s\n", sessionID)
+		return 0
+	}
+	var apiErr struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	msg := resp.Status
+	if json.NewDecoder(resp.Body).Decode(&apiErr) == nil && apiErr.Error.Code != "" {
+		msg = apiErr.Error.Code + ": " + apiErr.Error.Message
+	}
+	fmt.Fprintf(os.Stderr, "chat send: %s\n", msg)
+	if resp.StatusCode == http.StatusNotFound {
+		fmt.Fprintln(os.Stderr, "  hint: list live sessions with: conduit-broker chat --list")
+	}
+	return 1
 }
 
 // attachLoop loads history + tails WS, reconnecting on close.
