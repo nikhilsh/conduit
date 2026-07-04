@@ -34,7 +34,7 @@ func codexSeedThread(s *Session, resumeCodexThreadID string) {
 // is the codex twin of the stream-json path passing gen/titleGen into
 // startChatProcess.
 func wireCodexTurnHook(s *Session, aiGen aiGenProvider, backend chatBackend) {
-	qrGen := newQuickReplyGeneratorWithProvider(s.ID, aiGen, s.PublishText)
+	qrGen := newQuickReplyGeneratorWithProvider(s.ID, aiGen, s.PublishText, s.SubscriberCount)
 	s.titleGen = newTitleGeneratorWithProvider(s.ID, aiGen, s.firstPrompt, s.applyAITitle)
 	if qrGen == nil && s.titleGen == nil {
 		return

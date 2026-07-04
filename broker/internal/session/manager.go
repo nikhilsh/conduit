@@ -707,7 +707,11 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	if extra := opts.override.extraArgsForAdapter(adapter); len(extra) > 0 {
 		log.Printf("session %s: model override applied (%s): %v", id, adapter.Name, extra)
 	}
-	s.startChatBackend(adapter, opts.resumeChatSessionID, opts.continueLatestChat, opts.resumeCodexThreadID, opts.forkChatSessionID)
+	// Non-fatal on the create path (pre-transactional behavior): the PTY
+	// surface still works and the scraper fallback covers legacy adapters.
+	if err := s.startChatBackend(adapter, opts.resumeChatSessionID, opts.continueLatestChat, opts.resumeCodexThreadID, opts.forkChatSessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "session %s: start chat backend: %v\n", s.ID, err)
+	}
 	// Render the handoff file so on_start hooks (e.g. "conduit memory
 	// render") find their context at CONDUIT_HANDOFF_PATH. Mirrors what
 	// switchToAdapter does before running on_swap. Non-fatal: a write

@@ -110,7 +110,7 @@ func (acpBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequest) (s
 // nil aiGen → nil generators → the hook no-ops. Twin of wireCodexTurnHook /
 // wireOpencodeTurnHook.
 func wireACPTurnHook(s *Session, aiGen aiGenProvider, proc *acpProcess) {
-	qrGen := newQuickReplyGeneratorWithProvider(s.ID, aiGen, s.PublishText)
+	qrGen := newQuickReplyGeneratorWithProvider(s.ID, aiGen, s.PublishText, s.SubscriberCount)
 	s.titleGen = newTitleGeneratorWithProvider(s.ID, aiGen, s.firstPrompt, s.applyAITitle)
 	if qrGen == nil && s.titleGen == nil {
 		return
