@@ -20,6 +20,12 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+_(empty)_
+
+---
+
+## v0.0.213
+
 **Send/turn-state reliability: Stop retry + queued-message stuck-state fixes (iOS + Android). PR #878.**
 
 - Composer Stop now retries once (~1s) if the interrupt WS write fails or the
