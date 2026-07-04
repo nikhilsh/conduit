@@ -613,9 +613,11 @@ func TestTurnCompleteAdvancesStep(t *testing.T) {
 	if p.CurrentStep != 1 {
 		t.Errorf("current_step=%d, want 1", p.CurrentStep)
 	}
-	// Session must NOT be cancelled (kept alive for BuildPrev/GatePreview/inspect).
-	if sm.sessions[sessID].phase == "cancelled" {
-		t.Error("step 0 session was cancelled — must be kept alive for downstream reads")
+	// Step 0's session must now be reaped: its handoff was already read
+	// while rendering step 1's prompt inside spawnStep, so the process is
+	// no longer needed (v1.1 RAM-leak follow-up fix).
+	if sm.sessions[sessID].phase != "cancelled" {
+		t.Errorf("step 0 session phase=%q, want cancelled (reaped after advance)", sm.sessions[sessID].phase)
 	}
 }
 
@@ -762,6 +764,12 @@ func TestFanoutAllFailedIsFailed(t *testing.T) {
 
 	if p.State != PipelineFailed {
 		t.Errorf("state=%s, want failed", p.State)
+	}
+	// All runs' processes must be reaped — Resume never reuses them.
+	for i, run := range p.Steps[0].Fanout.Runs {
+		if sm.sessions[run.SessionID].phase != "cancelled" {
+			t.Errorf("run %d session phase=%q, want cancelled", i, sm.sessions[run.SessionID].phase)
+		}
 	}
 }
 
@@ -1009,6 +1017,190 @@ func TestCancelKillsAllFanoutRuns(t *testing.T) {
 		if sm.sessions[sessID].phase != "cancelled" {
 			t.Errorf("run %d session %s not cancelled (phase=%q)", i, sessID, sm.sessions[sessID].phase)
 		}
+	}
+}
+
+// ── Completed-step session reaping (v1.1 RAM-leak follow-up) ────────────────
+
+// TestGateEntryTerminatesStepSession verifies that entering AWAITING_GATE
+// reaps the gated step's live session — its handoff (Output/Prev) has
+// already been harvested into the persisted GatePreview by that point, so
+// the process is no longer needed.
+func TestGateEntryTerminatesStepSession(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone, GateAfter: true},
+		{Index: 1, AgentType: "claude", PromptTemplate: "step 1: {{prev}}", InputFromPrev: InputOutput},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep(0): %v", err)
+	}
+	sessID := p.Steps[0].SessionID
+	sm.sessions[sessID].lastText = "the result of step 0"
+
+	if err := orch.Advance(p, 0, "exited(0)"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if p.State != PipelineAwaitingGate {
+		t.Fatalf("state=%s, want awaiting_gate", p.State)
+	}
+	if sm.sessions[sessID].phase != "cancelled" {
+		t.Errorf("gated step 0 session phase=%q, want cancelled", sm.sessions[sessID].phase)
+	}
+}
+
+// TestGateAmendStillWorksAfterSessionReaped verifies the Continue-with-amend
+// flow (edit handoff) still works even though the gated step's session was
+// already terminated on gate entry — Continue must read exclusively from
+// the persisted Gate, never re-read the (now-dead) live session.
+func TestGateAmendStillWorksAfterSessionReaped(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone, GateAfter: true},
+		{Index: 1, AgentType: "claude", PromptTemplate: "step 1: {{prev}}", InputFromPrev: InputOutput},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep(0): %v", err)
+	}
+	step0SessID := p.Steps[0].SessionID
+	sm.sessions[step0SessID].lastText = "original output"
+
+	if err := orch.Advance(p, 0, "exited(0)"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if sm.sessions[step0SessID].phase != "cancelled" {
+		t.Fatalf("precondition failed: step 0 session should already be reaped, phase=%q", sm.sessions[step0SessID].phase)
+	}
+
+	// Continue with an amendment — must succeed purely off persisted Gate
+	// state, with no read of the dead step-0 session.
+	if err := orch.Continue(p, "amended after reap"); err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+	step1SessID := p.Steps[1].SessionID
+	if step1SessID == "" {
+		t.Fatal("step 1 has no session ID after Continue")
+	}
+	spawnedPrompt := sm.sessions[step1SessID].prompt
+	if !strings.Contains(spawnedPrompt, "amended after reap") {
+		t.Errorf("step 1 prompt does not contain amended text; got %q", spawnedPrompt)
+	}
+}
+
+// TestFailedStepTerminatesSession verifies that a step failing (non-zero
+// exit) reaps its own session — Resume always spawns a fresh session for
+// the retry and never reuses the failed one.
+func TestFailedStepTerminatesSession(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep(0): %v", err)
+	}
+	sessID := p.Steps[0].SessionID
+
+	if err := orch.Advance(p, 0, "exited(1)"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if p.State != PipelineFailed {
+		t.Fatalf("state=%s, want failed", p.State)
+	}
+	if sm.sessions[sessID].phase != "cancelled" {
+		t.Errorf("failed step 0 session phase=%q, want cancelled", sm.sessions[sessID].phase)
+	}
+}
+
+// TestCompleteTerminatesFinalStepSession verifies that reaching COMPLETE
+// reaps the last step's session.
+func TestCompleteTerminatesFinalStepSession(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep(0): %v", err)
+	}
+	sessID := p.Steps[0].SessionID
+	sm.sessions[sessID].lastText = "final output"
+
+	if err := orch.Advance(p, 0, "exited(0)"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if p.State != PipelineComplete {
+		t.Fatalf("state=%s, want complete", p.State)
+	}
+	if sm.sessions[sessID].phase != "cancelled" {
+		t.Errorf("final step session phase=%q, want cancelled", sm.sessions[sessID].phase)
+	}
+}
+
+// TestPickTerminatesLosersOnly verifies that Pick reaps the losing fanout
+// runs' sessions immediately, while the winner's session stays alive until
+// its own handoff is harvested (afterStepSuccess/spawnNext, or gate entry).
+func TestPickTerminatesLosersOnly(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			Fanout:         &FanoutConfig{Count: 3},
+		},
+		{Index: 1, AgentType: "claude", PromptTemplate: "step 1", InputFromPrev: InputNone},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep: %v", err)
+	}
+	run0 := p.Steps[0].Fanout.Runs[0].SessionID
+	run1 := p.Steps[0].Fanout.Runs[1].SessionID
+	run2 := p.Steps[0].Fanout.Runs[2].SessionID
+
+	p.Steps[0].Fanout.Runs[0].Phase = "exited(0)"
+	p.Steps[0].Fanout.Runs[1].Phase = "exited(0)"
+	p.Steps[0].Fanout.Runs[2].Phase = "exited(0)"
+	p.State = PipelineAwaitingPick
+
+	if err := orch.Pick(p, 0); err != nil {
+		t.Fatalf("Pick(0): %v", err)
+	}
+
+	// Losers (run 1, run 2) must be terminated immediately.
+	if sm.sessions[run1].phase != "cancelled" {
+		t.Errorf("loser run 1 session phase=%q, want cancelled", sm.sessions[run1].phase)
+	}
+	if sm.sessions[run2].phase != "cancelled" {
+		t.Errorf("loser run 2 session phase=%q, want cancelled", sm.sessions[run2].phase)
+	}
+	// The winner (run 0) has now been carried through afterStepSuccess ->
+	// spawnNext, which harvests step 1's {{prev}} from it then reaps it —
+	// so by the time Pick returns it is ALSO terminated (no gate_after on
+	// step 0 here, so it advances immediately rather than parking at a gate).
+	if sm.sessions[run0].phase != "cancelled" {
+		t.Errorf("winner run 0 session phase=%q, want cancelled after step advanced", sm.sessions[run0].phase)
+	}
+	if p.State != PipelineRunning || p.CurrentStep != 1 {
+		t.Fatalf("state=%s current_step=%d, want running/1", p.State, p.CurrentStep)
 	}
 }
 
