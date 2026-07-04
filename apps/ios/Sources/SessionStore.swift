@@ -1301,6 +1301,14 @@ final class SessionStore {
     /// or the timer fires.
     var suppressGraceReconnecting: Bool = false
 
+    /// Consecutive reconcile-miss count per session. Incremented each time a
+    /// saved-live session is absent from both aliveIDs and recoverableSessionIDs
+    /// during reconcileLiveSessions. Reset when the session IS confirmed alive.
+    /// A session is only demoted to History after 2 consecutive misses so that
+    /// a broker-startup window (session not yet in RecoverableSessions) does NOT
+    /// prematurely move it out of the Active list on the first reconnect.
+    private var reconcileMisses: [String: Int] = [:]
+
     /// Last harness state that was `.live` or `.linked`; returned by
     /// `visibleHarness` during the grace window so the connected UI stays visible.
     private var lastReachableHarness: HarnessState = .linked
@@ -3932,14 +3940,47 @@ final class SessionStore {
     }
 
     /// Stop the agent's current turn (the composer Stop button) without ending
-    /// the session. Fire-and-forget: the broker interrupts the running turn
-    /// (claude stream-json interrupt / codex turn-interrupt / codex-exec kill)
-    /// and the turn winding down arrives on the normal chat/status stream, which
-    /// clears the typing indicator. A no-op broker-side when nothing is running.
+    /// the session. The broker interrupts the running turn (claude stream-json
+    /// interrupt / codex turn-interrupt / codex-exec kill) and the turn winding
+    /// down arrives on the normal chat/status stream, which clears the typing
+    /// indicator. A no-op broker-side when nothing is running.
+    ///
+    /// Reliability: if the WS write throws (transient reconnect window), we
+    /// retry once after ~1 s using the live client at that time (a reconnect
+    /// may have swapped it). Turn state is NOT optimistically cleared here --
+    /// we wait for the broker's idle status frame so we never show an
+    /// interactive composer that the agent's reply will immediately overwrite.
     func stopTurn(sessionID: String) {
         guard let client = clientForSession(sessionID) else { return }
-        Telemetry.breadcrumb("chat", "stop turn requested", data: ["session": sessionID])
-        Task { try? await client.stopTurn(sessionId: sessionID) }
+        Telemetry.breadcrumb("chat", "stop-turn attempt", data: ["session": sessionID])
+        Task {
+            do {
+                try await client.stopTurn(sessionId: sessionID)
+                Telemetry.breadcrumb("chat", "stop-turn ok", data: ["session": sessionID])
+            } catch {
+                Telemetry.breadcrumb("chat", "stop-turn failed — retrying in 1s",
+                    data: ["session": sessionID, "error": error.localizedDescription])
+                // Retry once: a transient WS write error during a reconnect
+                // window is the most common cause. Re-resolve the client so
+                // a reconnect that swapped the instance is picked up.
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let retryClient = self.clientForSession(sessionID) else { return }
+                do {
+                    try await retryClient.stopTurn(sessionId: sessionID)
+                    Telemetry.breadcrumb("chat", "stop-turn retry ok",
+                        data: ["session": sessionID])
+                } catch {
+                    Telemetry.breadcrumb("chat", "stop-turn retry failed — stop lost",
+                        data: ["session": sessionID, "error": error.localizedDescription])
+                    Telemetry.capture(
+                        error: error,
+                        message: "iOS stop-turn failed after retry",
+                        tags: ["surface": "ios", "phase": "stop_turn"],
+                        extras: ["session": sessionID]
+                    )
+                }
+            }
+        }
     }
 
     /// Account-level Claude subscription usage, surfaced ambiently on Home and
@@ -4321,15 +4362,38 @@ final class SessionStore {
     /// all other agents (claude, etc.) it holds the entry and auto-sends
     /// when the turn ends via `flushQueuedOnTurnComplete`.
     ///
-    /// NOTE: The optimistic transcript echo is NOT created here -- the
-    /// panel card is the visual placeholder. The echo is created when the
-    /// entry is actually delivered (turn ends or steer succeeds).
+    /// The optimistic transcript echo IS created here (Android parity) so the
+    /// localID is stable through the flush. The ORIGINAL localID is used as
+    /// client_msg_id when the message is eventually delivered, enabling broker
+    /// dedup to work correctly even if a prior steer attempt used the same ID.
+    /// The "Queued Next" panel card is the queued-state indicator; the echo
+    /// (status "pending") shows the message in the transcript immediately.
     private func sendChatQueued(sessionID: String, message: String) {
-        let now = conduitConversationTsString(epoch: Date().timeIntervalSince1970)
+        let echoEpoch = anchorEpoch(sessionID: sessionID)
+        let now = conduitConversationTsString(epoch: echoEpoch)
         let localID = "local-\(UUID().uuidString)"
+        // Create the echo with the localID that will be used as client_msg_id
+        // on delivery. This preserves the ID through the flush so broker dedup
+        // (and chat_ack routing) keys off the SAME id the user queued with.
+        let item = ConversationItem(
+            id: localID, role: "user", kind: "message", status: "pending",
+            content: message, ts: now, files: [], toolName: nil, command: nil,
+            exitCode: nil, durationMs: nil, diffSummary: nil, pendingOptions: [],
+            sourceAgent: nil, targetAgent: nil, taskText: nil,
+            resultSummary: nil, planSteps: []
+        )
+        conversationLog[sessionID, default: []].append(item)
+        let localEvent = ChatEvent(role: "user", content: message, ts: now, files: [])
+        chatLog[sessionID, default: []].append(localEvent)
+        quickReplies[sessionID] = nil
+        if useRustStore {
+            ensureRustSessionPresent(sessionID)
+            _ = rustStore.applyChat(sessionId: sessionID, event: localEvent)
+        }
         pendingChats.enqueueForActiveTurn(sessionID: sessionID, localID: localID, message: message, ts: now)
         Telemetry.breadcrumb("chat", "queued for active turn",
             data: ["session": sessionID, "chars": "\(message.count)",
+                   "local_id": localID,
                    "supports_steer": supportsSteer(sessionID: sessionID) ? "1" : "0"])
 
         if supportsSteer(sessionID: sessionID) {
@@ -4396,12 +4460,15 @@ final class SessionStore {
         Telemetry.breadcrumb("chat", "flush-on-turn-complete",
             data: ["session": sessionID, "local_id": entry.localID,
                    "kind": entry.kind.rawValue])
-        // Remove the queued entry BEFORE re-sending so the queue doesn't
-        // accumulate a duplicate when sendChat enqueues it again as .normal.
+        // Remove the queuedTurn entry; re-register under the ORIGINAL localID
+        // as .normal so attemptDeliver sends with the same client_msg_id.
+        // The echo was already created in sendChatQueued -- no new echo is
+        // minted here, which prevents orphaning the original pending bubble
+        // and preserves broker dedup across steer attempts.
         pendingChats.markDelivered(sessionID: sessionID, localID: entry.localID)
-        // Route through the full sendChat path so the optimistic echo is
-        // created and the message is persisted via the normal enqueue(.normal).
-        sendChat(sessionID: sessionID, message: entry.message)
+        pendingChats.enqueue(sessionID: sessionID, localID: entry.localID,
+                             message: entry.message, ts: entry.ts)
+        attemptDeliver(sessionID: sessionID, localID: entry.localID, message: entry.message)
     }
 
     /// Belt-and-suspenders flush called when a LIVE (not replayed) assistant
@@ -4416,11 +4483,14 @@ final class SessionStore {
         Telemetry.breadcrumb("chat", "flush-on-reply",
             data: ["session": sessionID, "local_id": entry.localID,
                    "kind": entry.kind.rawValue])
-        // Remove BEFORE re-sending so the queue never holds a duplicate.
+        // Remove BEFORE re-registering so the queue never holds a duplicate.
+        // Echo already created in sendChatQueued; deliver using ORIGINAL
+        // localID so the broker dedup key is stable (no bypassTurnGate needed
+        // since we call attemptDeliver directly, bypassing the turn gate).
         pendingChats.markDelivered(sessionID: sessionID, localID: entry.localID)
-        // bypassTurnGate=true: the reply proves the turn is done even if
-        // turn_active is still true in memory at this instant.
-        sendChat(sessionID: sessionID, message: entry.message, bypassTurnGate: true)
+        pendingChats.enqueue(sessionID: sessionID, localID: entry.localID,
+                             message: entry.message, ts: entry.ts)
+        attemptDeliver(sessionID: sessionID, localID: entry.localID, message: entry.message)
     }
 
     /// True when a send/deliver error means the broker no longer knows this
@@ -6027,6 +6097,21 @@ final class SessionStore {
     func ingestExit(_ sessionID: String, _ code: Int32) {
         sessionLifecycle[sessionID] = .exited(code)
         recordSavedSession(forSessionID: sessionID, isExited: true)
+        // Mark any queued-turn entries as "failed" so the user sees the
+        // visual indicator that these messages were not sent. The session is
+        // terminal; queuedTurn entries cannot be retried. Clear the full queue
+        // after marking so flushPendingChats never attempts delivery into a
+        // dead session. Normal (.normal) pending entries are also dropped since
+        // they will hit UnknownSession on retry against an exited session.
+        let queuedForExit = pendingChats.queuedTurnEntries(for: sessionID)
+        for entry in queuedForExit {
+            setEchoStatus(sessionID: sessionID, localID: entry.localID, status: "failed")
+        }
+        if !queuedForExit.isEmpty {
+            Telemetry.breadcrumb("chat", "exit cleared queued-turn entries",
+                data: ["session": sessionID, "count": "\(queuedForExit.count)"])
+            pendingChats.clear(sessionID: sessionID)
+        }
         if var status = statusBySession[sessionID] {
             status = SessionStatus(
                 session: status.session,
@@ -6753,8 +6838,10 @@ final class SessionStore {
             // Stamp each live session with the box it came from so we can
             // (a) group by box on the home list and (b) gate sends to avoid
             // routing into the wrong broker (UnknownSession root cause).
+            // Also reset the demotion-grace miss counter for sessions that ARE alive.
             for info in running {
                 sessionBox[info.id] = serverID
+                reconcileMisses[info.id] = nil
             }
 
             // 1. Reattach genuinely-alive sessions the broker is keeping
@@ -6862,15 +6949,27 @@ final class SessionStore {
                     }
                     rejoining += 1
                 } else {
-                    // Genuinely gone: demote to History as before.
-                    SavedSessionsStore.shared.markExited(id: saved.id, serverID: serverID)
-                    // If a stale local row exists, reflect the death so it
-                    // reads read-only rather than interactive.
-                    if sessions.contains(where: { $0.id == saved.id }),
-                       sessionLifecycle[saved.id] == nil {
-                        sessionLifecycle[saved.id] = .exited(0)
+                    // Genuinely gone — but require 2 consecutive reconcile misses
+                    // before demoting. A broker startup window can leave a session
+                    // briefly absent from both sets; the second miss confirms it is
+                    // truly gone and not just not yet in RecoverableSessions.
+                    let misses = (reconcileMisses[saved.id] ?? 0) + 1
+                    if misses < 2 {
+                        reconcileMisses[saved.id] = misses
+                        Telemetry.breadcrumb("session", "reconcile_demotion_deferred",
+                            data: ["session": saved.id, "miss": "\(misses)"])
+                    } else {
+                        reconcileMisses[saved.id] = nil
+                        // Confirmed gone on second consecutive miss: demote.
+                        SavedSessionsStore.shared.markExited(id: saved.id, serverID: serverID)
+                        // If a stale local row exists, reflect the death so it
+                        // reads read-only rather than interactive.
+                        if sessions.contains(where: { $0.id == saved.id }),
+                           sessionLifecycle[saved.id] == nil {
+                            sessionLifecycle[saved.id] = .exited(0)
+                        }
+                        demoted += 1
                     }
-                    demoted += 1
                 }
             }
             if demoted > 0 {

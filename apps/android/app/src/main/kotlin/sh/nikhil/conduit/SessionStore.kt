@@ -1110,6 +1110,17 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _lastTurnActive = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     /**
+     * Consecutive reconcile-miss count per session. Incremented each time a
+     * saved-live session is absent from both aliveIDs and recoverableIDs during
+     * [reconcileLiveSessions]. Reset when the session IS confirmed alive.
+     * A session is only demoted to History after 2 consecutive misses so that
+     * a broker startup window (session not yet in RecoverableSessions) does NOT
+     * prematurely move it out of the Active list on the first reconnect.
+     * Mirror of iOS [SessionStore.reconcileMisses].
+     */
+    private val reconcileMisses = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /**
      * FIX 1: sessions already logged for "already hydrated" skip. ConcurrentHashMap
      * key-set because [onStatus] -> [refreshSessions] runs on UniFFI worker threads.
      * Prevents per-frame ring-buffer spam (one breadcrumb per session lifetime).
@@ -2282,6 +2293,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val id = item.optString("id", "") .takeIf { it.isNotEmpty() } ?: continue
                 val assistant = item.optString("assistant", "claude")
                 aliveIDs += id
+                reconcileMisses.remove(id)  // seen alive; reset demotion-grace counter
                 if (id in deleted) continue
                 if (_sessions.value.any { it.id == id }) continue
                 // Stamp box before joining so home-list grouping is correct.
@@ -2403,12 +2415,24 @@ class SessionStore : ViewModel(), ConduitDelegate {
                         demoted++
                     }
                 } else {
-                    // -- (c) Genuinely gone: demote to History --
-                    markExited(saved.id)
-                    if (_sessionLifecycle.value[saved.id] == null) {
-                        updateLifecycle { it + (saved.id to SessionLifecycle.Exited(0)) }
+                    // -- (c) Genuinely gone -- but require 2 consecutive misses before
+                    // demoting. A broker startup window can leave a session briefly
+                    // absent from both sets; the second miss confirms it is truly gone
+                    // and not just not yet in RecoverableSessions. Mirror of iOS.
+                    val misses = (reconcileMisses[saved.id] ?: 0) + 1
+                    if (misses < 2) {
+                        reconcileMisses[saved.id] = misses
+                        Telemetry.breadcrumb("session", "reconcile_demotion_deferred",
+                            mapOf("session" to saved.id, "miss" to misses.toString()))
+                    } else {
+                        reconcileMisses.remove(saved.id)
+                        // Confirmed gone on second consecutive miss: demote to History.
+                        markExited(saved.id)
+                        if (_sessionLifecycle.value[saved.id] == null) {
+                            updateLifecycle { it + (saved.id to SessionLifecycle.Exited(0)) }
+                        }
+                        demoted++
                     }
-                    demoted++
                 }
             }
             if (autoRejoined > 0) {
@@ -3909,15 +3933,46 @@ class SessionStore : ViewModel(), ConduitDelegate {
 
     /**
      * Stop the agent's current turn (the composer Stop button) without ending
-     * the session. Fire-and-forget: the broker interrupts the running turn
-     * (claude stream-json interrupt / codex turn-interrupt / codex-exec kill)
-     * and the turn winding down arrives on the normal chat/status stream, which
-     * clears the typing indicator. A no-op broker-side when nothing is running.
+     * the session. The broker interrupts the running turn (claude stream-json
+     * interrupt / codex turn-interrupt / codex-exec kill) and the turn winding
+     * down arrives on the normal chat/status stream, which clears the typing
+     * indicator. A no-op broker-side when nothing is running.
+     *
+     * Reliability: if the WS write fails (transient reconnect window), retries
+     * once after ~1 s using the live client at that time. Turn state is NOT
+     * optimistically cleared -- we wait for the broker's idle status frame.
      */
     fun stopTurn(sessionId: String) {
         val c = client ?: return
-        Telemetry.breadcrumb("chat", "stop turn requested", mapOf("session" to sessionId))
-        viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { c.stopTurn(sessionId) } } }
+        Telemetry.breadcrumb("chat", "stop-turn attempt", mapOf("session" to sessionId))
+        viewModelScope.launch {
+            val result = runCatching { withContext(Dispatchers.IO) { c.stopTurn(sessionId) } }
+            if (result.isSuccess) {
+                Telemetry.breadcrumb("chat", "stop-turn ok", mapOf("session" to sessionId))
+                return@launch
+            }
+            Telemetry.breadcrumb("chat", "stop-turn failed — retrying in 1s",
+                mapOf("session" to sessionId,
+                      "error" to (result.exceptionOrNull()?.message ?: "")))
+            // Retry once: transient WS write errors during a reconnect window are
+            // the most common cause. Re-resolve the client so a reconnect that
+            // swapped the instance is picked up.
+            delay(1_000L)
+            val retryClient = client ?: return@launch
+            val retryResult = runCatching { withContext(Dispatchers.IO) { retryClient.stopTurn(sessionId) } }
+            if (retryResult.isSuccess) {
+                Telemetry.breadcrumb("chat", "stop-turn retry ok", mapOf("session" to sessionId))
+            } else {
+                val err = retryResult.exceptionOrNull()
+                Telemetry.breadcrumb("chat", "stop-turn retry failed — stop lost",
+                    mapOf("session" to sessionId, "error" to (err?.message ?: "")))
+                Telemetry.capture(
+                    error = err ?: Exception("stop-turn retry failed"),
+                    message = "Android stop-turn failed after retry",
+                    extras = mapOf("session" to sessionId)
+                )
+            }
+        }
     }
 
     // Session-independent refresh for the ambient usage surfaces (Home strip /
@@ -6223,6 +6278,19 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 phase = "exited($code)",
                 health = "red",
             ))
+        }
+        // Mark any queued-turn entries as "failed" so the user sees the visual
+        // indicator that these messages were not sent. The session is terminal;
+        // queuedTurn entries cannot be retried. Clear the full queue after marking
+        // so flushPendingChats never attempts delivery into a dead session.
+        val queuedForExit = _pendingChats.value.queuedTurnEntries(sessionId)
+        for (entry in queuedForExit) {
+            setEchoStatus(sessionId, entry.localId, "failed")
+        }
+        if (queuedForExit.isNotEmpty()) {
+            Telemetry.breadcrumb("chat", "exit cleared queued-turn entries",
+                mapOf("session" to sessionId, "count" to queuedForExit.size.toString()))
+            updatePendingChats { it.clear(sessionId) }
         }
         // Lock the archived-index row terminal so History shows it exited.
         recordSavedSession(sessionId, isExited = true)

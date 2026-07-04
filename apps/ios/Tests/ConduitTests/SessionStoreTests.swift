@@ -679,11 +679,19 @@ struct SessionStoreTests {
         #expect(store.pendingChats.queuedTurnEntries(for: sessionID).isEmpty,
             "queuedTurn entry must be flushed when a live assistant reply arrives")
 
-        // The echo must appear in the conversation log (sendChat was called).
+        // The echo must appear in the conversation log. It was created in
+        // sendChatQueued (Android parity) and must use the ORIGINAL localID --
+        // no orphaned pending bubble, no second echo with a new localID.
         let log = store.conversationLog[sessionID] ?? []
         let userMessages = log.filter { $0.role == "user" }
         #expect(userMessages.contains(where: { $0.content == "queued message" }),
             "flushed message must have a user echo in the conversation log")
+        // Verify: exactly ONE user echo with a stable local- id (no duplicate echo
+        // from a second sendChat call minting a new localID).
+        #expect(userMessages.count == 1,
+            "flush must NOT create a second user echo via sendChat")
+        #expect(userMessages.first?.id.hasPrefix("local-") == true,
+            "echo must carry a local- id")
     }
 
     /// A REPLAYED (older-ts) assistant event must NOT flush the queued-turn entry
@@ -785,6 +793,65 @@ struct SessionStoreTests {
             "status frame after reply-flush must not create a duplicate echo")
     }
 
+    // MARK: - Flush preserves original localID (fix 2)
+
+    /// The flush path (flushQueuedOnTurnComplete + flushQueuedOnReply) must
+    /// deliver under the ORIGINAL localID minted in sendChatQueued -- NOT mint
+    /// a new one via sendChat. A new localID would orphan the original pending
+    /// echo and break broker dedup (client_msg_id changes between the steer
+    /// attempt and the flush delivery).
+    @Test func flushPreservesOriginalLocalID() {
+        let store = SessionStore()
+        let sessionID = "test-localid-\(UUID().uuidString)"
+
+        // Seed turn_active=true so sendChat goes through sendChatQueued.
+        let activeStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "running",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: true,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(activeStatus)
+
+        // Queue a message -- echo is created in sendChatQueued with localID_A.
+        store.sendChat(sessionID: sessionID, message: "preserve my id")
+        let queuedEntries = store.pendingChats.queuedTurnEntries(for: sessionID)
+        #expect(queuedEntries.count == 1, "one queuedTurn entry")
+        let originalLocalID = queuedEntries.first?.id ?? ""
+        #expect(originalLocalID.hasPrefix("local-"), "entry has a local- id")
+
+        // The echo must already be in conversationLog with the original localID.
+        let echoBeforeFlush = (store.conversationLog[sessionID] ?? []).first {
+            $0.id == originalLocalID
+        }
+        #expect(echoBeforeFlush != nil, "echo exists in log before flush with original localID")
+        #expect(echoBeforeFlush?.status == "pending")
+
+        // Flush (turn ended).
+        store.flushQueuedOnTurnComplete(sessionID: sessionID)
+
+        // The queuedTurn entry must be gone.
+        #expect(store.pendingChats.queuedTurnEntries(for: sessionID).isEmpty)
+
+        // Exactly ONE user echo -- no orphaned second echo from sendChat.
+        let userEchoes = (store.conversationLog[sessionID] ?? []).filter { $0.role == "user" }
+        #expect(userEchoes.count == 1, "no duplicate echo created on flush")
+
+        // The surviving echo must carry the ORIGINAL localID.
+        #expect(userEchoes.first?.id == originalLocalID,
+            "echo must keep original localID after flush (broker dedup key stable)")
+
+        // The entry is re-registered as .normal (not queuedTurn) for delivery.
+        let normalEntry = store.pendingChats.entries(for: sessionID).first {
+            $0.localID == originalLocalID
+        }
+        #expect(normalEntry != nil, "entry re-registered as normal under original localID")
+        #expect(normalEntry?.kind == .normal)
+    }
+
     /// bypassTurnGate=false (default) keeps existing callers byte-identical:
     /// a message sent while turn_active=true still goes to the queued panel.
     @Test func bypassTurnGateDefaultFalseKeepsQueueGateBehavior() {
@@ -813,6 +880,52 @@ struct SessionStoreTests {
         let log = store.conversationLog[sessionID] ?? []
         #expect(log.contains(where: { $0.content == "should bypass" && $0.role == "user" }),
             "bypassTurnGate=true must create an echo even when turn_active=true")
+    }
+
+    // MARK: - Exit clears queued messages and marks failed (fix 3)
+
+    /// When a session exits, any queuedTurn entries that were waiting for the
+    /// turn to end must be marked "failed" (so the user sees the visual
+    /// indicator) and removed from the queue (so flushPendingChats never
+    /// attempts delivery into a dead session).
+    @Test func exitClearsQueuedEntriesAndMarksFailed() {
+        let store = SessionStore()
+        let sessionID = "test-exit-clear-\(UUID().uuidString)"
+
+        // Seed turn_active=true so sendChat goes into queuedTurn.
+        let activeStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "running",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: true,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(activeStatus)
+
+        // Queue a message while turn is active.
+        store.sendChat(sessionID: sessionID, message: "will never send")
+        let queued = store.pendingChats.queuedTurnEntries(for: sessionID)
+        #expect(!queued.isEmpty, "message must be in queuedTurn")
+        let localID = queued.first?.id ?? ""
+
+        // Echo must exist in conversationLog (created by sendChatQueued).
+        let echoBefore = (store.conversationLog[sessionID] ?? []).first { $0.id == localID }
+        #expect(echoBefore != nil, "echo must exist before exit")
+        #expect(echoBefore?.status == "pending")
+
+        // Session exits.
+        store.ingestExit(sessionID, 1)
+
+        // Queue must be empty -- no re-delivery into a dead session.
+        #expect(store.pendingChats.entries(for: sessionID).isEmpty,
+            "queue must be cleared on exit")
+
+        // Echo must be marked "failed" so the user knows the message was not sent.
+        let echoAfter = (store.conversationLog[sessionID] ?? []).first { $0.id == localID }
+        #expect(echoAfter?.status == "failed",
+            "queued echo must be marked failed when session exits")
     }
 
     // MARK: - Stale turn state cleared on broker-restart reconnect

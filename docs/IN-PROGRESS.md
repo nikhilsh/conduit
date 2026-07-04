@@ -14,6 +14,8 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
 - **Thinking block + indicator peek** (iOS + Android) -- consume `thinking_streaming` view_event; collapsible "Thinking..." disclosure above streaming prose; live reasoning line fed to WorkingIndicator peek. Branch `feat/thinking-app-ui`, PR #857.
 - **Surgical performance fixes** (iOS + Android) -- gate O(N) conv re-fetch on status frames; cancel off-screen animation Task loops; debounce main-thread persist writes. Branch `perf/surgical-lag-fixes`, PR #871.
 
+- **Send/turn-state reliability fixes** (iOS + Android) -- stopTurn retry-on-failure, flush preserves original localID, exit clears queued messages, reconcile demotion grace (2 misses). Branch `app/stop-and-restart-stuck-fixes`, PR pending.
+
 ## Deferred (not active)
 
 - **Per-identity readiness/push** — architect-sized multi-tenant refactor (auth
