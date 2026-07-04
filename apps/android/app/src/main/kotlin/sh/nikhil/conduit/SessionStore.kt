@@ -577,6 +577,58 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _harness = MutableStateFlow<HarnessState>(HarnessState.Disconnected)
     val harness: StateFlow<HarnessState> = _harness.asStateFlow()
 
+    // MARK: Foreground refresh + grace-window state (Changes 1-4)
+
+    /** Epoch-millis timestamp of the most recent app-foreground (onResume). Set
+     *  by [lifecycleObserver.onResume]; read by [onConnectionHealth] to decide
+     *  whether to start the "assume connected" grace window.
+     *  `internal` so unit tests can set it directly as a seam. */
+    @Volatile internal var foregroundedAt: Long? = null
+
+    /** Timer job for the 4s grace window; cancelled when [.Connected] arrives. */
+    private var graceWindowJob: Job? = null
+
+    /** Last [HarnessState] that was [HarnessState.Live] or [HarnessState.Linked];
+     *  returned by [visibleHarness] during the grace window. */
+    @Volatile private var lastReachableHarness: HarnessState = HarnessState.Linked
+
+    /** True during the ~4s grace window. [visibleHarness] returns
+     *  [lastReachableHarness] when this is true and harness is Reconnecting. */
+    private val _suppressGraceReconnecting = MutableStateFlow(false)
+
+    /** Read-only view of the grace-window suppression flag. Exposed for unit tests. */
+    val suppressGraceReconnecting: StateFlow<Boolean> = _suppressGraceReconnecting.asStateFlow()
+
+    /** Sessions that had hydrated content at foreground time. Drained by
+     *  [onConnectionHealth] Connected to fire a forced post-replay re-read. */
+    private val sessionsNeedingPostConnectRefresh = mutableSetOf<String>()
+
+    /** Backing store for [visibleHarness]. Updated via [updateVisibleHarness] to
+     *  avoid a combine+stateIn that requires Dispatchers.Main at init time. */
+    private val _visibleHarness = MutableStateFlow<HarnessState>(HarnessState.Disconnected)
+
+    /** Display-only harness: during the ~4s post-foreground grace window returns
+     *  [lastReachableHarness] instead of the actual Reconnecting state, so the
+     *  banner stays "connected" for fast reconnects. The real [harness] is always
+     *  used for functional gating (send gates, [HarnessState.canIssueCommands]). */
+    val visibleHarness: StateFlow<HarnessState> = _visibleHarness.asStateFlow()
+
+    /** Recompute [visibleHarness] from current [_harness] and [_suppressGraceReconnecting].
+     *  Must be called whenever either input changes. */
+    private fun updateVisibleHarness() {
+        val h = _harness.value
+        _visibleHarness.value = if (_suppressGraceReconnecting.value && h is HarnessState.Reconnecting) {
+            lastReachableHarness
+        } else h
+    }
+
+    /** Internal seam for unit tests: flip suppression without going through the
+     *  foreground path (which would need Dispatchers.Main for the timer launch). */
+    internal fun setSuppressGraceReconnectingForTesting(suppress: Boolean) {
+        _suppressGraceReconnecting.value = suppress
+        updateVisibleHarness()
+    }
+
     private val _sessions = MutableStateFlow<List<ProjectSession>>(emptyList())
     val sessions: StateFlow<List<ProjectSession>> = _sessions.asStateFlow()
 
@@ -1780,7 +1832,10 @@ class SessionStore : ViewModel(), ConduitDelegate {
 
     private val lifecycleObserver = object : DefaultLifecycleObserver {
         override fun onResume(owner: LifecycleOwner) {
-            // App came back from background — local sockets may be
+            // Record foreground timestamp for grace window (Change 4).
+            foregroundedAt = System.currentTimeMillis()
+            Telemetry.breadcrumb("session", "foreground_refresh_start")
+            // App came back from background -- local sockets may be
             // silently dead. Nudge every worker into reconnect, and
             // re-pull every session's conversation: a reply that landed
             // while suspended only exists in the broker's
@@ -1792,11 +1847,23 @@ class SessionStore : ViewModel(), ConduitDelegate {
             client?.notifyNetworkChange()
             refreshSessions()
             // Foregrounding may have re-armed a socket that died while
-            // suspended — flush any message the user sent right before they
+            // suspended -- flush any message the user sent right before they
             // backgrounded the app (the lost-send bug).
             flushPendingChats()
             // Report presence so the broker knows the device is online.
             viewModelScope.launch { reportDevicePresence() }
+            // Change 1: proactive HTTP fetch for the currently-open session.
+            // Runs in parallel with the WS redial so the transcript is fresh
+            // before the replay lands. Mirrors iOS foregroundRefreshConversation.
+            _selectedId.value?.let { sid ->
+                viewModelScope.launch { foregroundRefreshConversation(sid) }
+            }
+            // Change 2: reconcile live sessions on foreground. Guard against
+            // an in-flight reconcile (reconcileLiveSessions checks readiness).
+            viewModelScope.launch { foregroundReconcileLiveSessions() }
+            // Change 3: mark sessions with hydrated content for a forced
+            // post-connect re-read once WS replay has settled.
+            markSessionsForPostConnectRefresh()
         }
 
         override fun onStop(owner: LifecycleOwner) {
@@ -2017,6 +2084,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     extras = mapOf("server" to serverId, "assistant" to assistant),
                 )
                 _harness.value = HarnessState.Failed("Connect/start failed: box never became ready")
+                updateVisibleHarness()
             }
         }
     }
@@ -2074,9 +2142,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val e = _endpoint.value
         if (!e.isComplete) {
             _harness.value = HarnessState.Failed("Set an endpoint and token in Settings.")
+            updateVisibleHarness()
             return
         }
         _harness.value = HarnessState.Connecting
+        updateVisibleHarness()
         clientGeneration++
         val myGeneration = clientGeneration
         val c = ConduitClient(e.url, e.token)
@@ -2085,6 +2155,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             try {
                 withContext(Dispatchers.IO) { c.connect(GenerationGuardedDelegate(myGeneration)) }
                 _harness.value = HarnessState.Linked
+                updateVisibleHarness()
                 Telemetry.breadcrumb("onboarding", "endpoint_connected",
                     mapOf("host" to _endpoint.value.displayHost,
                           "first_server" to (_savedServers.value.size == 1).toString()))
@@ -2118,6 +2189,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 if (myGeneration != clientGeneration) return@launch
                 val detail = describe(t)
                 _harness.value = HarnessState.Failed(detail)
+                updateVisibleHarness()
                 Telemetry.capture(
                     error = t,
                     message = "Android harness connect failed",
@@ -2402,6 +2474,71 @@ class SessionStore : ViewModel(), ConduitDelegate {
         client?.disconnect()
         client = null
         _harness.value = HarnessState.Disconnected
+        updateVisibleHarness()
+    }
+
+    // -------------------------------------------------------------------------
+    // Foreground refresh helpers (Changes 1-3)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Proactive HTTP re-fetch for [sessionID]'s conversation on foreground.
+     * Non-idempotent: always refreshes the sticky [_hydratedChat] base so a
+     * suspended-then-resumed app sees fresh transcript before the WS replay
+     * lands. Merges against live FFI state via [refreshConversation] (same
+     * rules as [hydrateChatConversation]). Safe to call in parallel with the
+     * WS redial -- the broker reads conversation.jsonl from disk.
+     * Mirror of iOS [foregroundRefreshConversation].
+     */
+    private suspend fun foregroundRefreshConversation(sessionID: String) {
+        Telemetry.breadcrumb("session", "fg_refresh_conversation_start",
+            mapOf("session" to sessionID))
+        val items = try {
+            fetchConversation(sessionID)
+        } catch (t: Throwable) {
+            Telemetry.breadcrumb("session", "fg_refresh_conversation_failed",
+                mapOf("session" to sessionID, "err" to (t.message ?: t.javaClass.simpleName)))
+            return
+        }
+        if (items.isEmpty()) {
+            Telemetry.breadcrumb("session", "fg_refresh_conversation_empty",
+                mapOf("session" to sessionID))
+            return
+        }
+        // Refresh the sticky base (non-idempotent -- overwrites with fresh HTTP content).
+        _hydratedChat[sessionID] = items
+        refreshConversation(sessionID)
+        Telemetry.breadcrumb("session", "fg_refresh_conversation_merged",
+            mapOf("session" to sessionID, "count" to items.size.toString()))
+    }
+
+    /**
+     * Reconcile live sessions from the foreground path, guarded against overlap
+     * with an in-flight reconcile from [connect]. [reconcileLiveSessions] checks
+     * [waitUntilCommandReady] internally which returns false when not ready,
+     * so calling it again while in-flight is safe (it returns early).
+     * Mirror of iOS reconcile-on-foreground guard (Change 2).
+     */
+    private suspend fun foregroundReconcileLiveSessions() {
+        Telemetry.breadcrumb("session", "fg_reconcile_start")
+        reconcileLiveSessions()
+    }
+
+    /**
+     * Mark sessions that have hydrated content at foreground time.
+     * [onConnectionHealth] Connected drains the set and fires a forced post-replay
+     * re-read (explicit bypass of PR #871 empty-log gate -- calls
+     * [refreshConversation] directly, not through [refreshSessions]).
+     * Mirror of iOS [markSessionsForPostConnectRefresh] (Change 3).
+     */
+    private fun markSessionsForPostConnectRefresh() {
+        val hydrated = _sessions.value.filter { _hydratedChat[it.id] != null }.map { it.id }
+        synchronized(sessionsNeedingPostConnectRefresh) {
+            sessionsNeedingPostConnectRefresh.clear()
+            sessionsNeedingPostConnectRefresh.addAll(hydrated)
+        }
+        Telemetry.breadcrumb("session", "fg_marked_post_connect_refresh",
+            mapOf("count" to hydrated.size.toString()))
     }
 
     /**
@@ -2637,6 +2774,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             Telemetry.breadcrumb("ssh_tunnel", "self-heal aborted — no ssh ref for current server")
             _sshTunnelLost.value = true
             _harness.value = HarnessState.Failed("Connection to your server was lost. Reconnect to continue.")
+            updateVisibleHarness()
             return
         }
 
@@ -2755,6 +2893,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 _sshTunnelLost.value = true
                 _sshBootstrap.value = SshBootstrapState.Idle
                 _harness.value = HarnessState.Failed("Connection to your server was lost. Reconnect to continue.")
+                updateVisibleHarness()
             } finally {
                 isReconnecting = false
             }
@@ -3076,6 +3215,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             val ready = waitUntilCommandReady()
             if (!ready) {
                 _harness.value = HarnessState.Failed("Connect/start failed: server did not become ready in time.")
+                updateVisibleHarness()
                 return@launch
             }
             createSession(assistant = assistant, startupCwd = cwd)
@@ -3377,6 +3517,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 startup?.let { rememberRecentDirectory(it) }
                 updateLifecycle { (it - pendingId) + (id to SessionLifecycle.Live) }
                 _harness.value = HarnessState.Live
+                updateVisibleHarness()
                 refreshSessions()
                 _selectedId.value = id
                 // Seed the first turn (e.g. a voice-dictated prompt) through the
@@ -3400,9 +3541,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
                         Telemetry.breadcrumb("session", "auth failure on SSH box — triggering self-heal",
                             mapOf("phase" to "create_session", "endpoint" to _endpoint.value.displayHost))
                         _harness.value = HarnessState.Reconnecting(1u, 3u)
+                        updateVisibleHarness()
                         attemptSshSelfHeal()
                     } else {
                         _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the server.")
+                        updateVisibleHarness()
                     }
                 } else if (isConnectionRefused(t) &&
                            _savedServers.value.firstOrNull { it.endpoint == _endpoint.value }?.ssh != null) {
@@ -3411,6 +3554,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     Telemetry.breadcrumb("session", "connection refused on SSH box — triggering self-heal",
                         mapOf("phase" to "create_session", "endpoint" to _endpoint.value.displayHost))
                     _harness.value = HarnessState.Reconnecting(1u, 3u)
+                    updateVisibleHarness()
                     attemptSshSelfHeal()
                 }
                 Telemetry.capture(
@@ -3441,9 +3585,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
                         Telemetry.breadcrumb("session", "auth failure on SSH box — triggering self-heal",
                             mapOf("phase" to "switch_agent", "endpoint" to _endpoint.value.displayHost))
                         _harness.value = HarnessState.Reconnecting(1u, 3u)
+                        updateVisibleHarness()
                         attemptSshSelfHeal()
                     } else {
                         _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the server.")
+                        updateVisibleHarness()
                     }
                 }
                 Telemetry.capture(
@@ -5989,6 +6135,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             prefs?.edit()?.putString(KEY_DISPLAY_NAMES, encodeDisplayNames(next))?.apply()
         }
         _harness.value = HarnessState.Live
+        updateVisibleHarness()
         // Fold this snapshot into the persisted archived index so the
         // session survives in History after it ends (Android used to list
         // only live sessions). Idempotent; tombstoned ids are suppressed.
@@ -6086,6 +6233,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 Telemetry.breadcrumb("session", "auth failure on SSH box — triggering self-heal",
                     mapOf("phase" to "on_disconnected", "endpoint" to _endpoint.value.displayHost))
                 _harness.value = HarnessState.Reconnecting(1u, 3u)
+                updateVisibleHarness()
                 attemptSshSelfHeal()
                 return
             }
@@ -6095,6 +6243,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         } else {
             HarnessState.Failed("Disconnected: $reason")
         }
+        updateVisibleHarness()
         // Routine disconnects (code 0 / clean close, network loss, server
         // restart) are expected lifecycle — downgraded to breadcrumb so the
         // reason is still attached to the next real error without burning a
@@ -6143,10 +6292,33 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _connectionHealth.value = _connectionHealth.value + (sessionId to health)
         when (health) {
             is ConnectionHealth.Connected -> {
-                _harness.value = if (_sessionLifecycle.value.isNotEmpty()) {
+                val newHarness = if (_sessionLifecycle.value.isNotEmpty()) {
                     HarnessState.Live
                 } else {
                     HarnessState.Linked
+                }
+                _harness.value = newHarness
+                // Change 4: record last-good harness; clear grace window suppression
+                // so the banner returns to the real (connected) state immediately.
+                lastReachableHarness = newHarness
+                if (_suppressGraceReconnecting.value) {
+                    _suppressGraceReconnecting.value = false
+                    graceWindowJob?.cancel()
+                    graceWindowJob = null
+                    Telemetry.breadcrumb("session", "fg_grace_window_connected_cleared",
+                        mapOf("session" to sessionId))
+                }
+                updateVisibleHarness()
+                // Change 3: forced post-replay re-read for sessions marked at foreground.
+                // Explicit bypass of PR #871 empty-log gate -- calls refreshConversation
+                // directly (not through refreshSessions) so it always runs.
+                val needsRefresh = synchronized(sessionsNeedingPostConnectRefresh) {
+                    sessionsNeedingPostConnectRefresh.remove(sessionId)
+                }
+                if (needsRefresh) {
+                    refreshConversation(sessionId)
+                    Telemetry.breadcrumb("session", "fg_post_connect_refresh_fired",
+                        mapOf("session" to sessionId))
                 }
                 // Promote any queuedTurn entries to normal so they are picked
                 // up by flushPendingChats below. After a broker restart the
@@ -6171,7 +6343,29 @@ class SessionStore : ViewModel(), ConduitDelegate {
             }
             is ConnectionHealth.Connecting -> {
                 _harness.value = HarnessState.Reconnecting(health.attempt, health.maxAttempts)
+                // Stale-turn clearing must run immediately -- do NOT gate on grace window
+                // (SAFETY: clearStaleTurnState must always run on connecting per #865).
                 clearStaleTurnState(sessionId)
+                // Change 4: start the "assume connected" grace window when the reconnect
+                // cycle begins within ~5s of a foreground event. The banner stays at the
+                // last-known-good state for ~4s; if Connected arrives first the job is
+                // cancelled and no flicker is ever shown.
+                val fg = foregroundedAt
+                if (fg != null && System.currentTimeMillis() - fg < 5_000L
+                    && !_suppressGraceReconnecting.value) {
+                    _suppressGraceReconnecting.value = true
+                    graceWindowJob?.cancel()
+                    graceWindowJob = viewModelScope.launch {
+                        delay(4_000L)
+                        _suppressGraceReconnecting.value = false
+                        updateVisibleHarness()
+                        Telemetry.breadcrumb("session", "fg_grace_window_expired",
+                            mapOf("session" to sessionId))
+                    }
+                    Telemetry.breadcrumb("session", "fg_grace_window_started",
+                        mapOf("session" to sessionId))
+                }
+                updateVisibleHarness()
             }
             is ConnectionHealth.Disconnected -> {
                 if (health.auth) {

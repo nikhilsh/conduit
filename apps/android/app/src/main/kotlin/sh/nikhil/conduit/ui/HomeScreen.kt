@@ -126,6 +126,8 @@ fun HomeScreen(
 ) {
     val endpoint by store.endpoint.collectAsState()
     val harness by store.harness.collectAsState()
+    // Change 4: for display-only status banners use visibleHarness (grace window suppression).
+    val visibleHarness by store.visibleHarness.collectAsState()
     val savedServers by store.savedServers.collectAsState()
     val sessions by store.sessions.collectAsState()
     val sessionBox by store.sessionBox.collectAsState()
@@ -475,7 +477,8 @@ fun HomeScreen(
                         // device bug #30: and only green when actually
                         // connected — a stale "running" phase must not show
                         // green while the connection is down.
-                        val connected = harness is HarnessState.Live || harness is HarnessState.Linked
+                        // Use visibleHarness so session dots stay green during grace window (Change 4).
+                        val connected = visibleHarness is HarnessState.Live || visibleHarness is HarnessState.Linked
                         val phase = statuses[session.id]?.phase
                         val exited = (phase ?: "ready").startsWith("exited")
                         // Amber "starting" until the broker confirms the
@@ -857,7 +860,7 @@ fun HomeScreen(
                         neon = neon,
                         server = server,
                         isActive = server.endpoint == endpoint,
-                        harness = harness,
+                        harness = visibleHarness,
                         sessionCount = boxSessionCount,
                         // Fix 4: non-active reachability from probe.
                         reachable = reachabilityMap[server.id],

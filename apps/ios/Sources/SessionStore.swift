@@ -945,6 +945,15 @@ final class SessionStore {
     }
 
     var harness: HarnessState = .disconnected
+
+    /// Display-only harness: applies the "assume connected" grace window so the
+    /// "Reconnecting..." banner is suppressed for ~4s after app foreground. The
+    /// real `harness` is always used for functional gating (send gates, etc.).
+    var visibleHarness: HarnessState {
+        guard suppressGraceReconnecting, case .reconnecting = harness else { return harness }
+        return lastReachableHarness
+    }
+
     var sessions: [ProjectSession] = []
     var selectedSessionID: String?
     /// Sessions whose WS worker has been parked via pause_session(). Cleared
@@ -1264,6 +1273,32 @@ final class SessionStore {
     private var networkInterfaceObserver: NSObjectProtocol?
     private var backgroundObserver: NSObjectProtocol?
 
+    // MARK: - Foreground refresh + grace-window state (Changes 1-4)
+
+    /// Timestamp of the most recent app-foreground event. Set by the
+    /// willEnterForegroundNotification handler; read by ingestConnectionHealth
+    /// to decide whether to activate the "assume connected" grace window.
+    private var foregroundedAt: Date?
+
+    /// When true, `visibleHarness` returns `lastReachableHarness` instead of
+    /// the actual `.reconnecting` state, suppressing the "Reconnecting..." banner
+    /// during a ~4s post-foreground grace window. Cleared when `.connected` arrives
+    /// or the timer fires.
+    var suppressGraceReconnecting: Bool = false
+
+    /// Last harness state that was `.live` or `.linked`; returned by
+    /// `visibleHarness` during the grace window so the connected UI stays visible.
+    private var lastReachableHarness: HarnessState = .linked
+
+    /// Active grace-window timer; cancelled on `.connected`.
+    private var graceWindowTask: Task<Void, Never>?
+
+    /// Sessions that had hydrated content at foreground time. Drained by
+    /// ingestConnectionHealth(.connected) to fire a forced post-replay re-read
+    /// (bypasses PR #871 empty-log gate -- calls refreshConversationOffMain
+    /// directly, not through refreshSessions).
+    private var sessionsNeedingPostConnectRefresh: Set<String> = []
+
     /// Shadow-write target: the shared Rust reducer (`core::store::SessionStoreCore`).
     /// In this PR the Swift maps above are still the read source of truth;
     /// every `ingest*` also folds the same event into `rustStore`, and a
@@ -1386,15 +1421,36 @@ final class SessionStore {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
+                // Record foreground timestamp for the grace window (Change 4).
+                self?.foregroundedAt = Date()
+                Telemetry.breadcrumb("session", "foreground_refresh_start")
                 // Clear the paused set BEFORE nudgeNetworkChange so all
                 // sessions reconnect cleanly (nudge wakes parked workers).
                 self?.clearPausedSessions()
                 self?.nudgeNetworkChange()
                 self?.refreshSessions()
                 // Foregrounding may have re-armed a socket that died while
-                // suspended — flush any message the user sent right before
+                // suspended -- flush any message the user sent right before
                 // they backgrounded the app (the lost-send bug).
                 self?.flushPendingChats()
+                // Change 1: proactive HTTP fetch for the currently-open session.
+                // Runs in parallel with the WS redial so the transcript is fresh
+                // before the replay lands.
+                if let sid = self?.selectedSessionID {
+                    Task { @MainActor [weak self] in
+                        await self?.foregroundRefreshConversation(sid)
+                    }
+                }
+                // Change 2: reconcile live sessions on foreground. Guard against
+                // an in-flight reconcile (isLoadingSessions already tracks this).
+                if self?.isLoadingSessions == false {
+                    self?.reconcileLiveSessions()
+                } else {
+                    Telemetry.breadcrumb("session", "fg_reconcile_skipped_in_flight")
+                }
+                // Change 3: mark sessions with hydrated content for a
+                // forced post-connect re-read once WS replay has settled.
+                self?.markSessionsForPostConnectRefresh()
             }
         }
 
@@ -2973,6 +3029,48 @@ final class SessionStore {
         // ones are already reattached, so only the cold ones matter for Resume.
         recoverableSessionIDs = Set((decoded.recoverable ?? []).map { $0.id })
         return decoded.sessions
+    }
+
+    // MARK: - Foreground refresh helpers (Changes 1-3)
+
+    /// Proactive HTTP re-fetch for `sessionID`'s conversation on foreground.
+    /// Non-idempotent: always updates the sticky `hydratedChat` base so a
+    /// suspended-then-resumed app sees fresh transcript before the WS replay
+    /// lands. Merges against live FFI state via refreshConversationOffMain
+    /// (same rules as hydrateChatConversation). Safe to call in parallel
+    /// with the WS redial -- broker reads the conversation.jsonl on disk.
+    private func foregroundRefreshConversation(_ sessionID: String) async {
+        Telemetry.breadcrumb("session", "fg_refresh_conversation_start",
+            data: ["session": sessionID])
+        guard let items = try? await fetchConversation(sessionID: sessionID),
+              !items.isEmpty else {
+            Telemetry.breadcrumb("session", "fg_refresh_conversation_empty",
+                data: ["session": sessionID])
+            return
+        }
+        // Refresh the sticky base (non-idempotent -- overwrites the prior base
+        // with fresh HTTP content so the merge includes any new turns).
+        hydratedChat[sessionID] = items
+        refreshConversationOffMain(sessionID: sessionID)
+        Telemetry.breadcrumb("session", "fg_refresh_conversation_merged",
+            data: ["session": sessionID, "count": "\(items.count)"])
+    }
+
+    /// Mark sessions that have hydrated content at foreground time.
+    /// ingestConnectionHealth(.connected) drains the set and fires a forced
+    /// post-replay re-read (explicit bypass of PR #871's empty-log gate).
+    private func markSessionsForPostConnectRefresh() {
+        let hydrated = sessions.compactMap { hydratedChat[$0.id] != nil ? $0.id : nil }
+        sessionsNeedingPostConnectRefresh = Set(hydrated)
+        Telemetry.breadcrumb("session", "fg_marked_post_connect_refresh",
+            data: ["count": "\(hydrated.count)"])
+    }
+
+    /// Test seam: record a foreground timestamp without touching the network,
+    /// so unit tests can verify the grace-window derivation without posting
+    /// UIApplication.willEnterForegroundNotification.
+    func recordForegroundedAtForTesting(_ date: Date = Date()) {
+        foregroundedAt = date
     }
 
     /// Resume a cold-but-recoverable session: open the live WebSocket so the
@@ -5998,6 +6096,25 @@ final class SessionStore {
             } else if harness == .disconnected {
                 harness = .linked
             }
+            // Change 4: record the last good harness and clear any active
+            // grace window suppression (reconnect succeeded before expiry).
+            lastReachableHarness = sessionLifecycle.isEmpty ? .linked : .live
+            if suppressGraceReconnecting {
+                suppressGraceReconnecting = false
+                graceWindowTask?.cancel()
+                graceWindowTask = nil
+                Telemetry.breadcrumb("session", "fg_grace_window_connected_cleared",
+                    data: ["session": sessionID])
+            }
+            // Change 3: forced post-replay re-read for sessions marked at
+            // foreground. Explicit bypass of PR #871's empty-log gate --
+            // calls refreshConversationOffMain directly (not through
+            // refreshSessions) so it always runs regardless of log state.
+            if sessionsNeedingPostConnectRefresh.remove(sessionID) != nil {
+                refreshConversationOffMain(sessionID: sessionID)
+                Telemetry.breadcrumb("session", "fg_post_connect_refresh_fired",
+                    data: ["session": sessionID])
+            }
             // Promote any queuedTurn entries to normal so they are picked up
             // by flushPendingChats below. After a broker restart the turn they
             // were waiting on is gone; they should be re-delivered now that the
@@ -6019,7 +6136,28 @@ final class SessionStore {
         case let .connecting(attempt, maxAttempts):
             connectionHealthBySession[sessionID] = health
             harness = .reconnecting(attempt: attempt, maxAttempts: maxAttempts)
+            // stale-turn clearing must run immediately regardless of grace window
+            // (SAFETY: do NOT gate this on the grace window).
             clearStaleTurnState(sessionID)
+            // Change 4: start the "assume connected" grace window when the
+            // reconnect cycle begins within ~5s of a foreground event. The
+            // banner stays green for ~4s; if .connected arrives first the timer
+            // is cancelled and no flicker is ever shown.
+            if let fg = foregroundedAt,
+               Date().timeIntervalSince(fg) < 5.0,
+               !suppressGraceReconnecting {
+                suppressGraceReconnecting = true
+                graceWindowTask?.cancel()
+                graceWindowTask = Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 4_000_000_000) // 4s
+                    guard let self else { return }
+                    self.suppressGraceReconnecting = false
+                    Telemetry.breadcrumb("session", "fg_grace_window_expired",
+                        data: ["session": sessionID])
+                }
+                Telemetry.breadcrumb("session", "fg_grace_window_started",
+                    data: ["session": sessionID])
+            }
         case let .disconnected(reason, auth):
             connectionHealthBySession[sessionID] = health
             if auth {

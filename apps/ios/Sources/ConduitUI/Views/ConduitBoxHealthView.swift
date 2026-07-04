@@ -104,7 +104,8 @@ extension ConduitUI {
 
         private var statusText: (String, Color) {
             guard isActive else { return ("tap reconnect", neon.textFaint) }
-            switch store.harness {
+            // Use visibleHarness: suppresses "reconnecting..." during grace window (Change 4).
+            switch store.visibleHarness {
             case .live, .linked:         return ("connected", neon.green)
             case .connecting:            return ("connecting…", neon.yellow)
             case .reconnecting:          return ("reconnecting…", neon.yellow)

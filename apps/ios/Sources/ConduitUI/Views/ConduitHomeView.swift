@@ -388,7 +388,9 @@ extension ConduitUI {
             let sessionCount = store.liveSessionCount(forBox: server.id)
             let (statusText, statusColor): (String, Color) = {
                 guard isActive else { return ("tap to connect", neon.textFaint) }
-                switch store.harness {
+                // Use visibleHarness for display: suppresses "reconnecting..." during
+                // the 4s post-foreground grace window (Change 4).
+                switch store.visibleHarness {
                 case .live, .linked:
                     let plural = sessionCount == 1 ? "session" : "sessions"
                     return ("connected · \(sessionCount) \(plural)", neon.green)
@@ -458,7 +460,9 @@ extension ConduitUI {
         private var snapshot: ConduitUI.HomeSnapshot {
             let endpointHost = store.endpoint.isComplete ? store.endpoint.displayHost : nil
             let harness: ConduitUI.HomeSnapshotHarness = {
-                switch store.harness {
+                // Use visibleHarness so the snapshot suppresses "reconnecting"
+                // during the post-foreground grace window (Change 4).
+                switch store.visibleHarness {
                 case .disconnected: return .disconnected
                 case .connecting:   return .connecting
                 case .linked, .live: return .live
