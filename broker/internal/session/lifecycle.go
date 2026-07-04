@@ -819,27 +819,6 @@ func (s *Session) switchToAdapter(adapter agents.Adapter) error {
 	return nil
 }
 
-func (s *Session) waitForHandoff() (string, error) {
-	deadline := time.Now().Add(s.handoffTimeout)
-	for time.Now().Before(deadline) {
-		data, err := os.ReadFile(s.handoffOutPath)
-		if err == nil {
-			section, extractErr := extractHandoffSection(data)
-			if extractErr == nil {
-				_ = s.mergeHandoff(section)
-				return section, nil
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	return "", fmt.Errorf("handoff timeout")
-}
-
-func (s *Session) mergeHandoff(section string) error {
-	s.handoffHTML = section
-	return s.persistHandoffSection(section)
-}
-
 func (s *Session) persistHandoffSection(section string) error {
 	data, err := os.ReadFile(s.memoryPath)
 	if err != nil {
