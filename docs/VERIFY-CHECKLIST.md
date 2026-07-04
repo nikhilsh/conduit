@@ -20,7 +20,30 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
-_(empty)_
+**Rename-session sheet redesign — iOS + Android. PR #882.**
+
+- iOS `ConduitRenameSessionSheet` recomposed on the neon idiom (glass
+  background, `neonCardSurface`, `ActionButton` primary CTA, close-X) matching
+  SessionInfo/AgentLogin sheets; validator + local-rename semantics unchanged;
+  rename-saved breadcrumb added.
+- Android's TWO hand-rolled rename `AlertDialog`s (ProjectScreen title-menu +
+  SessionInfoScreen inline, the latter previously unvalidated) consolidated
+  into one shared `RenameSessionSheet` (ModalBottomSheet) with a Kotlin
+  `RenameSessionValidator` mirroring iOS 1:1 (+ unit test). Component library:
+  `ConduitButton` gained an `enabled` param.
+- [iOS + Android, **needs on-device verify**: open title menu → Rename on both
+  platforms (phone + tablet); check keyboard/auto-focus, validation hint,
+  disabled Save on invalid input]
+
+**Pipeline v1.1: reap completed steps' agent processes — broker. PR #881.**
+
+- Completed/failed pipeline steps' agent sessions are now terminated once
+  their handoff/`GatePreview` is harvested and persisted (kill by tracked PID
+  via the existing session Close path; idempotent). Fanout pick terminates the
+  losers' live processes (worktrees/artifacts preserved); COMPLETE reaps the
+  final step. Fixes the known v1.1 leak of one live claude/codex process per
+  finished step. Gate amend verified to read persisted `Gate.Prev`, never the
+  live session. [broker, **redeploy required**]
 
 ---
 
