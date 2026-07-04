@@ -110,6 +110,10 @@ type quickReplyGenerator struct {
 	// path via httpDo/agentHomeDir, kept so the existing unit tests (which
 	// construct the generator literal without a provider) stay byte-identical.
 	gen aiGenProvider
+	// subscriberCount, when non-nil, is called by kickoff to skip generation
+	// when no app client is connected. nil = no gate (always fire). Wired from
+	// Session.SubscriberCount at construction time.
+	subscriberCount func() int
 }
 
 // newQuickReplyGenerator builds a generator for a claude stream-json
@@ -140,14 +144,17 @@ func newQuickReplyGenerator(sessionID, binary, agentHomeDir, dir string, env []s
 // through an explicit aiGenProvider (anthropicGen / codexGen), used by both
 // backend branches of startChatBackend. Returns nil when generation is off
 // or the provider/publish sink is missing — keeping the call site branch-free.
-func newQuickReplyGeneratorWithProvider(sessionID string, gen aiGenProvider, publish func([]byte)) *quickReplyGenerator {
+// subscriberCount, when non-nil, is called at kickoff time to skip generation
+// when no app client is connected (zero subscribers = no one to receive chips).
+func newQuickReplyGeneratorWithProvider(sessionID string, gen aiGenProvider, publish func([]byte), subscriberCount func() int) *quickReplyGenerator {
 	if !quickRepliesEnabled() || gen == nil || publish == nil {
 		return nil
 	}
 	return &quickReplyGenerator{
-		sessionID: sessionID,
-		publish:   publish,
-		gen:       gen,
+		sessionID:       sessionID,
+		publish:         publish,
+		gen:             gen,
+		subscriberCount: subscriberCount,
 	}
 }
 
@@ -181,9 +188,15 @@ func (g *quickReplyGenerator) Generate(lastText, forMessageID string) {
 }
 
 // kickoff fires Generate in a goroutine so the stream reader never
-// blocks. nil-safe.
+// blocks. nil-safe. When subscriberCount is wired and returns 0, kickoff
+// skips generation — there is no connected client to receive the chips, so
+// the haiku API call would be wasted. A session the user IS watching (count
+// > 0) behaves exactly as before.
 func (g *quickReplyGenerator) kickoff(lastText, forMessageID string) {
 	if g == nil {
+		return
+	}
+	if g.subscriberCount != nil && g.subscriberCount() == 0 {
 		return
 	}
 	go g.Generate(lastText, forMessageID)

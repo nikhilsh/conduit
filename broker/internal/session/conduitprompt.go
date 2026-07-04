@@ -19,8 +19,8 @@ import (
 // exact wording. The two agents inject it differently — see the asymmetry note
 // below and docs/PLAN-HARNESS-BOOTSTRAP.md:
 //
-//   - claude: appended to the existing --append-system-prompt (merged with the
-//     askUserQuestionNudge into one flag value — see claudeStreamCommand).
+//   - claude: appended to the existing --append-system-prompt. The awareness
+//     prompt includes the AskUserQuestion nudge as bullet 3 (see claudeStreamCommand).
 //   - codex:  codex has no clean append-system-prompt flag, so the awareness is
 //     written as a managed section in the workspace's AGENTS.md, which codex
 //     reads natively from cwd (covers both the app-server and the exec backend).
@@ -54,7 +54,7 @@ func conduitAwarenessPrompt() string {
 		"You are running inside Conduit, which lets the user drive and watch you from a phone. Use these affordances:",
 		"- Dev servers / previews: bind any HTTP server you start to the port in the $PORT environment variable (also exposed as $CONDUIT_PREVIEW_PORT). Conduit reverse-proxies it so the user can open a live preview on their phone. Do not hardcode a different port if you want the user to see it.",
 		"- Files the user sends you arrive under the relative path uploads/<session>/ in your working directory; reference attachments from there.",
-		"- Interactive choices: when you need the user to pick between options or answer before continuing, use the AskUserQuestion tool. Conduit renders it as tappable cards and waits for the answer; a plain-text question does not pause your turn and may be missed.",
+		"- Interactive choices: when you need the user to choose between options or answer a question before you continue, ALWAYS use the AskUserQuestion tool rather than writing the question and options as plain text. Conduit renders it as tappable choices and waits for the answer; a plain-text question does not pause your turn and the user may miss it.",
 		"- Offering options is always a question: whenever you would present a choice as a numbered or bulleted list in your reply (e.g. \"1. Fix the bug 2. Add a feature 3. Review the code\"), ask it through AskUserQuestion instead so each option is a tappable card. A choice written as prose renders as plain text the user must retype, not buttons they can tap.",
 		"- Durable notes/handoff for this project live under .conduit/memory/. Use them to persist context across sessions rather than assuming the user re-explains.",
 	}, "\n")
@@ -151,6 +151,11 @@ func logConduitAwarenessInjected(sessionID, agent, mechanism string) {
 // It uses os.Executable() to embed the absolute path to the broker binary so
 // the agent can invoke conduit-broker kb commands regardless of PATH.
 //
+// The INDEX.md content is NOT embedded here — the agent reads it on demand
+// using "conduit-broker kb search" or by reading knowledge/INDEX.md directly.
+// Embedding the full index (~1 KB) into every API call added ~1,024 tokens per
+// turn when the KB was active; a pointer costs ~4 lines.
+//
 // Returns ("", false) when the workspace has no knowledge/INDEX.md (gate OFF).
 // Returns (section, true) when the section was built successfully.
 func kbSection(workspaceDir string) (string, bool) {
@@ -164,45 +169,41 @@ func kbSection(workspaceDir string) (string, bool) {
 		return kbSectionExperimental(workspaceDir)
 	}
 
-	// Flag OFF (default): byte-identical to Phase 1/2 — inject only when the
-	// workspace has a tracked knowledge/INDEX.md.
+	// Flag OFF (default): inject only when the workspace has a tracked
+	// knowledge/INDEX.md. Stat the file — do NOT read its content.
 	indexPath := filepath.Join(workspaceDir, "knowledge", "INDEX.md")
-	b, err := os.ReadFile(indexPath)
-	if err != nil {
+	if _, err := os.Stat(indexPath); err != nil {
 		// No INDEX.md -- KB gate is OFF for this workspace.
 		return "", false
 	}
-	indexContent := truncateKBIndex(string(b))
 
 	brokerBin := brokerExecutable()
 	var sb strings.Builder
-	sb.WriteString("Knowledge base: this workspace has a knowledge/ directory. Before non-trivial work, consult it.\n")
+	sb.WriteString("Knowledge base: this workspace has a knowledge/ directory (index at knowledge/INDEX.md). Read the index or search it before non-trivial work; do not assume you already know what is in it.\n")
 	sb.WriteString("- Search: ")
 	sb.WriteString(brokerBin)
 	sb.WriteString(" kb search <query>\n")
+	sb.WriteString("- Read the index on demand: knowledge/INDEX.md\n")
 	sb.WriteString("- Read an entry: ")
 	sb.WriteString(brokerBin)
 	sb.WriteString(" kb get <slug>\n")
 	sb.WriteString("- Add a new finding: ")
 	sb.WriteString(brokerBin)
 	sb.WriteString(" kb add --title \"...\" --tags \"tag1,tag2\" --body \"...\"\n")
-	sb.WriteString("- When you learn something durable (a footgun, a decision, a wire fact), add it.\n")
-	sb.WriteString("\nCurrent knowledge/INDEX.md:\n")
-	sb.WriteString("```\n")
-	sb.WriteString(indexContent)
-	if !strings.HasSuffix(indexContent, "\n") {
-		sb.WriteString("\n")
-	}
-	sb.WriteString("```")
+	sb.WriteString("- When you learn something durable (a footgun, a decision, a wire fact), add it.")
 	return sb.String(), true
 }
 
 // kbSectionExperimental builds the KB section for the flag-ON (Phase 3a) path.
 // It gates on kb.SourceExists (any of tracked / box-local / ingestable docs)
-// and injects a merged, origin-labeled index. It also runs ingest as part of
-// the refresh so registered-source pointers exist and the box-local gitignore
-// is in place — never touching any user-authored file. Returns ("", false)
-// when the workspace has no KB source at all.
+// and returns a pointer-only section. It also runs ingest as part of the
+// refresh so registered-source pointers exist and the box-local gitignore is
+// in place — never touching any user-authored file. Returns ("", false) when
+// the workspace has no KB source at all.
+//
+// The merged index content is NOT embedded — the agent reads it on demand via
+// "conduit-broker kb search" or directly from the knowledge directory. Embedding
+// the full index into every API call added tokens proportional to index size.
 func kbSectionExperimental(workspaceDir string) (string, bool) {
 	// Refresh registered-source pointers (pointers only; never edits sources)
 	// and ensure the box-local store is gitignored. Best-effort: a failure here
@@ -213,15 +214,10 @@ func kbSectionExperimental(workspaceDir string) (string, bool) {
 	if !kb.SourceExists(workspaceDir) {
 		return "", false
 	}
-	merged := kb.MergedIndexForWorkspace(workspaceDir)
-	if len(merged) == 0 {
-		return "", false
-	}
-	indexContent := truncateKBIndex(kb.RenderMergedIndex(merged))
 
 	brokerBin := brokerExecutable()
 	var sb strings.Builder
-	sb.WriteString("Knowledge base: this workspace has indexed knowledge (tracked entries, box-local notes, and pointers into existing docs). Before non-trivial work, consult it.\n")
+	sb.WriteString("Knowledge base: this workspace has indexed knowledge (tracked entries, box-local notes, and pointers into existing docs). Read the index or search it before non-trivial work; do not assume you already know what is in it.\n")
 	sb.WriteString("- Search: ")
 	sb.WriteString(brokerBin)
 	sb.WriteString(" kb search <query>\n")
@@ -234,51 +230,8 @@ func kbSectionExperimental(workspaceDir string) (string, bool) {
 	sb.WriteString("- Share a box-local finding with the team (commit it): ")
 	sb.WriteString(brokerBin)
 	sb.WriteString(" kb promote <slug>\n")
-	sb.WriteString("- Origin column: tracked = shared in repo; box-local = private to this box; source-pointer = an existing doc (read it, do not assume conduit owns it).\n")
-	sb.WriteString("\nKnowledge index (merged):\n")
-	sb.WriteString("```\n")
-	sb.WriteString(indexContent)
-	if !strings.HasSuffix(indexContent, "\n") {
-		sb.WriteString("\n")
-	}
-	sb.WriteString("```")
+	sb.WriteString("- Origin column: tracked = shared in repo; box-local = private to this box; source-pointer = an existing doc (read it, do not assume conduit owns it).")
 	return sb.String(), true
-}
-
-// truncateKBIndex caps the index content to MaxIndexLines/MaxIndexBytes.
-// Mirrors the logic in the kb package to avoid a circular import.
-const (
-	maxKBIndexLines = 120
-	maxKBIndexBytes = 4096
-)
-
-func truncateKBIndex(raw string) string {
-	if len(raw) <= maxKBIndexBytes {
-		if strings.Count(raw, "\n") <= maxKBIndexLines {
-			return raw
-		}
-	}
-	lines := strings.Split(raw, "\n")
-	var kept []string
-	total := 0
-	truncated := false
-	for i, line := range lines {
-		if i >= maxKBIndexLines {
-			truncated = true
-			break
-		}
-		if total+len(line)+1 > maxKBIndexBytes {
-			truncated = true
-			break
-		}
-		kept = append(kept, line)
-		total += len(line) + 1
-	}
-	result := strings.Join(kept, "\n")
-	if truncated {
-		result += "\n[INDEX truncated]"
-	}
-	return result
 }
 
 // brokerExecutable returns the absolute path to the running broker binary,
@@ -304,11 +257,13 @@ func conduitAwarenessPromptWithKB(workspaceDir string) string {
 
 // claudeAppendSystemPromptForWorkspace is like claudeAppendSystemPrompt but
 // includes the KB section when the workspace has a knowledge/INDEX.md.
+// The AskUserQuestion nudge is folded into conduitAwarenessPrompt bullet 3,
+// so we inject only the awareness prompt (no separate nudge prefix).
 func claudeAppendSystemPromptForWorkspace(workspaceDir string) string {
 	if !conduitAwarenessEnabled() {
-		return askUserQuestionNudge
+		return ""
 	}
-	return askUserQuestionNudge + "\n\n" + conduitAwarenessPromptWithKB(workspaceDir)
+	return conduitAwarenessPromptWithKB(workspaceDir)
 }
 
 // conduitAwarenessAgentsMDSectionWithKB renders the fenced markdown block

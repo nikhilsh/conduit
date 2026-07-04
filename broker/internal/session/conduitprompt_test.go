@@ -55,6 +55,7 @@ func TestConduitAwarenessPromptContent(t *testing.T) {
 		"$CONDUIT_PREVIEW_PORT",
 		"uploads/<session>/",
 		"AskUserQuestion",
+		"ALWAYS use the AskUserQuestion tool",   // behavioral contract must be present once
 		"Offering options is always a question", // numbered/bulleted choice -> tappable cards, not prose
 		".conduit/memory/",
 	} {
@@ -69,23 +70,24 @@ func TestConduitAwarenessPromptContent(t *testing.T) {
 	}
 }
 
-// TestClaudeAppendSystemPrompt pins the on/off behavior of the merged
-// --append-system-prompt value.
+// TestClaudeAppendSystemPrompt pins the on/off behavior of the
+// --append-system-prompt value. The AskUserQuestion nudge is folded into
+// conduitAwarenessPrompt bullet 3, so there is no separate nudge prefix.
 func TestClaudeAppendSystemPrompt(t *testing.T) {
-	t.Run("off is legacy byte-identical", func(t *testing.T) {
+	t.Run("off returns empty string", func(t *testing.T) {
 		t.Setenv(conduitAwarenessEnv, "off")
-		if got := claudeAppendSystemPrompt(); got != askUserQuestionNudge {
-			t.Fatalf("off value = %q, want bare askUserQuestionNudge", got)
+		if got := claudeAppendSystemPrompt(); got != "" {
+			t.Fatalf("off value = %q, want empty string", got)
 		}
 	})
-	t.Run("on merges both, nudge first", func(t *testing.T) {
+	t.Run("on returns awareness prompt", func(t *testing.T) {
 		t.Setenv(conduitAwarenessEnv, "on")
 		got := claudeAppendSystemPrompt()
-		if !strings.HasPrefix(got, askUserQuestionNudge) {
-			t.Fatalf("on value should start with the nudge; got %q", got)
+		if got != conduitAwarenessPrompt() {
+			t.Fatalf("on value should equal conduitAwarenessPrompt()\ngot:  %q\nwant: %q", got, conduitAwarenessPrompt())
 		}
-		if !strings.Contains(got, conduitAwarenessPrompt()) {
-			t.Fatalf("on value should contain the awareness prompt; got %q", got)
+		if !strings.Contains(got, "AskUserQuestion") {
+			t.Fatalf("on value must contain AskUserQuestion instruction; got %q", got)
 		}
 	})
 }
@@ -184,8 +186,12 @@ func TestKBSectionGate(t *testing.T) {
 	if !strings.Contains(section, "kb search") {
 		t.Errorf("section missing search instruction; got: %q", section)
 	}
-	if !strings.Contains(section, "KB Index") {
-		t.Errorf("section missing index content; got: %q", section)
+	// The section should point to the file, NOT embed its content.
+	if strings.Contains(section, "KB Index") {
+		t.Errorf("section must NOT embed INDEX.md content (pointer-only mode); got: %q", section)
+	}
+	if !strings.Contains(section, "knowledge/INDEX.md") {
+		t.Errorf("section should reference knowledge/INDEX.md path; got: %q", section)
 	}
 }
 
@@ -225,11 +231,11 @@ func TestClaudeAppendSystemPromptForWorkspaceKBGate(t *testing.T) {
 	t.Setenv(conduitAwarenessEnv, "on")
 
 	dir := t.TempDir()
-	// No KB: should equal the standard claudeAppendSystemPrompt().
+	// No KB: should equal the base conduitAwarenessPrompt() (no KB section appended).
 	noKB := claudeAppendSystemPromptForWorkspace(dir)
-	standard := claudeAppendSystemPrompt()
-	if noKB != standard {
-		t.Errorf("no-KB workspace prompt should equal standard prompt\nstandard: %q\nnoKB: %q", standard, noKB)
+	base := conduitAwarenessPrompt()
+	if noKB != base {
+		t.Errorf("no-KB workspace prompt should equal base awareness prompt\nbase: %q\nnoKB: %q", base, noKB)
 	}
 
 	// With KB: should contain KB section.
