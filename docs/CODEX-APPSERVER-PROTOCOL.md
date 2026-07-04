@@ -24,6 +24,13 @@ a `method` and **no** `id` is a notification; a line with **both** `id` and
 
 ## Handshake + turn (existing, unchanged)
 
+For a mid-session switch back to Codex, the broker keeps `codex_thread_id`
+independently from Claude's conversation id and uses `thread/resume` instead of
+`thread/start`. Cross-agent context is not written into the Codex thread by a
+file hook: the broker prepends its bounded handoff to the next ordinary
+`turn/start` input. Approval/requestUserInput/elicitation responses and slash
+commands do not consume that pending handoff.
+
 ```
 C->S {"id":1,"method":"initialize","params":{"clientInfo":{"name":"conduit-broker","version":"0.0.1"}}}
 S->C {"id":1,"result":{ … capabilities … }}

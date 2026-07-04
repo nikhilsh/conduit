@@ -182,6 +182,13 @@ Generation details and guarantees:
   "credential": { /* provider-native JSON; see archive/PLAN-AGENT-OAUTH.md §D */ } }
 ```
 
+`switch_agent` is accepted only when the session is live and idle. An active
+turn, `AskUserQuestion`, approval, or pending input produces a system chat
+error and leaves the current assistant unchanged. Target startup is
+transactional: a failure likewise preserves the old assistant/backend. Clients
+should gate the control on `features.switch_agent`, a running/live status, and
+`turn_active != true`.
+
 `rename_session` notes (sweswe parity):
 - `name` is validated server-side against `^[A-Za-z0-9 _-]{1,32}$`. Whitespace-only strings, empty strings, and strings >32 chars are rejected silently (the broker logs and ignores; the socket stays open — see §3.3 forward-extensibility rule).
 - On a successful rename the broker persists the label, then broadcasts an updated `status` envelope (`session_name` + the `view: "status"` mirror's `display_name`) to **all** viewers of that session. The rename is durable across reconnects: the next `status` frame the client receives after a fresh WS attach will carry the new label.

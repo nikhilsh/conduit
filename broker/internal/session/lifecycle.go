@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +13,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -634,6 +634,35 @@ func (s *Session) snapshotWorkspaceTree() (string, bool) {
 }
 
 func (s *Session) switchToAdapter(adapter agents.Adapter) error {
+	s.interactionMu.Lock()
+	defer s.interactionMu.Unlock()
+
+	s.mu.Lock()
+	fromAgent := s.Assistant
+	oldChat := s.chat
+	pendingAsk := s.pendingAsk != nil
+	alreadySwapping := s.swapping
+	s.mu.Unlock()
+	if adapter.Name == fromAgent {
+		return nil
+	}
+	if alreadySwapping {
+		return errors.New("agent switch already in progress")
+	}
+	if pendingAsk {
+		return errors.New("cannot switch agents while AskUserQuestion is awaiting an answer")
+	}
+	if oldChat != nil {
+		if oldChat.TurnActive() {
+			return errors.New("cannot switch agents while a turn is active")
+		}
+		if pending, ok := oldChat.(approvalCardResurfacer); ok {
+			if _, active := pending.PendingApprovalCard(); active {
+				return errors.New("cannot switch agents while an approval or input request is active")
+			}
+		}
+	}
+
 	if err := s.Checkpoint("switch"); err != nil {
 		return err
 	}
@@ -645,88 +674,149 @@ func (s *Session) switchToAdapter(adapter agents.Adapter) error {
 		s.swapping = false
 		s.mu.Unlock()
 	}()
-	_ = os.Remove(s.handoffOutPath)
-	s.signalHandoff()
-	if htmlOut, err := s.waitForHandoff(); err == nil && strings.TrimSpace(htmlOut) != "" {
-		s.handoffHTML = htmlOut
-	}
-	if err := s.runHook(s.hooks.OnSwap, map[string]string{
-		"FROM_AGENT": s.Assistant,
-		"TO_AGENT":   adapter.Name,
-	}); err != nil {
-		return err
-	}
-	fromAgent := s.Assistant
-	s.Assistant = adapter.Name
-	s.adapter = adapter
-	s.hooks = adapter.Hooks
-	if err := s.renderHandoffFile(); err != nil {
-		return err
-	}
-	cmd := exec.Command(adapter.Command[0], append(adapter.Command[1:], adapter.Args...)...)
-	cmd.Dir = s.workspaceDir
-	cmd.Env = s.commandEnv(map[string]string{
-		"FROM_AGENT": fromAgent,
-		"TO_AGENT":   adapter.Name,
-	})
-	f, err := pty.Start(cmd)
-	if err != nil {
-		return err
-	}
-	_ = pty.Setsize(f, &pty.Winsize{Rows: s.rows, Cols: s.cols})
+
+	handoff, handoffHTML := s.brokerHandoff(fromAgent, adapter.Name)
+
+	// Prepare the target structured backend while the old one remains alive.
+	// startChatBackend installs into s.chat, so snapshot every affected field
+	// and restore it if either backend or PTY startup fails.
 	s.mu.Lock()
-	oldPTY := s.pty
-	oldCmd := s.cmd
-	s.pty = f
-	s.cmd = cmd
-	s.phase = "running"
-	s.health = "healthy"
-	s.reasonCode = "agent_switched"
-	s.mu.Unlock()
-	if oldPTY != nil {
-		_ = oldPTY.Close()
-	}
-	if oldCmd != nil && oldCmd.Process != nil {
-		_ = oldCmd.Process.Kill()
-		_, _ = oldCmd.Process.Wait()
-	}
-	// Re-point the structured chat channel at the NEW agent. Pre-#400 a
-	// switch restarted only the PTY: s.chat kept running the OLD agent's
-	// binary (the Chat tab was answered by the wrong agent) and the
-	// respawn closure re-spawned the old adapter forever. The old
-	// backend is closed (kills its process / in-flight turn) and any
-	// AskUserQuestion blocked on it is dropped with it. Each backend's
-	// persisted conversation id is passed back in, so switching BACK to
-	// an agent resumes its own earlier thread (claude --resume / codex
-	// exec resume); the cross-agent context travels via the handoff doc
-	// as before.
-	s.mu.Lock()
-	oldChat := s.chat
+	oldRespawn := s.chatRespawn
+	oldAIGen := s.aiGen
+	oldTitleGen := s.titleGen
+	oldClaudeID := s.chatSessionID
+	oldCodexID := s.codexThreadID
 	s.chat = nil
 	s.chatRespawn = nil
 	resumeClaude := s.chatSessionID
 	resumeCodex := s.codexThreadID
 	s.mu.Unlock()
-	_ = s.takePendingAsk() // its cp dies with oldChat; nothing to answer
+	if err := s.startChatBackend(adapter, resumeClaude, false, resumeCodex, ""); err != nil {
+		s.mu.Lock()
+		s.chat = oldChat
+		s.chatRespawn = oldRespawn
+		s.aiGen = oldAIGen
+		s.titleGen = oldTitleGen
+		s.chatSessionID = oldClaudeID
+		s.codexThreadID = oldCodexID
+		s.mu.Unlock()
+		_ = s.persistMetadata()
+		return fmt.Errorf("start %s chat backend: %w", adapter.Name, err)
+	}
+	s.mu.Lock()
+	newChat := s.chat
+	newRespawn := s.chatRespawn
+	newAIGen := s.aiGen
+	newTitleGen := s.titleGen
+	s.mu.Unlock()
+
+	_, oldStructuredErr := backendFor(s.adapter.Protocol)
+	_, newStructuredErr := backendFor(adapter.Protocol)
+	oldStructured := oldStructuredErr == nil
+	newStructured := newStructuredErr == nil
+	var f *os.File
+	var cmd *exec.Cmd
+	// Structured Claude↔Codex switches leave the Terminal tab's shell alone;
+	// only the headless chat backend changes. Crossing the legacy/structured
+	// boundary must replace the PTY with the target's correct surface.
+	if oldStructured != newStructured || !newStructured {
+		if newStructured {
+			tmuxPath, _ := exec.LookPath("tmux")
+			if os.Getenv("CONDUIT_DISABLE_TERMINAL_TMUX") != "" {
+				tmuxPath = ""
+			}
+			argv := terminalShellArgv(tmuxPath, sanitizeTmuxName(s.ID))
+			cmd = exec.Command(argv[0], argv[1:]...)
+		} else {
+			cmd = exec.Command(adapter.Command[0], append(adapter.Command[1:], adapter.Args...)...)
+		}
+		cmd.Dir = s.workspaceDir
+		cmd.Env = s.commandEnv(map[string]string{
+			"AGENT_NAME": adapter.Name,
+			"FROM_AGENT": fromAgent,
+			"TO_AGENT":   adapter.Name,
+		})
+		var err error
+		f, err = pty.Start(cmd)
+		if err != nil {
+			if newChat != nil {
+				_ = newChat.Close()
+			}
+			s.mu.Lock()
+			s.chat = oldChat
+			s.chatRespawn = oldRespawn
+			s.aiGen = oldAIGen
+			s.titleGen = oldTitleGen
+			s.chatSessionID = oldClaudeID
+			s.codexThreadID = oldCodexID
+			s.mu.Unlock()
+			_ = s.persistMetadata()
+			return fmt.Errorf("start %s terminal backend: %w", adapter.Name, err)
+		}
+		_ = pty.Setsize(f, &pty.Winsize{Rows: s.rows, Cols: s.cols})
+	}
+
+	// External adapters may still use on_swap, but production continuity is
+	// broker-owned. A hook failure is diagnostic only and cannot veto a live
+	// target backend.
+	if err := s.runHookBestEffort(s.hooks.OnSwap, map[string]string{
+		"FROM_AGENT": fromAgent,
+		"TO_AGENT":   adapter.Name,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "session %s: on_swap hook: %v (switch continues)\n", s.ID, err)
+	}
+
+	s.mu.Lock()
+	oldPTY := s.pty
+	oldCmd := s.cmd
+	s.Assistant = adapter.Name
+	s.adapter = adapter
+	s.hooks = adapter.Hooks
+	if f != nil {
+		s.pty = f
+		s.cmd = cmd
+	}
+	s.chat = newChat
+	s.chatRespawn = newRespawn
+	s.aiGen = newAIGen
+	s.titleGen = newTitleGen
+	s.handoffHTML = handoffHTML
+	s.pendingHandoff = handoff
+	s.pendingHandoffAgent = adapter.Name
+	s.phase = "running"
+	s.health = "healthy"
+	s.reasonCode = "agent_switched"
+	s.mu.Unlock()
+
+	if err := s.persistHandoffSection(handoffHTML); err != nil {
+		fmt.Fprintf(os.Stderr, "session %s: persist switch handoff: %v\n", s.ID, err)
+	}
+	if err := s.renderHandoffFile(); err != nil {
+		fmt.Fprintf(os.Stderr, "session %s: render switch handoff: %v\n", s.ID, err)
+	}
+	if err := s.persistMetadata(); err != nil {
+		fmt.Fprintf(os.Stderr, "session %s: persist switched metadata: %v\n", s.ID, err)
+	}
+
+	if f != nil && oldPTY != nil {
+		_ = oldPTY.Close()
+	}
+	if f != nil && oldCmd != nil && oldCmd.Process != nil {
+		_ = oldCmd.Process.Kill()
+		_, _ = oldCmd.Process.Wait()
+	}
 	if oldChat != nil {
 		_ = oldChat.Close()
 	}
-	s.startChatBackend(adapter, resumeClaude, false, resumeCodex, "")
-	if err := s.persistMetadata(); err != nil {
-		return err
+	if err := s.runHookBestEffort(adapter.Hooks.OnStart, map[string]string{
+		"AGENT_NAME": adapter.Name,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "session %s: switched on_start hook: %v (session continues)\n", s.ID, err)
 	}
-	go s.drain(f)
+	if f != nil {
+		go s.drain(f)
+	}
 	return nil
-}
-
-func (s *Session) signalHandoff() {
-	s.mu.Lock()
-	cmd := s.cmd
-	s.mu.Unlock()
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
-	_ = cmd.Process.Signal(syscall.SIGUSR1)
 }
 
 func (s *Session) waitForHandoff() (string, error) {
@@ -747,7 +837,29 @@ func (s *Session) waitForHandoff() (string, error) {
 
 func (s *Session) mergeHandoff(section string) error {
 	s.handoffHTML = section
-	return s.writeMemoryHTML(s.Snapshot())
+	return s.persistHandoffSection(section)
+}
+
+func (s *Session) persistHandoffSection(section string) error {
+	data, err := os.ReadFile(s.memoryPath)
+	if err != nil {
+		return err
+	}
+	idx := handoffSectionPattern.FindSubmatchIndex(data)
+	if len(idx) < 4 {
+		return fmt.Errorf("handoff section missing")
+	}
+	out := make([]byte, 0, len(data)+len(section))
+	out = append(out, data[:idx[2]]...)
+	out = append(out, section...)
+	out = append(out, data[idx[3]:]...)
+	if err := atomicWriteFile(s.memoryPath, out); err != nil {
+		return err
+	}
+	if info, err := os.Stat(s.memoryPath); err == nil {
+		s.lastMemoryModTime = info.ModTime()
+	}
+	return nil
 }
 
 func (s *Session) renderHandoffFile() error {
@@ -762,6 +874,24 @@ func (s *Session) runHook(script string, extraEnv map[string]string) error {
 	cmd.Dir = s.workspaceDir
 	cmd.Env = s.commandEnv(extraEnv)
 	return cmd.Run()
+}
+
+func (s *Session) runHookBestEffort(script string, extraEnv map[string]string) error {
+	if strings.TrimSpace(script) == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-lc", script)
+	cmd.Dir = s.workspaceDir
+	cmd.Env = s.commandEnv(extraEnv)
+	if err := cmd.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("hook timed out after 5s")
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Session) loadHandoffHTML() string {

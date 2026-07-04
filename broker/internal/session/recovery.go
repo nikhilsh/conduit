@@ -139,7 +139,9 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		// app-pushed OAuth blob (Option B / shared-creds) — without this,
 		// ensureSharedCred sees a nil store, picks Option A (host $HOME),
 		// and recovered sessions ignore any app-pushed credential entirely.
-		credStore: m.credStore,
+		credStore:           m.credStore,
+		pendingHandoff:      meta.PendingHandoff,
+		pendingHandoffAgent: meta.PendingHandoffAgent,
 	})
 	if err != nil {
 		return nil, err

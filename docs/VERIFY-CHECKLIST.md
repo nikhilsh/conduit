@@ -20,6 +20,24 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Transactional Claude ↔ Codex mid-session handoff — broker + iOS + Android.**
+
+- Broker generates a bounded handoff from durable conversation/workspace state,
+  persists it in session memory, and privately injects it into the incoming
+  agent's next normal prompt. Each provider's native thread id remains
+  independent. Busy/pending-input switches are rejected; target startup
+  failure rolls back; external hooks are non-fatal.
+- iOS and Android expose “Switch to …” in the session title menu only when the
+  broker advertises `features.switch_agent`; it is disabled unless the session
+  is live, running, and idle.
+- Automated coverage uses production-shaped stream-json/app-server processes in
+  both directions plus resume, fallback, rejection, and rollback cases.
+- **Verify on device:** complete one Claude turn, switch to Codex, send a normal
+  message and confirm context continuity; switch back and confirm Claude
+  remembers its original thread. Repeat from Codex. Confirm the row disables
+  while working or awaiting input and remains on the old agent after a forced
+  target startup failure.
+
 **Flush stuck queued-next message on idle status frame after broker restart (iOS + Android). PR #866.**
 
 - Follow-up net to #865. If a message was parked in "Queued Next" while a turn

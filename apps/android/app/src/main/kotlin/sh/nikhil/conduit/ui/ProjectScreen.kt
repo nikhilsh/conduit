@@ -90,8 +90,15 @@ fun ProjectScreen(
     )
     val statuses by store.statusBySession.collectAsState()
     val lifecycleMap by store.sessionLifecycle.collectAsState()
+    val agentDescriptors by store.agentDescriptors.collectAsState()
+    val switchAgentSupported by store.switchAgentSupported.collectAsState()
     val status = statuses[session.id]
     val lifecycle = lifecycleMap[session.id]
+    // Ensure the switch capability + available target descriptors are loaded
+    // even when this session was opened without visiting an agent picker.
+    LaunchedEffect(endpoint) {
+        runCatching { store.refreshModelCatalog() }
+    }
     // READ-ONLY IS THE DEFAULT: a session is interactive only when the
     // store can positively confirm it is *currently live on the broker*
     // (a non-terminal lifecycle AND a running status phase). Everything
@@ -124,6 +131,18 @@ fun ProjectScreen(
     var showEndConfirm by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
+    val liveAssistant = status?.assistant?.takeIf { it.isNotBlank() } ?: session.assistant
+    val switchTarget = if (switchAgentSupported) {
+        agentDescriptors.keys
+            .map { it.lowercase() }
+            .filter { it != liveAssistant.lowercase() && it != "shell" }
+            .sorted()
+            .firstOrNull()
+    } else {
+        null
+    }
+    val switchEnabled = switchTarget != null && !isReadOnly &&
+        status?.phase == "running" && status?.health != "dead" && status?.turnActive != true
 
     val displayNames by store.displayNames.collectAsState()
     val modelAliases by store.modelBySession.collectAsState()
@@ -206,6 +225,12 @@ fun ProjectScreen(
                     showRename = true
                 },
                 onReconnect = { menuExpanded = false; store.reconnect() },
+                switchTarget = switchTarget,
+                switchEnabled = switchEnabled,
+                onSwitchAgent = { target ->
+                    menuExpanded = false
+                    store.switchAgent(session.id, target)
+                },
                 onExportTranscript = {
                     menuExpanded = false
                     // Same share path as Session Info's Export pill — the
@@ -433,6 +458,9 @@ private fun ControlsRow(
     onMenuDismiss: () -> Unit,
     onRename: () -> Unit,
     onReconnect: () -> Unit,
+    switchTarget: String? = null,
+    switchEnabled: Boolean = false,
+    onSwitchAgent: (String) -> Unit = {},
     onExportTranscript: () -> Unit,
     showChanges: Boolean = false,
     onShowChanges: () -> Unit = {},
@@ -521,6 +549,13 @@ private fun ControlsRow(
                 HorizontalDivider()
                 DropdownMenuItem(text = { Text("Rename") }, onClick = onRename)
                 DropdownMenuItem(text = { Text("Refresh") }, onClick = onReconnect)
+                if (switchTarget != null) {
+                    DropdownMenuItem(
+                        text = { Text("Switch to ${switchTarget.replaceFirstChar { it.uppercase() }}") },
+                        onClick = { onSwitchAgent(switchTarget) },
+                        enabled = switchEnabled,
+                    )
+                }
                 DropdownMenuItem(text = { Text("Export transcript") }, onClick = onExportTranscript)
                 // Diff review + the browser memory toggle keep entry points
                 // after losing their header circles (fix 1 allows only

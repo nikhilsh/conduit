@@ -4602,6 +4602,10 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _pipelineFanout = MutableStateFlow(false)
     val pipelineFanout: StateFlow<Boolean> = _pipelineFanout.asStateFlow()
 
+    /** Broker advertises transactional mid-session agent switching. */
+    private val _switchAgentSupported = MutableStateFlow(false)
+    val switchAgentSupported: StateFlow<Boolean> = _switchAgentSupported.asStateFlow()
+
     /**
      * Refresh [modelCatalog] and [agentDescriptors] from the active
      * endpoint's capabilities in one request. Old brokers (missing keys)
@@ -4646,6 +4650,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 mapOf("agents" to descriptors.keys.sorted().joinToString(",")),
             )
         }
+        _switchAgentSupported.value = runCatching {
+            JSONObject(raw).optJSONObject("features")?.optBoolean("switch_agent", false) ?: false
+        }.getOrDefault(false)
         // WS-H.1: parse the readiness block; null on old brokers → consumers treat as unknown.
         val readiness = runCatching { parseReadiness(raw) }.getOrNull()
         if (readiness != null) {

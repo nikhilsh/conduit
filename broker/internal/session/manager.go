@@ -142,10 +142,22 @@ type Session struct {
 	// AccountUsage() into the status frame, fetched from the OAuth endpoint on
 	// connect + on an explicit client refresh. See accountusage.go.
 	// accountUsageDo is an injectable HTTP doer (nil → http.DefaultClient).
-	accountUsage      AccountUsage
-	accountUsageDo    httpDoFunc
-	handoffHTML       string
-	checkpointMu      sync.Mutex
+	accountUsage   AccountUsage
+	accountUsageDo httpDoFunc
+	handoffHTML    string
+	// pendingHandoff is broker-generated context waiting to be prepended to
+	// the next normal user turn after an agent switch. It is never written to
+	// conversation.jsonl, so the mobile transcript only shows the user's
+	// actual message. pendingHandoffAgent prevents a stale handoff being sent
+	// to the wrong backend after recovery or another switch.
+	pendingHandoff      string
+	pendingHandoffAgent string
+	checkpointMu        sync.Mutex
+	metadataMu          sync.Mutex
+	// interactionMu serializes a switch with SendChat. This closes the race
+	// where a turn could begin after the switch's idle check but before the
+	// old backend was detached.
+	interactionMu     sync.Mutex
 	lastMemoryModTime time.Time
 	swapping          bool
 	// displayName is the human-readable session label set by a
@@ -380,25 +392,27 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	}
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "PS1=$ ")
 	s := &Session{
-		ID:              id,
-		Assistant:       adapter.Name,
-		termgrid:        opts.termgrid,
-		adapter:         adapter,
-		override:        opts.override,
-		rows:            40,
-		cols:            120,
-		closed:          make(chan struct{}),
-		ring:            make([]byte, ringSize),
-		subs:            make(map[chan []byte]struct{}),
-		textSubs:        make(map[chan []byte]struct{}),
-		repoRoot:        opts.repoRoot,
-		conduitRoot:     opts.conduitRoot,
-		previewPort:     opts.previewPort,
-		modelCatalog:    opts.modelCatalog,
-		codexBinary:     opts.codexBinary,
-		claudeBinary:    opts.claudeBinary,
-		requestedCWD:    strings.TrimSpace(opts.requestedCWD),
-		requestedBranch: strings.TrimSpace(opts.requestedBranch),
+		ID:                  id,
+		Assistant:           adapter.Name,
+		termgrid:            opts.termgrid,
+		adapter:             adapter,
+		override:            opts.override,
+		rows:                40,
+		cols:                120,
+		closed:              make(chan struct{}),
+		ring:                make([]byte, ringSize),
+		subs:                make(map[chan []byte]struct{}),
+		textSubs:            make(map[chan []byte]struct{}),
+		repoRoot:            opts.repoRoot,
+		conduitRoot:         opts.conduitRoot,
+		previewPort:         opts.previewPort,
+		modelCatalog:        opts.modelCatalog,
+		codexBinary:         opts.codexBinary,
+		claudeBinary:        opts.claudeBinary,
+		requestedCWD:        strings.TrimSpace(opts.requestedCWD),
+		requestedBranch:     strings.TrimSpace(opts.requestedBranch),
+		pendingHandoff:      opts.pendingHandoff,
+		pendingHandoffAgent: opts.pendingHandoffAgent,
 		checkpointEvery: durationFromEnv(
 			"CONDUIT_SESSION_CHECKPOINT_INTERVAL_MS",
 			60*time.Second,
@@ -765,7 +779,7 @@ func (s *Session) startChatBackend(
 	continueLatestChat bool,
 	resumeCodexThreadID string,
 	forkChatSessionID string,
-) {
+) error {
 	// AI niceties (titles + quick replies) provider, selected per session:
 	// prefer the session's own agent's provider (anthropicGen for claude,
 	// codexGen for codex), fall back to the other if its creds are missing,
@@ -788,7 +802,7 @@ func (s *Session) startChatBackend(
 			s.scraper = newChatScraper(s.PublishText)
 			go s.scraper.run(s.closed)
 		}
-		return
+		return nil
 	}
 
 	// Part A (harness bootstrap): codex has no clean --append-system-prompt
@@ -820,7 +834,7 @@ func (s *Session) startChatBackend(
 	if serr != nil {
 		// Spawn already logged + surfaced the failure to chat; chat is
 		// disabled for this session but the PTY/Terminal tab is unaffected.
-		return
+		return serr
 	}
 
 	// Store aiGen on the session so push_notify.go can rewrite notification bodies.
@@ -864,6 +878,7 @@ func (s *Session) startChatBackend(
 		}
 	}
 	s.mu.Unlock()
+	return nil
 }
 
 // Write sends bytes to the PTY input (terminal keystrokes).
@@ -1173,6 +1188,8 @@ func (s *Session) structuredTurnPhase() (phase string, present bool) {
 // the legacy "write to PTY + scrape" path. Returns false for the default
 // TUI path (the caller then does MarkUserChatSent + the PTY write).
 func (s *Session) SendChat(msg string) bool {
+	s.interactionMu.Lock()
+	defer s.interactionMu.Unlock()
 	if s.chat == nil {
 		return false
 	}
@@ -1253,6 +1270,19 @@ func (s *Session) SendChat(msg string) bool {
 		s.mu.Unlock()
 		agentMsg = hintBlock + "\n\n" + agentMsg
 	}
+	// A handoff is broker-private context: prepend it only to a normal prompt,
+	// after pending AskUserQuestion/approval routing and command handling, and
+	// never persist it in conversation.jsonl. Slash commands must remain at
+	// byte zero for the CLIs to recognize them.
+	handoffApplied := false
+	if !strings.HasPrefix(strings.TrimSpace(agentMsg), "/") {
+		s.mu.Lock()
+		if s.pendingHandoffAgent == s.Assistant && s.pendingHandoff != "" {
+			agentMsg = s.pendingHandoff + "\n\n---\n\n" + agentMsg
+			handoffApplied = true
+		}
+		s.mu.Unlock()
+	}
 	err := s.chat.Send(agentMsg)
 	if err != nil && s.chatRespawn != nil {
 		// The long-lived stream-json agent died underneath us (any send
@@ -1294,6 +1324,14 @@ func (s *Session) SendChat(msg string) bool {
 		} else {
 			publishChatSystem(s.PublishText, "⚠️ Couldn't deliver your message to the agent ("+err.Error()+"). Try again, or start a new session.")
 		}
+		return true
+	}
+	if handoffApplied {
+		s.mu.Lock()
+		s.pendingHandoff = ""
+		s.pendingHandoffAgent = ""
+		s.mu.Unlock()
+		_ = s.persistMetadata()
 	}
 	return true
 }
@@ -2627,7 +2665,9 @@ type sessionOptions struct {
 	// requestedBranch is an optional caller-supplied branch name for the
 	// per-session worktree. When non-empty and worktree mode is on,
 	// maybeRemapToWorktree uses this instead of "conduit/session-<id>".
-	requestedBranch string
+	requestedBranch     string
+	pendingHandoff      string
+	pendingHandoffAgent string
 }
 
 type sessionMetadata struct {
@@ -2684,6 +2724,11 @@ type sessionMetadata struct {
 	ClaudeChatSessionID string `json:"claude_chat_session_id,omitempty"`
 	// CodexThreadID is codex's equivalent (thread.started id).
 	CodexThreadID string `json:"codex_thread_id,omitempty"`
+	// PendingHandoff is broker-private context injected into the incoming
+	// agent's next normal prompt. It is persisted so a broker restart between
+	// switch and send does not lose the handoff.
+	PendingHandoff      string `json:"pending_handoff,omitempty"`
+	PendingHandoffAgent string `json:"pending_handoff_agent,omitempty"`
 }
 
 // UploadBaseDir is the durable root under which chat file-uploads are
@@ -2740,6 +2785,8 @@ func (s *Session) applyPaths() {
 }
 
 func (s *Session) persistMetadata() error {
+	s.metadataMu.Lock()
+	defer s.metadataMu.Unlock()
 	s.mu.Lock()
 	meta := sessionMetadata{
 		ID:           s.ID,
@@ -2763,6 +2810,8 @@ func (s *Session) persistMetadata() error {
 		ContextWindowTokens: s.contextWindowTokens,
 		ClaudeChatSessionID: s.chatSessionID,
 		CodexThreadID:       s.codexThreadID,
+		PendingHandoff:      s.pendingHandoff,
+		PendingHandoffAgent: s.pendingHandoffAgent,
 	}
 	if !s.lastCheckpoint.IsZero() {
 		meta.LastCheckpoint = s.lastCheckpoint.UTC().Format(time.RFC3339Nano)

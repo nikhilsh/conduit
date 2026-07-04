@@ -105,6 +105,24 @@ extension ConduitUI {
         /// Live sessions keep the full tab strip + interactive surfaces.
         private var isReadOnly: Bool { store.isReadOnly(sessionID: session.id) }
 
+        private var switchTarget: String? {
+            guard store.switchAgentSupported else { return nil }
+            let current = store.statusBySession[session.id]?.assistant.lowercased()
+                ?? session.assistant.lowercased()
+            return store.agentDescriptors.keys
+                .map { $0.lowercased() }
+                .filter { $0 != current && $0 != "shell" }
+                .sorted()
+                .first
+        }
+
+        private var switchEnabled: Bool {
+            guard !isReadOnly, let status = store.statusBySession[session.id] else { return false }
+            return status.phase == "running"
+                && status.health != "dead"
+                && status.turnActive != true
+        }
+
         /// Whether the session has changes worth reviewing — gates the header
         /// "Changes" affordance. Reuses the exact signal the Diff surface
         /// itself uses: a session-level `linesAdded`/`linesRemoved` rollup, or
@@ -428,6 +446,23 @@ extension ConduitUI {
                     showTitleMenu = false
                     store.reconnect()
                 }
+                if let target = switchTarget {
+                    Button {
+                        showTitleMenu = false
+                        store.switchAgent(sessionID: session.id, to: target)
+                    } label: {
+                        menuRowBody(
+                            "arrow.triangle.2.circlepath",
+                            "Switch to \(target.capitalized)",
+                            tint: switchEnabled ? neon.text : neon.textFaint
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!switchEnabled)
+                    .accessibilityHint(switchEnabled
+                        ? "Hands the session to \(target.capitalized)"
+                        : "Available when the session is live and the agent is idle")
+                }
                 ShareLink(item: ConduitUI.TranscriptExport.markdown(for: session, store: store)) {
                     menuRowBody("square.and.arrow.up", "Export transcript", tint: neon.text)
                 }
@@ -661,4 +696,3 @@ extension ConduitUI {
 }
 
 // MARK: - Interactive swipe-back
-

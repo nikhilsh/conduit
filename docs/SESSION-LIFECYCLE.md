@@ -67,20 +67,31 @@ Health states surfaced via `status` JSON:
 
 Triggered by `{"type":"switch_agent","assistant":"<new>"}` from any connected client.
 
-1. Broadcast `{"type":"status","phase":"swapping","from":"<old>","to":"<new>"}`.
-2. **Force checkpoint** (§3) so we have a known-good baseline.
-3. Send `SIGUSR1` to the agent process. The adapter traps this and writes
-   `$KITTY_HANDOFF_OUT_PATH`. Wait up to 30s.
-4. If `HANDOFF-OUT.html` lands within timeout: parse, validate against `docs/MEMORY-FORMAT.md`, merge its `handoff` section into the session memory.
-   If timeout: log a warning, proceed with the last checkpoint's session memory as the handoff baseline.
-5. `SIGTERM` the old agent (10s grace, then `SIGKILL`).
-6. Run adapter `on_swap` hook with `FROM_AGENT`, `TO_AGENT` env.
-7. Re-render session memory's `handoff` section into `$KITTY_HANDOFF_PATH` for the incoming agent.
-8. Spawn the new agent with the new adapter (§2 step 6). It reads `HANDOFF.html` and prepends to its system prompt.
-9. PTY is **the same on-disk scrollback ring** — the new process's stdout/stderr appends. Clients reconnecting see the seamless transition via the standard snapshot.
-10. Broadcast `{"type":"status","phase":"running","assistant":"<new>"}`.
+1. Reject the request if a structured turn, `AskUserQuestion`, approval, or
+   other pending input is active. A switch never interrupts or silently denies
+   an interaction.
+2. Broadcast `phase:"swapping"` and force a checkpoint.
+3. Build a bounded broker-owned handoff from the tail of
+   `conversation.jsonl`, session identity, workspace path, branch, and
+   `git status --short`. Persist it in the session memory `handoff` section.
+4. Start the target structured backend with that agent's own persisted resume
+   id (`claude_chat_session_id` or `codex_thread_id`). Claude and Codex keep
+   independent threads across repeated switches.
+5. Commit `assistant`, adapter, backend, and pending-handoff metadata only after
+   target startup succeeds. On failure the old backend and metadata remain
+   active. Structured-to-structured swaps retain the Terminal tab's shell.
+6. Close the old structured backend. Run external `on_swap` / target
+   `on_start` hooks best-effort; failures are logged and cannot veto the switch.
+7. Invisibly prepend the handoff to the incoming backend's next normal user
+   message. The user's original message alone is written to
+   `conversation.jsonl`; pending-input answers and slash commands do not
+   consume the handoff.
+8. Broadcast `phase:"running", assistant:"<new>"`.
 
-The worktree, branch, git state, scrollback, and memory are preserved across the swap. The agent process is reset (deliberately — that's the point). See [`AGENT-ADAPTERS.md §4`](AGENT-ADAPTERS.md) for the same swap from the adapter's side.
+Production switching does not depend on `SIGUSR1`, `HANDOFF-OUT.html`, or an
+agent consuming `HANDOFF.html`. Those paths remain compatibility surfaces for
+external adapters only. The worktree, branch, git state, scrollback, memory,
+and each agent's native thread are preserved.
 
 ## 6. Broker restart recovery
 
@@ -119,11 +130,11 @@ Shutdown sequence:
 | Agent CLI crashes | Watchdog detects, session `dead`, mobile shows Resume sheet; scrollback + memory intact; Resume re-runs `on_start` and respawns the agent with the same adapter |
 | Agent OOM-killed | Same as above |
 | Broker process `kill -9` | On restart (§6), all sessions recovered; clients reconnect and see snapshot — appears as a brief network blip |
-| Mid-PR agent swap | §5 round-trip; new agent sees diff-so-far via `git stash list` from the auto-WIP, plus `HANDOFF.html` |
+| Mid-PR agent swap | §5 round-trip; incoming agent receives the bounded broker handoff on its next normal message |
 | Phone loses network for 1h | Sessions keep running on broker; on reconnect, gzip snapshot brings UI up to date |
 | Concurrent memory edits (human + broker) | Detected via mtime+hash; human content in non-meta sections wins; `meta` and `env-snapshot` re-rendered by broker |
 | User force-quits mobile app | No effect — broker sessions are server-side |
 | Disk full during checkpoint | Checkpoint aborted with logged error, session continues in degraded mode (memory rail stale but PTY and worktree still live); mobile shows 🟡 warning |
-| `HANDOFF-OUT.html` malformed | Validator rejects it; broker falls back to last checkpoint's handoff; logged |
+| Target backend fails to start | Switch rolls back; assistant/backend metadata and the old live backend remain unchanged |
 
 Integration tests under `broker/internal/session/integration_test.go` cover each row (task 005).

@@ -2058,6 +2058,9 @@ final class SessionStore {
     /// (`GET /api/capabilities` -> `"pipeline_resume": true`).
     /// False on old brokers; the "Retry step" affordance hides when false.
     private(set) var pipelineResume: Bool = false
+    /// Broker advertises transactional mid-session agent switching.
+    /// False on older brokers, which keeps the switch affordance hidden.
+    private(set) var switchAgentSupported: Bool = false
 
     /// Whether the broker supports pipeline templates
     /// (`GET /api/capabilities` -> `"pipeline_templates": true`).
@@ -2095,9 +2098,16 @@ final class SessionStore {
     /// are a silent no-op for the descriptor path only.
     func refreshModelCatalog() async {
         struct Envelope: Decodable {
+            struct Features: Decodable {
+                let switchAgent: Bool?
+                enum CodingKeys: String, CodingKey {
+                    case switchAgent = "switch_agent"
+                }
+            }
             let models: [String: [ConduitUI.AgentModel]]?
             let agents: [String: AgentDescriptor]?
             let readiness: BrokerReadiness?
+            let features: Features?
             let pipeline_gate_preview: Bool?
             let pipeline_resume: Bool?
             let pipeline_templates: Bool?
@@ -2140,6 +2150,7 @@ final class SessionStore {
                 "agent_descriptors", "no agents in capabilities (old broker)",
                 data: ["host": endpoint.displayHost])
         }
+        switchAgentSupported = caps.features?.switchAgent ?? false
         // pipeline_gate_preview capability: top-level boolean, default false on old brokers.
         pipelineGatePreview = caps.pipeline_gate_preview ?? false
         // pipeline_resume: resume-from-failed; default false on old brokers.

@@ -83,11 +83,11 @@ The broker spawns each agent as a child process via
 
 Every adapter's `command` + `args` from `agents/*.toml`:
 
-1. **Read `$KITTY_HANDOFF_PATH` first.** If non-empty, prepend its contents to the agent's system prompt.
-   - Claude Code: `claude --system-prompt-file "$KITTY_HANDOFF_PATH"`
-   - Codex: pass via Codex's prompt-prefix mechanism
-2. **Trap `SIGUSR1`.** On receipt, write a final structured summary to `$KITTY_HANDOFF_OUT_PATH` and exit cleanly. This is how the broker initiates an atomic agent swap.
-3. **Run the agent CLI in foreground** so PTY connects directly. No `tail -f` wrappers.
+1. Structured protocols must implement their registered `AgentBackend`.
+2. Run foreground processes without `tail -f` wrappers.
+3. `$KITTY_HANDOFF_PATH`, `$KITTY_HANDOFF_OUT_PATH`, and `SIGUSR1` are legacy
+   compatibility affordances. Production Claude/Codex switching does not
+   require a wrapper, signal trap, or handoff-file ingestion.
 
 ## 3. Hooks
 
@@ -97,21 +97,24 @@ Hooks run on the **broker host** so they have access to the persistence rails (s
 |---|---|---|
 | `on_start` | After the agent process is spawned, before PTY is exposed to clients | `SESSION_UUID`, `AGENT_NAME` |
 | `on_exit` | After the agent process exits (any reason: clean, crash, SIGKILL) | `SESSION_UUID`, `AGENT_NAME`, `EXIT_CODE` |
-| `on_swap` | After the old agent process exits, before the new one starts | `SESSION_UUID`, `FROM_AGENT`, `TO_AGENT` |
+| `on_swap` | During a switch after target startup is proven, before commit | `SESSION_UUID`, `FROM_AGENT`, `TO_AGENT` |
 
-Hooks must be idempotent — recovery (`docs/SESSION-LIFECYCLE.md` §4) may invoke them again after a crash.
+Hooks must be idempotent. `on_start` and `on_swap` are best-effort: failures are
+logged and do not terminate a live session or veto a prepared switch.
 
 ## 4. Agent swap mechanics
 
 Triggered by `{"type":"switch_agent","assistant":"<new>"}` JSON control message. The broker:
 
-1. Sends `SIGUSR1` to the running agent process; waits up to 30s for `$KITTY_HANDOFF_OUT_PATH` to land.
-2. If it does, parses it as memory HTML and merges its `data-section="handoff"` into the session memory file. If it doesn't, falls back to the last memory checkpoint.
-3. Sends `SIGTERM` (10s grace, then `SIGKILL`) to the old agent process.
-4. Runs `on_swap` hook.
-5. Renders fresh `HANDOFF.html` into the worktree.
-6. `pty.Start`s the new agent process in the same worktree; PTY scrollback ring is preserved client-side via the standard reconnect snapshot.
-7. Broadcasts `status` with `phase: "swapping"` then `phase: "running"`. On spawn failure the broker still flips back to `running` with `reason_code: "agent_switch_failed"` so the mobile UI doesn't get stuck (regression fixed 2026-05-20).
+1. Rejects switching while a turn or pending user decision is active.
+2. Generates and persists a bounded handoff from broker-owned conversation and
+   workspace state.
+3. Starts the target backend using its independently persisted native thread.
+4. Atomically commits the target only after startup succeeds; otherwise the old
+   backend and metadata remain unchanged.
+5. Runs external hooks best-effort, closes the old backend, and invisibly
+   prepends the handoff to the target's next normal user prompt.
+6. Broadcasts `status` with `phase:"swapping"` then `phase:"running"`.
 
 The worktree, branch, and git state are **identical** across the swap.
 
@@ -125,9 +128,9 @@ image. See `docs/SELF-HOST.md`.
 ## 6. Adding a new agent
 
 1. Install the agent CLI on the broker host's `PATH`.
-2. Drop `agents/<name>.toml` with the right `command` / `args` / handoff flags.
-3. The agent CLI must support a system-prompt mechanism that can be fed by
-   file or stdin — required for handoff. If it doesn't, write a tiny shim
-   script on `PATH`.
+2. Drop `agents/<name>.toml` with the right `command`, `args`, and `protocol`.
+3. Implement/register a structured backend when the protocol is new. The
+   broker's prompt handoff is protocol-independent once `chatBackend.Send`
+   exists.
 4. No Go or Rust code changes, and no rebuild. The registry auto-discovers
    the TOML on the next broker start.
