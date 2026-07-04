@@ -234,42 +234,6 @@ func kbSectionExperimental(workspaceDir string) (string, bool) {
 	return sb.String(), true
 }
 
-// truncateKBIndex caps the index content to MaxIndexLines/MaxIndexBytes.
-// Mirrors the logic in the kb package to avoid a circular import.
-const (
-	maxKBIndexLines = 120
-	maxKBIndexBytes = 4096
-)
-
-func truncateKBIndex(raw string) string {
-	if len(raw) <= maxKBIndexBytes {
-		if strings.Count(raw, "\n") <= maxKBIndexLines {
-			return raw
-		}
-	}
-	lines := strings.Split(raw, "\n")
-	var kept []string
-	total := 0
-	truncated := false
-	for i, line := range lines {
-		if i >= maxKBIndexLines {
-			truncated = true
-			break
-		}
-		if total+len(line)+1 > maxKBIndexBytes {
-			truncated = true
-			break
-		}
-		kept = append(kept, line)
-		total += len(line) + 1
-	}
-	result := strings.Join(kept, "\n")
-	if truncated {
-		result += "\n[INDEX truncated]"
-	}
-	return result
-}
-
 // brokerExecutable returns the absolute path to the running broker binary,
 // or "conduit-broker" as a fallback when os.Executable() fails.
 func brokerExecutable() string {
