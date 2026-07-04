@@ -820,7 +820,7 @@ struct SessionStoreTests {
         store.sendChat(sessionID: sessionID, message: "preserve my id")
         let queuedEntries = store.pendingChats.queuedTurnEntries(for: sessionID)
         #expect(queuedEntries.count == 1, "one queuedTurn entry")
-        let originalLocalID = queuedEntries.first?.id ?? ""
+        let originalLocalID = queuedEntries.first?.localID ?? ""
         #expect(originalLocalID.hasPrefix("local-"), "entry has a local- id")
 
         // The echo must already be in conversationLog with the original localID.
@@ -908,7 +908,7 @@ struct SessionStoreTests {
         store.sendChat(sessionID: sessionID, message: "will never send")
         let queued = store.pendingChats.queuedTurnEntries(for: sessionID)
         #expect(!queued.isEmpty, "message must be in queuedTurn")
-        let localID = queued.first?.id ?? ""
+        let localID = queued.first?.localID ?? ""
 
         // Echo must exist in conversationLog (created by sendChatQueued).
         let echoBefore = (store.conversationLog[sessionID] ?? []).first { $0.id == localID }
