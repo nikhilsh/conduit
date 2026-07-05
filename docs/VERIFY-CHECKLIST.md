@@ -24,6 +24,51 @@ _(empty)_
 
 ---
 
+## v0.0.215
+
+**Pipelines list + re-entry — iOS + Android. PR #895.**
+
+- New "Pipelines" command-palette action + Home banner card (shown while any
+  pipeline is running/awaiting gate/awaiting pick) → list from
+  `GET /api/pipelines` (needs-you first) → reopens the Monitor for any
+  pipeline. Fixes: dismissing the Monitor sheet orphaned a running pipeline
+  with no way back. [iOS + Android, **needs on-device verify**: create a
+  pipeline, dismiss the sheet, reopen via Home banner and via palette →
+  Pipelines; check output/gate visible after re-entry]
+
+**Conversation-refresh fan-out gating (the 17s-hang lag fix) — iOS + Android. PR #894.**
+
+- Root cause (Sentry App Hang 17s on 0.0.214+242): sessions with EMPTY chat
+  (terminal-only) were re-pulled + re-merged on EVERY status delta forever
+  (`isEmpty` treated as never-fetched); N sessions × every delta invalidated
+  the whole observable store. Now only the selected session refreshes eagerly
+  (debounced ~300ms); others are marked stale and refresh on open. Android
+  had the identical bug — same fix. `refresh_skipped_stale` breadcrumb added.
+  [iOS + Android, **needs on-device verify**: with 8+ sessions live, scroll
+  Home + switch sessions — lag should be gone; opened sessions still show
+  fresh chat]
+
+**Peer-message chat card — iOS + Android. PR #892.**
+
+- Peer-session messages (v0.0.214's `chat send`) now render as a dedicated
+  PEER MESSAGE card (sender title/short-id header, body only — envelope
+  boilerplate hidden; header taps through to the sender session). Strictly
+  gated on user-role + exact leading marker. Was: raw envelope in a "YOU"
+  bubble. [iOS + Android, **needs on-device verify**: send a peer message
+  between two sessions; check card renders + header navigation]
+
+**Pipeline capability flags mirrored at capabilities JSON root — broker. PR #891.**
+
+- Fielded apps decode all pipeline_* flags from the JSON root, but the broker
+  nested them in features.* — every pipeline surface (block config, templates,
+  gate preview, resume, fanout) silently gated OFF on device since pipeline v2
+  shipped. Root-level mirrors fix installed builds without reinstall;
+  features.* stays canonical. [broker, **redeploy required** — done
+  2026-07-05, v0.0.214-1; re-verify Builder shows model/effort/instructions +
+  Save as template on the v0.0.214 app]
+
+---
+
 ## v0.0.214
 
 **Harness builder Phase 1: per-block model/effort/mode/instructions — broker + apps. PRs #888 + #889 (design doc PR #885).**
