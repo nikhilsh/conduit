@@ -20,6 +20,23 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Peer-session messaging MVP — broker. PR #884.**
+
+- Sessions can message each other: `POST /api/session/message` + one-shot
+  `conduit-broker chat send <session-id> "..."` (sender = `$SESSION_UUID`,
+  auth = inherited `$CONDUIT_TOKEN`). Delivered as a labeled untrusted
+  `CONDUIT PEER MESSAGE` block (never a bare user prompt; skips pending-ask/
+  approval routing); awareness-prompt bullet teaches agents the affordance;
+  6/min per-recipient rate cap; live sessions only (never wakes a recoverable
+  one). Peer traffic is persisted + fanned to live viewers, so it shows in
+  the phone transcript.
+- Broker redeployed 2026-07-05 (fa62f3ba); endpoint + CLI verb smoke-tested
+  live (404 contract + usage).
+- [broker-behavior verify: from one session's agent, run `conduit-broker chat
+  --list` then `chat send <other-id> "..."`; confirm the peer block lands in
+  the other session's chat on the phone, labeled, and the recipient replies
+  back rather than treating it as the user]
+
 **Rename-session sheet redesign — iOS + Android. PR #882.**
 
 - iOS `ConduitRenameSessionSheet` recomposed on the neon idiom (glass
