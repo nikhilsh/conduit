@@ -12,7 +12,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.PanTool
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,7 +38,20 @@ data class PipelineTopologyItem(
     val gateAfter: Boolean,
     /** 0 = no fanout; otherwise the declared run count. */
     val fanoutCount: Int,
-)
+    /**
+     * "" (plain agent step, back-compatible) | "branch" | "loop"
+     * (PLAN-HARNESS-BUILDER Phase 3).
+     */
+    val kind: String = "",
+    /** Then/Else sub-stack counts (kind == "branch" only). */
+    val thenCount: Int = 0,
+    val elseCount: Int = 0,
+    /** Loop body step count + max_iterations (kind == "loop" only). */
+    val bodyCount: Int = 0,
+    val maxIterations: Int = 0,
+) {
+    val isControlFlow: Boolean get() = kind == "branch" || kind == "loop"
+}
 
 /**
  * Compact, read-only rail rendering a not-yet-started harness's block stack
@@ -76,9 +91,24 @@ private fun TopologyRow(
             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            AgentAvatar(assistant = item.agentType, size = 20.dp)
+            if (item.isControlFlow) {
+                Icon(
+                    if (item.kind == "loop") Icons.Filled.Repeat else Icons.AutoMirrored.Filled.CallSplit,
+                    contentDescription = if (item.kind == "loop") "Loop" else "If/Else",
+                    tint = neon.accent,
+                    modifier = Modifier.height(16.dp),
+                )
+            } else {
+                AgentAvatar(assistant = item.agentType, size = 20.dp)
+            }
             Text(
-                "${index + 1}. ${item.role.replaceFirstChar { it.uppercase() }}",
+                "${index + 1}. ${
+                    if (item.isControlFlow) {
+                        if (item.kind == "loop") "Loop" else "If/Else"
+                    } else {
+                        item.role.replaceFirstChar { it.uppercase() }
+                    }
+                }",
                 fontFamily = neon.mono,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 11.sp,
@@ -95,6 +125,67 @@ private fun TopologyRow(
                     modifier = Modifier
                         .background(neon.accent.copy(alpha = 0.15f), RoundedCornerShape(50))
                         .padding(horizontal = 5.dp, vertical = 1.dp),
+                )
+            }
+            if (item.kind == "loop") {
+                Text(
+                    "max ${item.maxIterations}x",
+                    fontFamily = neon.mono,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 9.sp,
+                    color = neon.accent,
+                    modifier = Modifier
+                        .background(neon.accent.copy(alpha = 0.15f), RoundedCornerShape(50))
+                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                )
+            }
+        }
+
+        if (item.kind == "branch") {
+            Column(modifier = Modifier.padding(start = 9.dp)) {
+                Row(
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    androidx.compose.foundation.layout.Box(
+                        modifier = Modifier.width(1.dp).height(12.dp).background(neon.border.copy(alpha = 0.6f)),
+                    )
+                    Text(
+                        "then: ${item.thenCount} step${if (item.thenCount == 1) "" else "s"}",
+                        fontFamily = neon.mono,
+                        fontSize = 9.sp,
+                        color = neon.textFaint,
+                    )
+                }
+                Row(
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    androidx.compose.foundation.layout.Box(
+                        modifier = Modifier.width(1.dp).height(12.dp).background(neon.border.copy(alpha = 0.6f)),
+                    )
+                    Text(
+                        "else: ${item.elseCount} step${if (item.elseCount == 1) "" else "s"}",
+                        fontFamily = neon.mono,
+                        fontSize = 9.sp,
+                        color = neon.textFaint,
+                    )
+                }
+            }
+        } else if (item.kind == "loop") {
+            Row(
+                modifier = Modifier.padding(start = 9.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                androidx.compose.foundation.layout.Box(
+                    modifier = Modifier.width(1.dp).height(12.dp).background(neon.border.copy(alpha = 0.6f)),
+                )
+                Text(
+                    "body: ${item.bodyCount} step${if (item.bodyCount == 1) "" else "s"}",
+                    fontFamily = neon.mono,
+                    fontSize = 9.sp,
+                    color = neon.textFaint,
                 )
             }
         }

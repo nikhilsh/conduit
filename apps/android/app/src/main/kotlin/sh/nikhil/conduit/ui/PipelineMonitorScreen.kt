@@ -78,6 +78,18 @@ data class FanoutStatus(
     val winner: Int?,
 )
 
+/**
+ * Live state for a `kind == "loop"` step -- broker `pipeline.LoopConfig`
+ * (docs/PLAN-HARNESS-BUILDER.md §4.2). Only the fields the Monitor needs to
+ * render "iteration k/N" are decoded here (not `body`/`until`, which are
+ * create-time config the Monitor never re-renders).
+ */
+data class PipelineLoopStatus(
+    val maxIterations: Int,
+    /** Number of completed passes so far. */
+    val iteration: Int?,
+)
+
 /** Data classes for pipeline state. */
 data class PipelineStep(
     val index: Int,
@@ -94,8 +106,25 @@ data class PipelineStep(
     val prevSessionIds: List<String> = emptyList(),
     /** Fanout config and runtime state; null for normal steps. */
     val fanout: FanoutStatus? = null,
+    /**
+     * "" (plain agent step) | "branch" | "loop" (PLAN-HARNESS-BUILDER
+     * Phase 3). A "branch" step is transient -- the orchestrator splices it
+     * away once its condition is resolved, so this is really only ever
+     * observed as "loop" or absent/"" in practice.
+     */
+    val kind: String = "",
+    /**
+     * Provenance set when this step was produced by resolving a branch's
+     * condition (e.g. "step 2 branch (then)"). Null for a step that was
+     * never spliced.
+     */
+    val splicedFrom: String? = null,
+    /** Live loop state. Present only when kind == "loop". */
+    val loop: PipelineLoopStatus? = null,
 ) {
     val isFanout: Boolean get() = fanout != null
+    val isLoop: Boolean get() = kind == "loop"
+    val wasSpliced: Boolean get() = !splicedFrom.isNullOrEmpty()
 }
 
 /**
@@ -171,6 +200,15 @@ private fun parsePipeline(json: JSONObject): Pipeline {
                     winner = fo.optInt("winner", -1).takeIf { it >= 0 },
                 )
             }
+            // Live loop state (PLAN-HARNESS-BUILDER Phase 3). Present only
+            // when kind == "loop".
+            val loopObj = s.optJSONObject("loop")
+            val loop = loopObj?.let {
+                PipelineLoopStatus(
+                    maxIterations = it.optInt("max_iterations", 0),
+                    iteration = if (it.has("iteration")) it.optInt("iteration", 0) else null,
+                )
+            }
             steps.add(
                 PipelineStep(
                     index = s.optInt("index", i),
@@ -184,6 +222,9 @@ private fun parsePipeline(json: JSONObject): Pipeline {
                     retries = s.optInt("retries", 0),
                     prevSessionIds = prevSessionIds,
                     fanout = fanout,
+                    kind = s.optString("kind", ""),
+                    splicedFrom = s.optString("spliced_from", "").takeIf { it.isNotEmpty() },
+                    loop = loop,
                 ),
             )
         }
@@ -1188,6 +1229,11 @@ private fun resolveStepState(step: PipelineStep, pipeline: Pipeline): String {
     if (phase.isNullOrEmpty()) {
         // Fanout step with runs but no step-level session is "running"
         if (step.isFanout && step.fanout?.runs?.isNotEmpty() == true) return "running"
+        // A loop step's own SessionID/Phase is only adopted once the loop is
+        // DONE (orchestrator.advanceLoop) -- while iterating both stay null,
+        // so without this check an in-progress loop would misleadingly show
+        // "queued" (PLAN-HARNESS-BUILDER Phase 3).
+        if (step.isLoop && step.index == pipeline.currentStep && pipeline.state !in TERMINAL_STATES) return "running"
         return "queued"
     }
     if (!phase.startsWith("exited")) return "running"
@@ -1303,6 +1349,27 @@ private fun PipelineStepRow(
                                 }
                             }
                         }
+                        // Loop iteration badge (PLAN-HARNESS-BUILDER Phase
+                        // 3, §4.2): "iteration k/N" -- k = current pass
+                        // (1-indexed: iteration+1 while a pass is in flight).
+                        if (step.isLoop) {
+                            step.loop?.let { lp ->
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(neon.accent.copy(alpha = 0.14f))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                                ) {
+                                    Text(
+                                        "iteration ${(lp.iteration ?: 0) + 1}/${lp.maxIterations}",
+                                        fontFamily = neon.mono,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.sp,
+                                        color = neon.accent,
+                                    )
+                                }
+                            }
+                        }
                         // Retry chip
                         if (step.retries > 0) {
                             Box(
@@ -1327,6 +1394,18 @@ private fun PipelineStepRow(
                             "input: ${step.inputFromPrev}",
                             fontFamily = neon.mono,
                             fontSize = 11.sp,
+                            color = neon.textFaint,
+                        )
+                    }
+                    // Spliced-from-branch provenance annotation
+                    // (PLAN-HARNESS-BUILDER Phase 3, §4.1): set when the
+                    // orchestrator resolved a branch's condition and
+                    // spliced this step in from the chosen arm.
+                    if (step.wasSpliced) {
+                        Text(
+                            "from ${step.splicedFrom}",
+                            fontFamily = neon.mono,
+                            fontSize = 9.sp,
                             color = neon.textFaint,
                         )
                     }

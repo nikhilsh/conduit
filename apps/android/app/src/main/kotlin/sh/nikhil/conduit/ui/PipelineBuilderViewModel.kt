@@ -42,6 +42,20 @@ class PipelineBuilderViewModel(initialSteps: List<PipelineStepDraft> = listOf(Pi
         selectedStepId = s.id
     }
 
+    /**
+     * Adds a control-flow block (PLAN-HARNESS-BUILDER Phase 3). `kind` is
+     * `"branch"` or `"loop"` -- `PipelineStepDraft` defaults their
+     * sub-stacks with one starter `PipelineSubStepDraft`, so a fresh block
+     * is immediately submittable (a loop body must have >= 1 step; a
+     * branch's arms are optional but starting with one is a friendlier
+     * default than an empty Then).
+     */
+    fun addControlFlowStep(kind: String) {
+        val s = PipelineStepDraft(kind = kind)
+        steps = steps + s
+        selectedStepId = s.id
+    }
+
     fun removeStep(id: String) {
         if (steps.size <= 1) return
         val wasSelected = selectedStepId == id
@@ -51,6 +65,71 @@ class PipelineBuilderViewModel(initialSteps: List<PipelineStepDraft> = listOf(Pi
 
     fun updateStep(id: String, updated: PipelineStepDraft) {
         steps = steps.map { if (it.id == id) updated.copy(id = id) else it }
+    }
+
+    // ---- Sub-stack editing (Then / Else / Loop body) -----------------
+
+    private fun subStepArray(arm: PipelineSubStepArm, step: PipelineStepDraft): List<PipelineSubStepDraft> =
+        when (arm) {
+            PipelineSubStepArm.THEN -> step.branchThen
+            PipelineSubStepArm.ELSE_ARM -> step.branchElse
+            PipelineSubStepArm.BODY -> step.loopBody
+        }
+
+    private fun withSubStepArray(
+        arm: PipelineSubStepArm,
+        step: PipelineStepDraft,
+        value: List<PipelineSubStepDraft>,
+    ): PipelineStepDraft = when (arm) {
+        PipelineSubStepArm.THEN -> step.copy(branchThen = value)
+        PipelineSubStepArm.ELSE_ARM -> step.copy(branchElse = value)
+        PipelineSubStepArm.BODY -> step.copy(loopBody = value)
+    }
+
+    fun addSubStep(stepId: String, arm: PipelineSubStepArm) {
+        steps = steps.map { s ->
+            if (s.id != stepId) return@map s
+            withSubStepArray(arm, s, subStepArray(arm, s) + PipelineSubStepDraft())
+        }
+    }
+
+    /**
+     * Removes a sub-step. A loop body must keep at least one step (broker
+     * validation: `len(s.Loop.Body) == 0` is rejected); Then/Else may go to
+     * zero (both are optional arrays on the wire).
+     */
+    fun removeSubStep(stepId: String, arm: PipelineSubStepArm, subStepId: String) {
+        steps = steps.map { s ->
+            if (s.id != stepId) return@map s
+            val arr = subStepArray(arm, s)
+            if (arm == PipelineSubStepArm.BODY && arr.size <= 1) return@map s
+            withSubStepArray(arm, s, arr.filterNot { it.id == subStepId })
+        }
+    }
+
+    /**
+     * Swaps `subStepId` with its neighbor `direction` positions away
+     * (-1 = up, +1 = down). A no-op past either end.
+     */
+    fun moveSubStep(stepId: String, arm: PipelineSubStepArm, subStepId: String, direction: Int) {
+        steps = steps.map { s ->
+            if (s.id != stepId) return@map s
+            val arr = subStepArray(arm, s).toMutableList()
+            val i = arr.indexOfFirst { it.id == subStepId }
+            val j = i + direction
+            if (i < 0 || j !in arr.indices) return@map s
+            val tmp = arr[i]
+            arr[i] = arr[j]
+            arr[j] = tmp
+            withSubStepArray(arm, s, arr)
+        }
+    }
+
+    fun updateSubStep(stepId: String, arm: PipelineSubStepArm, subStep: PipelineSubStepDraft) {
+        steps = steps.map { s ->
+            if (s.id != stepId) return@map s
+            withSubStepArray(arm, s, subStepArray(arm, s).map { if (it.id == subStep.id) subStep else it })
+        }
     }
 
     /**
@@ -98,6 +177,11 @@ class PipelineBuilderViewModel(initialSteps: List<PipelineStepDraft> = listOf(Pi
             role = s.role,
             gateAfter = s.gateAfter,
             fanoutCount = if (s.fanoutEnabled) s.fanoutCount else 0,
+            kind = s.kind,
+            thenCount = s.branchThen.size,
+            elseCount = s.branchElse.size,
+            bodyCount = s.loopBody.size,
+            maxIterations = s.loopMaxIterations,
         )
     }
 }

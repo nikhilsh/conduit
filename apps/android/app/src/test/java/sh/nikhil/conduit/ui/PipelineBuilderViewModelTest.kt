@@ -124,4 +124,94 @@ class PipelineBuilderViewModelTest {
         assertEquals("focus on the API", vm.steps[0].instructions)
         assertTrue(vm.selectedStepId == vm.steps[0].id)
     }
+
+    // ---- PLAN-HARNESS-BUILDER Phase 3: sub-stack add/remove/move --------
+
+    @Test
+    fun addControlFlowStepSeedsDefaultSubStack() {
+        val vm = PipelineBuilderViewModel()
+        vm.addControlFlowStep("branch")
+        assertEquals(2, vm.steps.size)
+        val branchStep = vm.steps[1]
+        assertEquals("branch", branchStep.kind)
+        assertEquals(1, branchStep.branchThen.size)
+        assertTrue(vm.selectedStepId == branchStep.id)
+
+        vm.addControlFlowStep("loop")
+        val loopStep = vm.steps[2]
+        assertEquals("loop", loopStep.kind)
+        assertEquals(1, loopStep.loopBody.size)
+    }
+
+    @Test
+    fun addSubStepAppendsToTheChosenArm() {
+        val vm = PipelineBuilderViewModel()
+        vm.addControlFlowStep("branch")
+        val stepId = vm.steps[1].id
+
+        vm.addSubStep(stepId, PipelineSubStepArm.THEN)
+        assertEquals(2, vm.steps[1].branchThen.size)
+        assertEquals(0, vm.steps[1].branchElse.size)
+
+        vm.addSubStep(stepId, PipelineSubStepArm.ELSE_ARM)
+        assertEquals(1, vm.steps[1].branchElse.size)
+    }
+
+    @Test
+    fun removeSubStepRemovesFromTheChosenArmOnly() {
+        val vm = PipelineBuilderViewModel()
+        vm.addControlFlowStep("branch")
+        val stepId = vm.steps[1].id
+        vm.addSubStep(stepId, PipelineSubStepArm.THEN)
+        val subId = vm.steps[1].branchThen[0].id
+
+        vm.removeSubStep(stepId, PipelineSubStepArm.THEN, subId)
+        assertEquals(1, vm.steps[1].branchThen.size)
+    }
+
+    @Test
+    fun removeSubStepNeverEmptiesALoopBody() {
+        val vm = PipelineBuilderViewModel()
+        vm.addControlFlowStep("loop")
+        val stepId = vm.steps[1].id
+        val onlyBodyId = vm.steps[1].loopBody[0].id
+
+        // A loop body must keep >= 1 step (broker rejects an empty body).
+        vm.removeSubStep(stepId, PipelineSubStepArm.BODY, onlyBodyId)
+        assertEquals(1, vm.steps[1].loopBody.size)
+    }
+
+    @Test
+    fun moveSubStepSwapsAdjacentEntries() {
+        val vm = PipelineBuilderViewModel()
+        vm.addControlFlowStep("loop")
+        val stepId = vm.steps[1].id
+        vm.addSubStep(stepId, PipelineSubStepArm.BODY)
+        val firstId = vm.steps[1].loopBody[0].id
+        val secondId = vm.steps[1].loopBody[1].id
+
+        vm.moveSubStep(stepId, PipelineSubStepArm.BODY, secondId, -1)
+        assertEquals(secondId, vm.steps[1].loopBody[0].id)
+        assertEquals(firstId, vm.steps[1].loopBody[1].id)
+
+        // Past either end is a no-op.
+        vm.moveSubStep(stepId, PipelineSubStepArm.BODY, secondId, -1)
+        assertEquals(secondId, vm.steps[1].loopBody[0].id)
+    }
+
+    @Test
+    fun createRequestJsonRoundTripsBranchAndLoopBlocks() {
+        val branchStep = PipelineStepDraft(kind = "branch", branchConditionValue = "APPROVED")
+        val loopStep = PipelineStepDraft(kind = "loop", loopMaxIterations = 2)
+        val vm = PipelineBuilderViewModel(listOf(branchStep, loopStep))
+
+        val json = vm.createRequestJson("T", "task", "", "main")
+        val steps = json.getJSONArray("steps")
+        val branchJson = steps.getJSONObject(0)
+        assertEquals("branch", branchJson.getString("kind"))
+        assertEquals("APPROVED", branchJson.getJSONObject("branch").getJSONObject("condition").getString("value"))
+        val loopJson = steps.getJSONObject(1)
+        assertEquals("loop", loopJson.getString("kind"))
+        assertEquals(2, loopJson.getJSONObject("loop").getInt("max_iterations"))
+    }
 }

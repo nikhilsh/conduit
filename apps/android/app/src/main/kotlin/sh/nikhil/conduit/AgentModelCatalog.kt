@@ -61,6 +61,14 @@ data class AgentDescriptor(
     val supportsEffort: Boolean,
     /** Agent supports plan-mode (read-only planning posture). */
     val supportsPlanMode: Boolean,
+    /**
+     * Agent honors a per-session `model` override (SpawnOverride.Model,
+     * broker PR #900) -- PLAN-HARNESS-BUILDER Phase 3 §4.3/§4.5. Default
+     * false so an old broker that omits the key keeps the pre-#900
+     * gemini-hidden behavior (§8.3) rather than silently showing a no-op
+     * control. Mirror of iOS `AgentDescriptorSupports.modelOverride`.
+     */
+    val supportsModelOverride: Boolean = false,
     /** Agent has an account-level usage/limits endpoint. */
     val supportsUsage: Boolean,
     /**
@@ -94,6 +102,7 @@ internal val staticAgentDescriptors: Map<String, AgentDescriptor> = mapOf(
         supportsAskUserQuestion = true,
         supportsEffort = true,
         supportsPlanMode = true,
+        supportsModelOverride = true,
         supportsUsage = true,
         supportsClear = true,
     ),
@@ -104,6 +113,7 @@ internal val staticAgentDescriptors: Map<String, AgentDescriptor> = mapOf(
         supportsAskUserQuestion = false,
         supportsEffort = true,
         supportsPlanMode = true,
+        supportsModelOverride = true,
         supportsUsage = true,
         supportsSteer = true,
     ),
@@ -127,6 +137,7 @@ internal fun parseAgentDescriptors(raw: String): Map<String, AgentDescriptor> {
             supportsAskUserQuestion = supports.optBoolean("ask_user_question", false),
             supportsEffort = supports.optBoolean("effort", false),
             supportsPlanMode = supports.optBoolean("plan_mode", false),
+            supportsModelOverride = supports.optBoolean("model_override", false),
             supportsUsage = supports.optBoolean("usage", false),
             supportsSteer = supports.optBoolean("steer", false),
             // Nullable: preserve "absent" (old broker) as null so the /clear

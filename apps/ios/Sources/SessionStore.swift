@@ -408,6 +408,12 @@ struct AgentDescriptorSupports: Decodable, Equatable {
     var effort: Bool
     /// Whether plan-mode (`--permission-mode plan`) is available.
     var planMode: Bool
+    /// Whether a per-session `model` override (SpawnOverride.Model) is
+    /// actually honored for this agent (broker PR #900). Default false so
+    /// an old broker that omits the key keeps the pre-#900 gemini-hidden
+    /// behavior (PLAN-HARNESS-BUILDER §8.3/§4.3) rather than silently
+    /// showing a no-op control.
+    var modelOverride: Bool
     /// Whether the account-usage / limits card has a data source.
     var usage: Bool
     /// Whether `turn/steer` injection is available (codex app-server only).
@@ -422,6 +428,7 @@ struct AgentDescriptorSupports: Decodable, Equatable {
         case askUserQuestion = "ask_user_question"
         case effort
         case planMode = "plan_mode"
+        case modelOverride = "model_override"
         case usage
         case steer
     }
@@ -432,6 +439,7 @@ struct AgentDescriptorSupports: Decodable, Equatable {
         askUserQuestion: Bool = false,
         effort: Bool = true,
         planMode: Bool = false,
+        modelOverride: Bool = false,
         usage: Bool = false,
         steer: Bool = false
     ) {
@@ -440,6 +448,7 @@ struct AgentDescriptorSupports: Decodable, Equatable {
         self.askUserQuestion = askUserQuestion
         self.effort = effort
         self.planMode = planMode
+        self.modelOverride = modelOverride
         self.usage = usage
         self.steer = steer
     }
@@ -451,6 +460,7 @@ struct AgentDescriptorSupports: Decodable, Equatable {
         askUserQuestion = try c.decodeIfPresent(Bool.self, forKey: .askUserQuestion) ?? false
         effort          = try c.decodeIfPresent(Bool.self, forKey: .effort)          ?? true
         planMode        = try c.decodeIfPresent(Bool.self, forKey: .planMode)        ?? false
+        modelOverride   = try c.decodeIfPresent(Bool.self, forKey: .modelOverride)   ?? false
         usage           = try c.decodeIfPresent(Bool.self, forKey: .usage)           ?? false
         steer           = try c.decodeIfPresent(Bool.self, forKey: .steer)           ?? false
     }
@@ -2191,6 +2201,19 @@ final class SessionStore {
     /// the Home active-pipeline affordance, and `PipelineListView`.
     private(set) var pipelinesEnabled: Bool = false
 
+    /// Whether the broker supports If/Else branch blocks
+    /// (`GET /api/capabilities` -> `"pipeline_branch": true`,
+    /// PLAN-HARNESS-BUILDER Phase 3). False on old brokers; the If/Else
+    /// builder control hides when false and a stale-cached branch template
+    /// still degrades gracefully server-side (400, caught by the submit path).
+    private(set) var pipelineBranch: Bool = false
+
+    /// Whether the broker supports bounded Loop-until blocks
+    /// (`GET /api/capabilities` -> `"pipeline_loop": true`,
+    /// PLAN-HARNESS-BUILDER Phase 3). False on old brokers; the Loop
+    /// builder control hides when false.
+    private(set) var pipelineLoop: Bool = false
+
     /// Single-flight + at-most-once-per-(box,version) guard for the
     /// post-connect broker auto-update (Fix: broker auto-update on reconnect).
     /// `reconnect()`/`selectSavedServer()` short-circuit to a WS-only bounce
@@ -2232,6 +2255,8 @@ final class SessionStore {
             let pipeline_fanout: Bool?
             let pipeline_block_config: Bool?
             let pipeline: Bool?
+            let pipeline_branch: Bool?
+            let pipeline_loop: Bool?
         }
         Telemetry.breadcrumb(
             "model_catalog", "refresh start",
@@ -2284,6 +2309,10 @@ final class SessionStore {
         pipelineBlockConfig = caps.pipeline_block_config ?? false
         // pipeline: pipelines exist at all (broker PR #891); default false on old brokers.
         pipelinesEnabled = caps.pipeline ?? false
+        // pipeline_branch / pipeline_loop: If/Else + Loop blocks
+        // (PLAN-HARNESS-BUILDER Phase 3); default false on old brokers.
+        pipelineBranch = caps.pipeline_branch ?? false
+        pipelineLoop = caps.pipeline_loop ?? false
 
         // WS-H.1: parse the readiness block; nil on old brokers → consumers treat as unknown.
         if let r = caps.readiness {

@@ -131,4 +131,93 @@ struct ConduitPipelineBuilderViewModelTests {
         #expect(vm.steps[0].instructions == "focus on the API")
         #expect(vm.selectedStepID == vm.steps[0].id)
     }
+
+    // MARK: - PLAN-HARNESS-BUILDER Phase 3: sub-stack add/remove/move
+
+    @Test func addControlFlowStepSeedsDefaultSubStack() {
+        let vm = ConduitUI.PipelineBuilderViewModel()
+        vm.addControlFlowStep(kind: "branch")
+        #expect(vm.steps.count == 2)
+        let branchStep = vm.steps[1]
+        #expect(branchStep.kind == "branch")
+        #expect(branchStep.branchThen.count == 1)
+        #expect(vm.selectedStepID == branchStep.id)
+
+        vm.addControlFlowStep(kind: "loop")
+        let loopStep = vm.steps[2]
+        #expect(loopStep.kind == "loop")
+        #expect(loopStep.loopBody.count == 1)
+    }
+
+    @Test func addSubStepAppendsToTheChosenArm() {
+        let vm = ConduitUI.PipelineBuilderViewModel()
+        vm.addControlFlowStep(kind: "branch")
+        let stepID = vm.steps[1].id
+
+        vm.addSubStep(stepID: stepID, arm: .then)
+        #expect(vm.steps[1].branchThen.count == 2)
+        #expect(vm.steps[1].branchElse.count == 0)
+
+        vm.addSubStep(stepID: stepID, arm: .elseArm)
+        #expect(vm.steps[1].branchElse.count == 1)
+    }
+
+    @Test func removeSubStepRemovesFromTheChosenArmOnly() {
+        let vm = ConduitUI.PipelineBuilderViewModel()
+        vm.addControlFlowStep(kind: "branch")
+        let stepID = vm.steps[1].id
+        vm.addSubStep(stepID: stepID, arm: .then)
+        let subID = vm.steps[1].branchThen[0].id
+
+        vm.removeSubStep(stepID: stepID, arm: .then, subStepID: subID)
+        #expect(vm.steps[1].branchThen.count == 1)
+    }
+
+    @Test func removeSubStepNeverEmptiesALoopBody() {
+        let vm = ConduitUI.PipelineBuilderViewModel()
+        vm.addControlFlowStep(kind: "loop")
+        let stepID = vm.steps[1].id
+        let onlyBodyID = vm.steps[1].loopBody[0].id
+
+        // A loop body must keep >= 1 step (broker rejects an empty body).
+        vm.removeSubStep(stepID: stepID, arm: .body, subStepID: onlyBodyID)
+        #expect(vm.steps[1].loopBody.count == 1)
+    }
+
+    @Test func moveSubStepSwapsAdjacentEntries() {
+        let vm = ConduitUI.PipelineBuilderViewModel()
+        vm.addControlFlowStep(kind: "loop")
+        let stepID = vm.steps[1].id
+        vm.addSubStep(stepID: stepID, arm: .body)
+        var second = vm.steps[1].loopBody[1]
+        second.agentType = "codex"
+        vm.updateSubStep(stepID: stepID, arm: .body, subStep: second)
+        let firstID = vm.steps[1].loopBody[0].id
+        let secondID = vm.steps[1].loopBody[1].id
+
+        vm.moveSubStep(stepID: stepID, arm: .body, subStepID: secondID, direction: -1)
+        #expect(vm.steps[1].loopBody[0].id == secondID)
+        #expect(vm.steps[1].loopBody[1].id == firstID)
+
+        // Past either end is a no-op.
+        vm.moveSubStep(stepID: stepID, arm: .body, subStepID: secondID, direction: -1)
+        #expect(vm.steps[1].loopBody[0].id == secondID)
+    }
+
+    @Test func createRequestRoundTripsBranchAndLoopBlocks() throws {
+        var branchStep = ConduitUI.PipelineStep()
+        branchStep.kind = "branch"
+        branchStep.branchConditionValue = "APPROVED"
+        var loopStep = ConduitUI.PipelineStep()
+        loopStep.kind = "loop"
+        loopStep.loopMaxIterations = 2
+
+        let vm = ConduitUI.PipelineBuilderViewModel(steps: [branchStep, loopStep])
+        let req = vm.createRequest(title: "T", task: "task", cwd: "", base: "main")
+
+        #expect(req.steps[0].kind == "branch")
+        #expect(req.steps[0].branch?.condition.value == "APPROVED")
+        #expect(req.steps[1].kind == "loop")
+        #expect(req.steps[1].loop?.max_iterations == 2)
+    }
 }
