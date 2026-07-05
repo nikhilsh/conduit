@@ -162,6 +162,19 @@ type capabilitiesResponse struct {
 		// error (the drift this flag exists to prevent).
 		PipelineBlockConfig bool `json:"pipeline_block_config"`
 	} `json:"features"`
+	// Pipeline flags mirrored at the JSON ROOT. Fielded app builds (through
+	// v0.0.214) decode all pipeline_* capability flags from the root — not
+	// from features.* where they actually lived — so every flag silently read
+	// false on device and the gate-preview/resume/templates/fanout/block-config
+	// surfaces never appeared. features.* stays canonical; these mirrors exist
+	// so already-installed apps light up without a reinstall. Remove only after
+	// the apps read features.* AND those builds have aged out.
+	TopPipeline            bool `json:"pipeline"`
+	TopPipelineGatePreview bool `json:"pipeline_gate_preview"`
+	TopPipelineResume      bool `json:"pipeline_resume"`
+	TopPipelineTemplates   bool `json:"pipeline_templates"`
+	TopPipelineFanout      bool `json:"pipeline_fanout"`
+	TopPipelineBlockConfig bool `json:"pipeline_block_config"`
 	// Models is the per-assistant model+effort catalog discovered live from
 	// the agent CLIs (claude control-protocol initialize, codex app-server
 	// model/list). Omitted while discovery hasn't completed (or on older
@@ -222,6 +235,14 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.PipelineTemplates = true   // /api/pipeline-templates CRUD
 	resp.Features.PipelineFanout = true      // fanout steps + POST /api/pipeline/{id}/pick
 	resp.Features.PipelineBlockConfig = true // per-block model/effort/permission_mode/instructions
+	// Root-level mirrors for fielded apps that decode pipeline_* from the JSON
+	// root (see the struct comment).
+	resp.TopPipeline = true
+	resp.TopPipelineGatePreview = true
+	resp.TopPipelineResume = true
+	resp.TopPipelineTemplates = true
+	resp.TopPipelineFanout = true
+	resp.TopPipelineBlockConfig = true
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
 	// Pass the pushed-credential store as a nil INTERFACE when unset:

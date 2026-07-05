@@ -436,12 +436,25 @@ func TestCapabilitiesPipelineBlockConfig(t *testing.T) {
 		Features struct {
 			PipelineBlockConfig bool `json:"pipeline_block_config"`
 		} `json:"features"`
+		// Root-level mirrors: fielded apps (through v0.0.214) decode the
+		// pipeline_* flags from the JSON root, not features.* — both
+		// locations must advertise true.
+		Pipeline            bool `json:"pipeline"`
+		PipelineGatePreview bool `json:"pipeline_gate_preview"`
+		PipelineResume      bool `json:"pipeline_resume"`
+		PipelineTemplates   bool `json:"pipeline_templates"`
+		PipelineFanout      bool `json:"pipeline_fanout"`
+		PipelineBlockConfig bool `json:"pipeline_block_config"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode capabilities: %v", err)
 	}
 	if !body.Features.PipelineBlockConfig {
 		t.Error("features.pipeline_block_config is false; want true")
+	}
+	if !body.Pipeline || !body.PipelineGatePreview || !body.PipelineResume ||
+		!body.PipelineTemplates || !body.PipelineFanout || !body.PipelineBlockConfig {
+		t.Errorf("root-level pipeline flag mirrors missing: %+v", body)
 	}
 }
 
