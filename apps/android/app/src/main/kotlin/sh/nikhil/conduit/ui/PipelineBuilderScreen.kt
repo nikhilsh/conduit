@@ -1,6 +1,8 @@
 package sh.nikhil.conduit.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -9,6 +11,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -17,14 +21,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PanTool
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -42,16 +47,20 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -64,11 +73,19 @@ import sh.nikhil.conduit.AgentDescriptor
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.descriptorFor
+import sh.nikhil.conduit.ui.components.ConduitCard
+import sh.nikhil.conduit.ui.components.ConduitChip
+import sh.nikhil.conduit.ui.components.PipelineTopologyItem
+import sh.nikhil.conduit.ui.components.PipelineTopologyRail
 import java.net.HttpURLConnection
 import java.net.URL
 
 /** Mutable builder state for one pipeline step. */
 data class PipelineStepDraft(
+    // Stable identity across recomposition/reorder (PLAN-HARNESS-BUILDER
+    // Phase 2, mirrors iOS `PipelineStep.id`); NOT part of the wire shape --
+    // stepDraftToJson never reads it.
+    val id: String = java.util.UUID.randomUUID().toString(),
     val agentType: String = "claude",
     val role: String = "engineer",
     val promptTemplate: String = "",
@@ -240,6 +257,17 @@ private fun logBlockConfigTelemetry(steps: List<PipelineStepDraft>) {
  * a list of steps, then POSTs to /api/pipeline and navigates to PipelineMonitorScreen.
  */
 @OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Pipeline builder screen. Collects a title, task, cwd, base branch, and
+ * a list of steps, then POSTs to /api/pipeline and navigates to PipelineMonitorScreen.
+ *
+ * PLAN-HARNESS-BUILDER Phase 2 (docs/PLAN-HARNESS-BUILDER.md §3): the
+ * Shortcuts-style visual builder. Phone renders a stacked block-card list +
+ * a config dialog per tapped block; a true tablet (sw600dp AND width
+ * >=840dp, matching `AppRoot`'s gate) renders a two-pane block-list rail +
+ * inline inspector. Both layouts read the SAME `PipelineBuilderViewModel`.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PipelineBuilderScreen(
     store: SessionStore,
@@ -265,7 +293,12 @@ fun PipelineBuilderScreen(
     var cwd by remember { mutableStateOf(sessions.firstOrNull()?.cwd ?: "") }
     var baseBranch by remember { mutableStateOf("main") }
 
-    val steps = remember { mutableStateListOf(PipelineStepDraft()) }
+    // PLAN-HARNESS-BUILDER Phase 2: steps + selection live in a shared view
+    // model so the phone (stacked list + dialog) and tablet (two-pane rail +
+    // inspector) layouts read the same state.
+    val viewModel = remember { PipelineBuilderViewModel() }
+    // Phone only: which step's config dialog is showing (null = none).
+    var configSheetStepId by remember { mutableStateOf<String?>(null) }
 
     var isCreating by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -381,9 +414,8 @@ fun PipelineBuilderScreen(
         )
         title = tmpl.title
         task = tmpl.task
-        steps.clear()
-        steps.addAll(tmpl.steps)
-        if (steps.isEmpty()) steps.add(PipelineStepDraft())
+        viewModel.applyTemplate(tmpl)
+        configSheetStepId = null
     }
 
     fun saveAsTemplate() {
@@ -392,18 +424,11 @@ fun PipelineBuilderScreen(
         Telemetry.breadcrumb(
             "pipeline",
             "template_saved",
-            mapOf("title" to title.trim(), "steps" to steps.size.toString()),
+            mapOf("title" to title.trim(), "steps" to viewModel.steps.size.toString()),
         )
         scope.launch {
-            logBlockConfigTelemetry(steps)
-            val stepsJson = JSONArray().apply {
-                steps.forEach { step -> put(stepDraftToJson(step)) }
-            }
-            val body = JSONObject().apply {
-                put("title", title.trim())
-                put("task", task.trim())
-                put("steps", stepsJson)
-            }
+            logBlockConfigTelemetry(viewModel.steps)
+            val body = viewModel.templateSaveRequestJson(title.trim(), task.trim())
             val result = withContext(Dispatchers.IO) {
                 postEndpointBuilder("/api/pipeline-templates", body)
             }
@@ -450,20 +475,11 @@ fun PipelineBuilderScreen(
         Telemetry.breadcrumb(
             "pipeline",
             "create_start",
-            mapOf("step_count" to steps.size.toString()),
+            mapOf("step_count" to viewModel.steps.size.toString()),
         )
         scope.launch {
-            logBlockConfigTelemetry(steps)
-            val stepsJson = JSONArray().apply {
-                steps.forEach { step -> put(stepDraftToJson(step)) }
-            }
-            val body = JSONObject().apply {
-                put("title", title.trim())
-                put("task", task.trim())
-                put("cwd", cwd.trim())
-                put("base", baseBranch.trim())
-                put("steps", stepsJson)
-            }
+            logBlockConfigTelemetry(viewModel.steps)
+            val body = viewModel.createRequestJson(title.trim(), task.trim(), cwd.trim(), baseBranch.trim())
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val conn = (URL("$base/api/pipeline").openConnection() as HttpURLConnection).apply {
@@ -564,168 +580,51 @@ fun PipelineBuilderScreen(
             )
         },
     ) { paddingValues ->
-        LazyColumn(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
-                .navigationBarsPadding(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                horizontal = 16.dp,
-                vertical = 14.dp,
-            ),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .padding(paddingValues),
         ) {
-            // Pipeline fields
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedTextField(
-                        value = title,
-                        onValueChange = { title = it },
-                        label = { Text("Title") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = task,
-                        onValueChange = { task = it },
-                        label = { Text("Task") },
-                        minLines = 3,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = cwd,
-                        onValueChange = { cwd = it },
-                        label = { Text("Working directory (CWD)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = baseBranch,
-                        onValueChange = { baseBranch = it },
-                        label = { Text("Base branch") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
+            // Gate on a TRUE tablet: smallest-width >= 600dp AND maxWidth >=
+            // 840dp -- mirrors `AppRoot`'s gate (a phone in landscape can
+            // exceed 840dp but its sw is ~360-480dp, so it stays phone).
+            val isTabletForm = androidx.compose.ui.platform.LocalConfiguration.current.smallestScreenWidthDp >= 600 &&
+                maxWidth >= 840.dp
 
-            // Steps header
-            item {
-                Text(
-                    "STEPS",
-                    fontFamily = neon.mono,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 11.sp,
-                    color = neon.textDim,
+            val commonProps = PipelineBuilderCommonProps(
+                neon = neon,
+                title = title,
+                onTitleChange = { title = it },
+                task = task,
+                onTaskChange = { task = it },
+                cwd = cwd,
+                onCwdChange = { cwd = it },
+                baseBranch = baseBranch,
+                onBaseBranchChange = { baseBranch = it },
+                viewModel = viewModel,
+                showFanout = pipelineFanout,
+                showBlockConfig = pipelineBlockConfig,
+                showTemplates = pipelineTemplates,
+                agentOptions = agentOptions,
+                agentDescriptors = agentDescriptors,
+                modelCatalogMap = modelCatalogMap,
+                canStart = canStart,
+                isCreating = isCreating,
+                isSavingTemplate = isSavingTemplate,
+                onStart = ::postPipeline,
+                onSaveTemplate = ::saveAsTemplate,
+            )
+
+            if (isTabletForm) {
+                PipelineBuilderTabletBody(commonProps)
+            } else {
+                PipelineBuilderPhoneBody(
+                    props = commonProps,
+                    configSheetStepId = configSheetStepId,
+                    onOpenConfig = { configSheetStepId = it },
+                    onCloseConfig = { configSheetStepId = null },
                 )
             }
-
-            // Step cards
-            itemsIndexed(steps) { index, step ->
-                StepCard(
-                    index = index,
-                    step = step,
-                    neon = neon,
-                    canDelete = steps.size > 1,
-                    showFanout = pipelineFanout,
-                    showBlockConfig = pipelineBlockConfig,
-                    agentOptions = agentOptions,
-                    agentDescriptors = agentDescriptors,
-                    modelCatalogMap = modelCatalogMap,
-                    onUpdate = { updated -> steps[index] = updated },
-                    onDelete = { steps.removeAt(index) },
-                )
-            }
-
-            // Add step button
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .border(1.dp, neon.border, RoundedCornerShape(12.dp))
-                        .clickable { steps.add(PipelineStepDraft()) }
-                        .padding(vertical = 12.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        Icons.Default.Add,
-                        contentDescription = "Add step",
-                        tint = neon.accent,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        "Add step",
-                        fontFamily = neon.sans,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp,
-                        color = neon.accent,
-                    )
-                }
-            }
-
-            // Save as template button (only when broker supports pipeline_templates)
-            if (pipelineTemplates) {
-                item {
-                    val enabled = canStart && !isSavingTemplate
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(neon.accent.copy(alpha = 0.10f))
-                            .border(1.dp, neon.accent.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
-                            .clickable(enabled = enabled, onClick = ::saveAsTemplate)
-                            .padding(vertical = 11.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            if (isSavingTemplate) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(14.dp),
-                                    color = neon.accent,
-                                    strokeWidth = 2.dp,
-                                )
-                            }
-                            Text(
-                                if (isSavingTemplate) "Saving..." else "Save as template",
-                                fontFamily = neon.sans,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 13.sp,
-                                color = if (enabled) neon.accent else neon.textFaint,
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Start pipeline button
-            item {
-                val startEnabled = canStart && !isCreating
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(if (startEnabled) neon.accent else neon.surface2)
-                        .clickable(enabled = startEnabled, onClick = ::postPipeline)
-                        .padding(vertical = 14.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        if (isCreating) "Starting..." else "Start pipeline",
-                        fontFamily = neon.sans,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        color = if (startEnabled) neon.accentText else neon.textFaint,
-                    )
-                }
-            }
-
-            item { Spacer(Modifier.height(8.dp)) }
         }
     }
 
@@ -867,203 +766,489 @@ fun PipelineBuilderScreen(
     }
 }
 
+/**
+ * Shared read-only + callback bundle passed to both the phone and tablet
+ * layout composables so they stay in sync with a single source (avoids two
+ * screens drifting on which props they read).
+ */
+private data class PipelineBuilderCommonProps(
+    val neon: NeonTheme,
+    val title: String,
+    val onTitleChange: (String) -> Unit,
+    val task: String,
+    val onTaskChange: (String) -> Unit,
+    val cwd: String,
+    val onCwdChange: (String) -> Unit,
+    val baseBranch: String,
+    val onBaseBranchChange: (String) -> Unit,
+    val viewModel: PipelineBuilderViewModel,
+    val showFanout: Boolean,
+    val showBlockConfig: Boolean,
+    val showTemplates: Boolean,
+    val agentOptions: List<String>,
+    val agentDescriptors: Map<String, AgentDescriptor>,
+    val modelCatalogMap: Map<String, List<SessionStore.AgentModel>>,
+    val canStart: Boolean,
+    val isCreating: Boolean,
+    val isSavingTemplate: Boolean,
+    val onStart: () -> Unit,
+    val onSaveTemplate: () -> Unit,
+)
+
 @Composable
-private fun StepCard(
-    index: Int,
-    step: PipelineStepDraft,
-    neon: NeonTheme,
-    canDelete: Boolean,
-    showFanout: Boolean = false,
-    showBlockConfig: Boolean = false,
-    agentOptions: List<String> = STATIC_AGENT_TYPES,
-    agentDescriptors: Map<String, AgentDescriptor> = emptyMap(),
-    modelCatalogMap: Map<String, List<SessionStore.AgentModel>> = emptyMap(),
-    onUpdate: (PipelineStepDraft) -> Unit,
-    onDelete: () -> Unit,
-) {
+private fun PipelineMetadataFields(props: PipelineBuilderCommonProps) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        OutlinedTextField(
+            value = props.title,
+            onValueChange = props.onTitleChange,
+            label = { Text("Title") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = props.task,
+            onValueChange = props.onTaskChange,
+            label = { Text("Task") },
+            minLines = 3,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = props.cwd,
+            onValueChange = props.onCwdChange,
+            label = { Text("Working directory (CWD)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = props.baseBranch,
+            onValueChange = props.onBaseBranchChange,
+            label = { Text("Base branch") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun AddStepRow(neon: NeonTheme, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, neon.border, RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Default.Add,
+            contentDescription = "Add step",
+            tint = neon.accent,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            "Add step",
+            fontFamily = neon.sans,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 14.sp,
+            color = neon.accent,
+        )
+    }
+}
+
+@Composable
+private fun SaveTemplateButton(neon: NeonTheme, enabled: Boolean, isSaving: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
+            .clip(RoundedCornerShape(12.dp))
+            .background(neon.accent.copy(alpha = 0.10f))
+            .border(1.dp, neon.accent.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 11.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Step header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AgentAvatar(assistant = step.agentType, size = 28.dp)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "Step ${index + 1}",
-                    fontFamily = neon.mono,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
-                    color = neon.text,
-                    modifier = Modifier.weight(1f),
-                )
-                if (canDelete) {
-                    IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = "Delete step",
-                            tint = neon.red,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-                }
-            }
-
-            // Agent type dropdown
-            var agentExpanded by remember { mutableStateOf(false) }
-            Box {
-                OutlinedTextField(
-                    value = step.agentType,
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Agent type") },
-                    modifier = Modifier.fillMaxWidth().clickable { agentExpanded = true },
-                    enabled = false,
-                )
-                DropdownMenu(
-                    expanded = agentExpanded,
-                    onDismissRequest = { agentExpanded = false },
-                ) {
-                    agentOptions.forEach { agent ->
-                        DropdownMenuItem(
-                            text = { Text(agent, fontFamily = neon.mono) },
-                            onClick = {
-                                onUpdate(step.copy(agentType = agent))
-                                agentExpanded = false
-                            },
-                        )
-                    }
-                }
-            }
-
-            // Per-block config (model / effort / permission mode /
-            // instructions), gated on pipeline_block_config so an old
-            // broker never sees controls it would silently drop.
-            if (showBlockConfig) {
-                BlockConfigSection(
-                    agentType = step.agentType,
-                    model = step.model,
-                    reasoningEffort = step.reasoningEffort,
-                    permissionMode = step.permissionMode,
-                    instructions = step.instructions,
-                    neon = neon,
-                    descriptor = descriptorFor(step.agentType, agentDescriptors),
-                    catalog = modelCatalogMap[step.agentType],
-                    onModelChange = { onUpdate(step.copy(model = it, reasoningEffort = "")) },
-                    onEffortChange = { onUpdate(step.copy(reasoningEffort = it)) },
-                    onModeChange = { onUpdate(step.copy(permissionMode = it)) },
-                    onInstructionsChange = { onUpdate(step.copy(instructions = it)) },
+            if (isSaving) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    color = neon.accent,
+                    strokeWidth = 2.dp,
                 )
             }
-
-            // Role preset dropdown
-            var roleExpanded by remember { mutableStateOf(false) }
-            Box {
-                OutlinedTextField(
-                    value = step.role,
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Role preset") },
-                    modifier = Modifier.fillMaxWidth().clickable { roleExpanded = true },
-                    enabled = false,
-                )
-                DropdownMenu(
-                    expanded = roleExpanded,
-                    onDismissRequest = { roleExpanded = false },
-                ) {
-                    ROLE_PRESETS.forEach { role ->
-                        DropdownMenuItem(
-                            text = { Text(role, fontFamily = neon.sans) },
-                            onClick = {
-                                val newPrompt = if (role != "custom") promptForRole(role) else step.promptTemplate
-                                onUpdate(step.copy(role = role, promptTemplate = newPrompt))
-                                roleExpanded = false
-                            },
-                        )
-                    }
-                }
-            }
-
-            // Prompt template
-            OutlinedTextField(
-                value = step.promptTemplate,
-                onValueChange = { onUpdate(step.copy(promptTemplate = it)) },
-                label = { Text("Prompt template") },
-                minLines = 2,
-                modifier = Modifier.fillMaxWidth(),
+            Text(
+                if (isSaving) "Saving..." else "Save as template",
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+                color = if (enabled) neon.accent else neon.textFaint,
             )
+        }
+    }
+}
 
-            // Input from prev chips
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    "Input from previous step",
-                    fontFamily = neon.mono,
-                    fontSize = 11.sp,
-                    color = neon.textDim,
+@Composable
+private fun StartPipelineButton(neon: NeonTheme, enabled: Boolean, isCreating: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (enabled) neon.accent else neon.surface2)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 14.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            if (isCreating) "Starting..." else "Start pipeline",
+            fontFamily = neon.sans,
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp,
+            color = if (enabled) neon.accentText else neon.textFaint,
+        )
+    }
+}
+
+// MARK: Phone layout -- stacked block-card list + config dialog
+
+@Composable
+private fun PipelineBuilderPhoneBody(
+    props: PipelineBuilderCommonProps,
+    configSheetStepId: String?,
+    onOpenConfig: (String) -> Unit,
+    onCloseConfig: () -> Unit,
+) {
+    val neon = props.neon
+    val vm = props.viewModel
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .navigationBarsPadding(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item { PipelineMetadataFields(props) }
+
+        item {
+            Text(
+                "STEPS",
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp,
+                color = neon.textDim,
+            )
+        }
+
+        if (vm.steps.size > 1) {
+            item {
+                PipelineTopologyRail(
+                    items = vm.topologyItems(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .neonCardSurface(neon = neon, shape = RoundedCornerShape(12.dp), fill = neon.surface2.copy(alpha = 0.5f))
+                        .padding(10.dp),
+                    onSelect = onOpenConfig,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    INPUT_OPTIONS.forEach { option ->
-                        val selected = step.inputFromPrev == option
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(if (selected) neon.accent else neon.surface2)
-                                .border(
-                                    1.dp,
-                                    if (selected) neon.accent else neon.border,
-                                    RoundedCornerShape(50),
-                                )
-                                .clickable { onUpdate(step.copy(inputFromPrev = option)) }
-                                .padding(horizontal = 10.dp, vertical = 5.dp),
+            }
+        }
+
+        item {
+            ReorderableBlockStack(
+                steps = vm.steps,
+                selectedStepId = null,
+                neon = neon,
+                modelCatalogMap = props.modelCatalogMap,
+                onSelect = onOpenConfig,
+                onDelete = { vm.removeStep(it) },
+                onMove = { from, to -> vm.moveStep(from, to) },
+                canDelete = vm.canDeleteStep,
+            )
+        }
+
+        item { AddStepRow(neon = neon, onClick = { vm.addStep() }) }
+
+        if (props.showTemplates) {
+            item {
+                SaveTemplateButton(
+                    neon = neon,
+                    enabled = props.canStart && !props.isSavingTemplate,
+                    isSaving = props.isSavingTemplate,
+                    onClick = props.onSaveTemplate,
+                )
+            }
+        }
+
+        item {
+            StartPipelineButton(
+                neon = neon,
+                enabled = props.canStart && !props.isCreating,
+                isCreating = props.isCreating,
+                onClick = props.onStart,
+            )
+        }
+
+        item { Spacer(Modifier.height(8.dp)) }
+    }
+
+    if (configSheetStepId != null) {
+        val index = vm.steps.indexOfFirst { it.id == configSheetStepId }
+        if (index >= 0) {
+            val step = vm.steps[index]
+            Dialog(
+                onDismissRequest = onCloseConfig,
+                properties = DialogProperties(usePlatformDefaultWidth = false),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(neon.bg),
+                ) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                option,
-                                fontFamily = neon.mono,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                fontSize = 11.sp,
-                                color = if (selected) neon.accentText else neon.textDim,
+                                "Step ${index + 1}",
+                                fontFamily = neon.sans,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = neon.text,
+                                modifier = Modifier.weight(1f),
                             )
+                            if (vm.canDeleteStep) {
+                                IconButton(onClick = {
+                                    onCloseConfig()
+                                    vm.removeStep(step.id)
+                                }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Delete step", tint = neon.red)
+                                }
+                            }
+                            TextButton(onClick = onCloseConfig) {
+                                Text("Done", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, color = neon.accent)
+                            }
+                        }
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp),
+                        ) {
+                            StepConfigEditor(
+                                step = step,
+                                neon = neon,
+                                showFanout = props.showFanout,
+                                showBlockConfig = props.showBlockConfig,
+                                agentOptions = props.agentOptions,
+                                agentDescriptors = props.agentDescriptors,
+                                modelCatalogMap = props.modelCatalogMap,
+                                onUpdate = { vm.updateStep(step.id, it) },
+                            )
+                            Spacer(Modifier.height(24.dp))
                         }
                     }
                 }
             }
+        }
+    }
+}
 
-            // Gate after switch
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "Gate after (require approval)",
-                    fontFamily = neon.sans,
-                    fontSize = 13.sp,
-                    color = neon.text,
-                    modifier = Modifier.weight(1f),
-                )
-                Switch(
-                    checked = step.gateAfter,
-                    onCheckedChange = { onUpdate(step.copy(gateAfter = it)) },
+// MARK: Tablet layout -- block-list rail + inspector pane
+
+@Composable
+private fun PipelineBuilderTabletBody(props: PipelineBuilderCommonProps) {
+    val neon = props.neon
+    val vm = props.viewModel
+    Row(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .width(380.dp)
+                .fillMaxHeight()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            PipelineMetadataFields(props)
+
+            Text(
+                "STEPS",
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp,
+                color = neon.textDim,
+            )
+
+            if (vm.steps.size > 1) {
+                PipelineTopologyRail(
+                    items = vm.topologyItems(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .neonCardSurface(neon = neon, shape = RoundedCornerShape(12.dp), fill = neon.surface2.copy(alpha = 0.5f))
+                        .padding(10.dp),
+                    onSelect = { vm.selectedStepId = it },
                 )
             }
 
-            // Fanout section (gated on pipeline_fanout capability)
-            if (showFanout) {
-                FanoutStepSection(
-                    step = step,
+            ReorderableBlockStack(
+                steps = vm.steps,
+                selectedStepId = vm.selectedStepId,
+                neon = neon,
+                modelCatalogMap = props.modelCatalogMap,
+                onSelect = { vm.selectedStepId = it },
+                onDelete = { vm.removeStep(it) },
+                onMove = { from, to -> vm.moveStep(from, to) },
+                canDelete = vm.canDeleteStep,
+            )
+
+            AddStepRow(neon = neon, onClick = { vm.addStep() })
+
+            if (props.showTemplates) {
+                SaveTemplateButton(
                     neon = neon,
-                    showBlockConfig = showBlockConfig,
-                    agentOptions = agentOptions,
-                    agentDescriptors = agentDescriptors,
-                    modelCatalogMap = modelCatalogMap,
-                    onUpdate = onUpdate,
+                    enabled = props.canStart && !props.isSavingTemplate,
+                    isSaving = props.isSavingTemplate,
+                    onClick = props.onSaveTemplate,
+                )
+            }
+            StartPipelineButton(
+                neon = neon,
+                enabled = props.canStart && !props.isCreating,
+                isCreating = props.isCreating,
+                onClick = props.onStart,
+            )
+        }
+
+        androidx.compose.foundation.layout.Box(
+            modifier = Modifier.width(1.dp).fillMaxHeight().background(neon.border),
+        )
+
+        val selectedIndex = vm.steps.indexOfFirst { it.id == vm.selectedStepId }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp),
+        ) {
+            if (selectedIndex >= 0) {
+                val step = vm.steps[selectedIndex]
+                Text(
+                    "STEP ${selectedIndex + 1}",
+                    fontFamily = neon.mono,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    color = neon.textDim,
+                )
+                Spacer(Modifier.height(10.dp))
+                Column(
+                    modifier = Modifier.widthIn(max = 640.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    StepConfigEditor(
+                        step = step,
+                        neon = neon,
+                        showFanout = props.showFanout,
+                        showBlockConfig = props.showBlockConfig,
+                        agentOptions = props.agentOptions,
+                        agentDescriptors = props.agentDescriptors,
+                        modelCatalogMap = props.modelCatalogMap,
+                        onUpdate = { vm.updateStep(step.id, it) },
+                    )
+                }
+            } else {
+                Text(
+                    "Select a step to configure it.",
+                    fontFamily = neon.sans,
+                    fontSize = 14.sp,
+                    color = neon.textFaint,
+                    modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+            }
+        }
+    }
+}
+
+// MARK: Reorderable block-card stack (long-press drag, PLAN-HARNESS-BUILDER §3.1)
+
+/**
+ * Vertical block-card stack with long-press drag-to-reorder. Small lists
+ * (<=~10 steps) so a plain `Column` + hand-rolled drag offset (rather than
+ * `LazyColumn` item animation) keeps this simple: each card tracks its own
+ * measured height; crossing half a neighbor's height while dragging swaps
+ * it with that neighbor via [onMove] (array-position reindex -- see
+ * `PipelineBuilderViewModel.moveStep`).
+ */
+@Composable
+private fun ReorderableBlockStack(
+    steps: List<PipelineStepDraft>,
+    selectedStepId: String?,
+    neon: NeonTheme,
+    modelCatalogMap: Map<String, List<SessionStore.AgentModel>>,
+    onSelect: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onMove: (from: Int, to: Int) -> Unit,
+    canDelete: Boolean,
+) {
+    val itemHeightsPx = remember { mutableStateMapOf<Int, Int>() }
+    var draggingIndex by remember { mutableStateOf<Int?>(null) }
+    var dragOffsetY by remember { mutableStateOf(0f) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        steps.forEachIndexed { index, step ->
+            val isDragging = draggingIndex == index
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .zIndex(if (isDragging) 1f else 0f)
+                    .graphicsLayer {
+                        translationY = if (isDragging) dragOffsetY else 0f
+                        alpha = if (isDragging) 0.92f else 1f
+                    }
+                    .onGloballyPositioned { itemHeightsPx[index] = it.size.height }
+                    .pointerInput(steps.size) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                draggingIndex = index
+                                dragOffsetY = 0f
+                                Telemetry.breadcrumb("pipeline", "builder_drag_start", mapOf("index" to index.toString()))
+                            },
+                            onDragEnd = { draggingIndex = null; dragOffsetY = 0f },
+                            onDragCancel = { draggingIndex = null; dragOffsetY = 0f },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                dragOffsetY += amount.y
+                                val current = draggingIndex ?: return@detectDragGesturesAfterLongPress
+                                val myHeight = (itemHeightsPx[current] ?: return@detectDragGesturesAfterLongPress).toFloat()
+                                if (dragOffsetY > myHeight / 2f && current < steps.lastIndex) {
+                                    val neighborHeight = (itemHeightsPx[current + 1] ?: myHeight.toInt()).toFloat()
+                                    onMove(current, current + 1)
+                                    draggingIndex = current + 1
+                                    dragOffsetY -= neighborHeight
+                                } else if (dragOffsetY < -myHeight / 2f && current > 0) {
+                                    val neighborHeight = (itemHeightsPx[current - 1] ?: myHeight.toInt()).toFloat()
+                                    onMove(current, current - 1)
+                                    draggingIndex = current - 1
+                                    dragOffsetY += neighborHeight
+                                }
+                            },
+                        )
+                    },
+            ) {
+                BlockCard(
+                    step = step,
+                    index = index,
+                    isSelected = selectedStepId == step.id,
+                    neon = neon,
+                    canDelete = canDelete,
+                    catalog = modelCatalogMap[step.agentType],
+                    onTap = { onSelect(step.id) },
+                    onDelete = { onDelete(step.id) },
                 )
             }
         }
@@ -1071,13 +1256,249 @@ private fun StepCard(
 }
 
 /**
- * Per-block model / reasoning-effort / permission-mode / instructions
- * controls (PLAN-HARNESS-BUILDER Phase 1). Mirrors iOS
- * `blockConfigSection`. Model options come from the assistant's
- * broker-discovered catalog (same store data the fork / new-session pickers
- * consume); the effort and permission-mode rows hide when the resolved
- * model/agent doesn't offer them.
+ * Compact block card -- leading tinted agent avatar, role title, inline
+ * chips (`agent`/`model`/`effort`/`mode`, only non-default ones), a
+ * one-line instructions preview when set. Tap opens the config
+ * sheet/inspector. Composed from `ConduitCard` + `ConduitChip` (component
+ * library rule).
  */
+@Composable
+private fun BlockCard(
+    step: PipelineStepDraft,
+    index: Int,
+    isSelected: Boolean,
+    neon: NeonTheme,
+    canDelete: Boolean,
+    catalog: List<SessionStore.AgentModel>?,
+    onTap: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    ConduitCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onTap)
+            .then(
+                if (isSelected) {
+                    Modifier.border(1.5.dp, neon.accent, RoundedCornerShape(ConduitTheme.cardCornerRadiusDp.dp))
+                } else {
+                    Modifier
+                },
+            ),
+        pad = 12.dp,
+    ) {
+        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            AgentAvatar(assistant = step.agentType, size = 32.dp)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "${index + 1}. ${step.role.replaceFirstChar { it.uppercase() }}",
+                        fontFamily = neon.sans,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = neon.text,
+                        maxLines = 1,
+                    )
+                    if (step.gateAfter) {
+                        Icon(
+                            Icons.Filled.PanTool,
+                            contentDescription = "Gated",
+                            tint = neon.yellow,
+                            modifier = Modifier.size(11.dp),
+                        )
+                    }
+                    if (step.fanoutEnabled) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.CallSplit,
+                            contentDescription = "Fan out",
+                            tint = neon.accent,
+                            modifier = Modifier.size(11.dp),
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ConduitChip(label = step.agentType, tint = agentAccentStrong(step.agentType))
+                    if (step.model.isNotEmpty()) {
+                        ConduitChip(label = forkModelLabel(step.model, catalog))
+                    }
+                    if (step.reasoningEffort.isNotEmpty()) {
+                        ConduitChip(label = effortLabel(step.reasoningEffort))
+                    }
+                    if (step.permissionMode.isNotEmpty()) {
+                        ConduitChip(label = if (step.permissionMode == "plan") "Plan" else step.permissionMode)
+                    }
+                }
+                if (step.instructions.isNotEmpty()) {
+                    Text(
+                        step.instructions,
+                        fontFamily = neon.sans,
+                        fontSize = 11.sp,
+                        color = neon.textFaint,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (canDelete) {
+                IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Delete step",
+                        tint = neon.red,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Per-step config editor (agent / per-block config / role / prompt / input
+ * / gate / fanout) -- shared by the phone dialog and tablet inspector.
+ * Extracted from what was previously the top half of `StepCard`'s body.
+ */
+@Composable
+private fun StepConfigEditor(
+    step: PipelineStepDraft,
+    neon: NeonTheme,
+    showFanout: Boolean,
+    showBlockConfig: Boolean,
+    agentOptions: List<String>,
+    agentDescriptors: Map<String, AgentDescriptor>,
+    modelCatalogMap: Map<String, List<SessionStore.AgentModel>>,
+    onUpdate: (PipelineStepDraft) -> Unit,
+) {
+    // Agent type dropdown
+    var agentExpanded by remember(step.id) { mutableStateOf(false) }
+    Box {
+        OutlinedTextField(
+            value = step.agentType,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Agent type") },
+            modifier = Modifier.fillMaxWidth().clickable { agentExpanded = true },
+            enabled = false,
+        )
+        DropdownMenu(expanded = agentExpanded, onDismissRequest = { agentExpanded = false }) {
+            agentOptions.forEach { agent ->
+                DropdownMenuItem(
+                    text = { Text(agent, fontFamily = neon.mono) },
+                    onClick = {
+                        onUpdate(step.copy(agentType = agent))
+                        agentExpanded = false
+                    },
+                )
+            }
+        }
+    }
+
+    if (showBlockConfig) {
+        BlockConfigSection(
+            agentType = step.agentType,
+            model = step.model,
+            reasoningEffort = step.reasoningEffort,
+            permissionMode = step.permissionMode,
+            instructions = step.instructions,
+            neon = neon,
+            descriptor = descriptorFor(step.agentType, agentDescriptors),
+            catalog = modelCatalogMap[step.agentType],
+            onModelChange = { onUpdate(step.copy(model = it, reasoningEffort = "")) },
+            onEffortChange = { onUpdate(step.copy(reasoningEffort = it)) },
+            onModeChange = { onUpdate(step.copy(permissionMode = it)) },
+            onInstructionsChange = { onUpdate(step.copy(instructions = it)) },
+        )
+    }
+
+    // Role preset dropdown
+    var roleExpanded by remember(step.id) { mutableStateOf(false) }
+    Box {
+        OutlinedTextField(
+            value = step.role,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Role preset") },
+            modifier = Modifier.fillMaxWidth().clickable { roleExpanded = true },
+            enabled = false,
+        )
+        DropdownMenu(expanded = roleExpanded, onDismissRequest = { roleExpanded = false }) {
+            ROLE_PRESETS.forEach { role ->
+                DropdownMenuItem(
+                    text = { Text(role, fontFamily = neon.sans) },
+                    onClick = {
+                        val newPrompt = if (role != "custom") promptForRole(role) else step.promptTemplate
+                        onUpdate(step.copy(role = role, promptTemplate = newPrompt))
+                        roleExpanded = false
+                    },
+                )
+            }
+        }
+    }
+
+    // Prompt template
+    OutlinedTextField(
+        value = step.promptTemplate,
+        onValueChange = { onUpdate(step.copy(promptTemplate = it)) },
+        label = { Text("Prompt template") },
+        minLines = 2,
+        modifier = Modifier.fillMaxWidth(),
+    )
+
+    // Input from prev chips
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            "Input from previous step",
+            fontFamily = neon.mono,
+            fontSize = 11.sp,
+            color = neon.textDim,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            INPUT_OPTIONS.forEach { option ->
+                val selected = step.inputFromPrev == option
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(if (selected) neon.accent else neon.surface2)
+                        .border(1.dp, if (selected) neon.accent else neon.border, RoundedCornerShape(50))
+                        .clickable { onUpdate(step.copy(inputFromPrev = option)) }
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                ) {
+                    Text(
+                        option,
+                        fontFamily = neon.mono,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        fontSize = 11.sp,
+                        color = if (selected) neon.accentText else neon.textDim,
+                    )
+                }
+            }
+        }
+    }
+
+    // Gate after switch
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "Gate after (require approval)",
+            fontFamily = neon.sans,
+            fontSize = 13.sp,
+            color = neon.text,
+            modifier = Modifier.weight(1f),
+        )
+        Switch(checked = step.gateAfter, onCheckedChange = { onUpdate(step.copy(gateAfter = it)) })
+    }
+
+    if (showFanout) {
+        FanoutStepSection(
+            step = step,
+            neon = neon,
+            showBlockConfig = showBlockConfig,
+            agentOptions = agentOptions,
+            agentDescriptors = agentDescriptors,
+            modelCatalogMap = modelCatalogMap,
+            onUpdate = onUpdate,
+        )
+    }
+}
+
 @Composable
 private fun BlockConfigSection(
     agentType: String,
