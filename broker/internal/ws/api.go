@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -1020,6 +1021,88 @@ func (s *Server) serveSessionAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// peerMessageRequest is the body for POST /api/session/message.
+type peerMessageRequest struct {
+	SessionID     string `json:"session_id"`
+	Message       string `json:"message"`
+	FromSessionID string `json:"from_session_id"`
+}
+
+// serveSessionMessage handles POST /api/session/message — delivers a message
+// from one session (or any box-local caller holding the bearer token) into
+// another LIVE session's chat, framed as a labeled peer block. This is the
+// peer-session messaging surface behind `conduit-broker chat send`.
+//
+// Deliberately targets live sessions only (Manager.Get): messaging a
+// recoverable session must not wake it — an agent enumerating peers should
+// never spawn processes as a side effect.
+//
+// Wire contract:
+//
+//	POST /api/session/message
+//	Authorization: Bearer <token>   (or ?token=<token>)
+//	{"session_id":"<recipient>","message":"<text>","from_session_id":"<sender, optional>"}
+//
+//	200 {"ok":true}           — delivered to the recipient's chat channel
+//	400 {"error":…}           — bad JSON / missing fields / self-send
+//	401 {"error":…}           — missing/bad token
+//	404 {"error":"session_not_found"} — recipient unknown or not running
+//	409 {"error":"no_chat_channel"}   — recipient has no structured chat backend
+//	429 {"error":"peer_rate_limited"} — recipient's inbound peer-message cap hit
+//	502 {"error":"delivery_failed"}   — send to the agent process failed
+func (s *Server) serveSessionMessage(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	var req peerMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	req.SessionID = strings.TrimSpace(req.SessionID)
+	req.Message = strings.TrimSpace(req.Message)
+	req.FromSessionID = strings.TrimSpace(req.FromSessionID)
+	if req.SessionID == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "session_id is required")
+		return
+	}
+	if req.Message == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "message is required")
+		return
+	}
+	if req.FromSessionID != "" && req.FromSessionID == req.SessionID {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "a session cannot message itself")
+		return
+	}
+	sess, ok := s.Sessions.Get(req.SessionID)
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, "session_not_found", "session not found or not running")
+		return
+	}
+	// Resolve the sender's display title (best-effort — the token is
+	// box-global so the claimed sender is attribution, not authentication).
+	fromTitle := ""
+	if req.FromSessionID != "" {
+		if from, ok := s.Sessions.Get(req.FromSessionID); ok {
+			fromTitle = from.DisplayName()
+		}
+	}
+	switch err := sess.SendPeerChat(req.FromSessionID, fromTitle, req.Message); {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case errors.Is(err, session.ErrPeerChatRateLimited):
+		writeAPIError(w, http.StatusTooManyRequests, "peer_rate_limited", "recipient's peer-message rate limit hit — back off")
+	case errors.Is(err, session.ErrPeerChatUnsupported):
+		writeAPIError(w, http.StatusConflict, "no_chat_channel", "recipient session has no structured chat channel")
+	default:
+		writeAPIError(w, http.StatusBadGateway, "delivery_failed", err.Error())
+	}
 }
 
 // devicePresenceRequest is the body for POST /api/device/presence.
