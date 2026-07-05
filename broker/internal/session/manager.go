@@ -2339,6 +2339,7 @@ func (m *Manager) AgentDescriptors() map[string]AgentDescriptor {
 				Clear:           caps.Clear,
 				AskUserQuestion: caps.AskUserQuestion,
 				Effort:          caps.Effort,
+				ModelOverride:   caps.ModelOverride,
 				PlanMode:        planMode,
 				Usage:           caps.Usage,
 				Steer:           caps.Steer,

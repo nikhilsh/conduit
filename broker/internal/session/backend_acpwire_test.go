@@ -280,6 +280,33 @@ func TestACPModeForOverride(t *testing.T) {
 	}
 }
 
+func TestACPModelForOverride(t *testing.T) {
+	models := []acpModel{{id: "gemini-2.5-pro"}, {id: "gemini-2.5-flash"}}
+	// override in the advertised set → applied.
+	if id, ok := acpModelForOverride(SpawnOverride{Model: "gemini-2.5-flash"}, models); !ok || id != "gemini-2.5-flash" {
+		t.Fatalf("known model override → %q ok=%v, want gemini-2.5-flash", id, ok)
+	}
+	// empty override → unchanged (no set_model).
+	if _, ok := acpModelForOverride(SpawnOverride{}, models); ok {
+		t.Fatal("empty override applied a model")
+	}
+	// unknown model → dropped, not applied (session must still proceed).
+	if _, ok := acpModelForOverride(SpawnOverride{Model: "gpt-5-codex"}, models); ok {
+		t.Fatal("unknown model override was applied")
+	}
+	// unknown model against an empty catalog (base ACP server, no models block).
+	if _, ok := acpModelForOverride(SpawnOverride{Model: "gemini-2.5-pro"}, nil); ok {
+		t.Fatal("model override applied with no advertised catalog")
+	}
+}
+
+func TestACPSetModelParams(t *testing.T) {
+	p := acpSetModelParams("sess-1", "gemini-2.5-flash")
+	if p["sessionId"] != "sess-1" || p["modelId"] != "gemini-2.5-flash" {
+		t.Fatalf("acpSetModelParams = %+v", p)
+	}
+}
+
 func TestACPStopReasonNotice(t *testing.T) {
 	cases := map[string]bool{ // stopReason → expect a non-empty notice
 		"end_turn":          false,
@@ -308,7 +335,7 @@ func TestACPBackendRegistration(t *testing.T) {
 		t.Fatalf("backendFor(acp): %v", err)
 	}
 	caps := b.Capabilities()
-	if !caps.AskUserQuestion || !caps.Effort || !caps.Resume || !caps.Interrupt {
+	if !caps.AskUserQuestion || !caps.Effort || !caps.ModelOverride || !caps.Resume || !caps.Interrupt {
 		t.Fatalf("ACP caps missing a true flag: %+v", caps)
 	}
 	if caps.Compact || caps.Usage || caps.Steer {

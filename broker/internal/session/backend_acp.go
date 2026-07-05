@@ -50,6 +50,7 @@ func (acpBackend) Capabilities() BackendCapabilities {
 		Compact:         false, // no session/compact in base ACP
 		AskUserQuestion: true,  // session/request_permission → approval card
 		Effort:          true,  // modes (default/plan/yolo/autoEdit) via session/set_mode
+		ModelOverride:   true,  // session/set_model (gemini-cli unstable_setSessionModel)
 		Resume:          true,  // session/load when agentCapabilities.loadSession
 		Interrupt:       true,  // session/cancel
 		Usage:           false, // no account-usage source (per-turn tokens only)
@@ -168,7 +169,10 @@ type acpProcess struct {
 	loadSession bool
 	// modes is the per-session mode catalog from session/new (default/plan/…),
 	// used to apply the conduit PermissionMode override via session/set_mode.
-	modes  []acpMode
+	modes []acpMode
+	// models is the per-session model catalog from session/new, used to apply
+	// the conduit SpawnOverride.Model via session/set_model (drop-if-unknown).
+	models []acpModel
 	inited bool
 	closed bool
 
@@ -326,6 +330,7 @@ func (c *acpProcess) handshake(resp <-chan json.RawMessage) error {
 	}
 
 	c.applyModeOverride()
+	c.applyModelOverride()
 
 	c.mu.Lock()
 	c.inited = true
@@ -364,6 +369,7 @@ func (c *acpProcess) latchSessionResult(r acpSessionNewResult, fresh bool) {
 		c.sessionID = r.sessionID
 	}
 	c.modes = r.modes
+	c.models = r.models
 	if r.currentModel != "" {
 		c.currentModel = r.currentModel
 	}
@@ -393,6 +399,37 @@ func (c *acpProcess) applyModeOverride() {
 	}
 	// The response (and any racing session/update current_mode_update) is
 	// handled by the reader; we don't block the handshake on it.
+}
+
+// applyModelOverride applies the conduit SpawnOverride.Model via
+// session/set_model (gemini-cli's unstable_setSessionModel extension — see
+// docs/ACP-PROTOCOL.md). A no-op when the override is empty or the model
+// isn't one of session/new's advertised availableModels — same
+// drop-if-unknown safety rule as the argv model override (a stale/bad model
+// id must never fail the spawn). Best-effort like applyModeOverride: the
+// write is fire-and-forget, but on a successful write c.currentModel is
+// latched optimistically to the requested model (there is no
+// model-changed session/update notification to wait for), so the status
+// frame reflects the override immediately rather than the pre-override
+// currentModelId from session/new.
+func (c *acpProcess) applyModelOverride() {
+	c.mu.Lock()
+	sid := c.sessionID
+	models := c.models
+	c.mu.Unlock()
+	modelID, ok := acpModelForOverride(c.override, models)
+	if !ok || sid == "" {
+		return
+	}
+	id := c.allocID()
+	fmt.Fprintf(os.Stderr, "acp: session/set_model %q (session %s, id %d)\n", modelID, sid, id)
+	if err := c.writeRequest(id, "session/set_model", acpSetModelParams(sid, modelID)); err != nil {
+		fmt.Fprintf(os.Stderr, "acp: session/set_model write: %v\n", err)
+		return
+	}
+	c.mu.Lock()
+	c.currentModel = modelID
+	c.mu.Unlock()
 }
 
 // Send runs one ACP turn for the user's message: session/prompt with the

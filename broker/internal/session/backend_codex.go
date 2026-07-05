@@ -83,6 +83,7 @@ func (codexAppServerBackend) Capabilities() BackendCapabilities {
 		Clear:           true, // broker-orchestrated thread/start → fresh context
 		AskUserQuestion: true, // on-request approval cards
 		Effort:          true,
+		ModelOverride:   true, // thread/start + thread/resume + turn/start model param
 		Resume:          true, // thread/resume across restarts
 		Interrupt:       true, // turn/interrupt
 		Usage:           true, // chatgpt.com /wham/usage
@@ -141,6 +142,7 @@ func (codexExecBackend) Capabilities() BackendCapabilities {
 		Compact:         false, // per-turn exec has no persistent thread
 		AskUserQuestion: false, // exec path has no on-request approval flow
 		Effort:          true,
+		ModelOverride:   true, // --model argv per turn
 		Resume:          true, // exec resume by thread id
 		Interrupt:       true, // proc kill
 		Usage:           true, // chatgpt.com /wham/usage

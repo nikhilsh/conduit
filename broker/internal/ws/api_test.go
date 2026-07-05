@@ -144,7 +144,7 @@ chat_mode = "codex-exec"
 		t.Errorf("claude login_provider = %q, want anthropic", claude.LoginProvider)
 	}
 	if !claude.Supports.Compact || !claude.Supports.Clear || !claude.Supports.AskUserQuestion || !claude.Supports.Effort ||
-		!claude.Supports.PlanMode || !claude.Supports.Usage {
+		!claude.Supports.ModelOverride || !claude.Supports.PlanMode || !claude.Supports.Usage {
 		t.Errorf("claude supports = %+v, want all true", claude.Supports)
 	}
 	// claude (stream-json) does not support turn/steer: apps must not show the
@@ -174,8 +174,8 @@ chat_mode = "codex-exec"
 	if codex.Supports.AskUserQuestion {
 		t.Errorf("codex-exec must not support ask_user_question")
 	}
-	if !codex.Supports.Effort || !codex.Supports.Usage {
-		t.Errorf("codex supports = %+v, want effort+usage true", codex.Supports)
+	if !codex.Supports.Effort || !codex.Supports.ModelOverride || !codex.Supports.Usage {
+		t.Errorf("codex supports = %+v, want effort+model_override+usage true", codex.Supports)
 	}
 	if codex.Supports.Steer {
 		t.Errorf("codex-exec supports.steer must be false, got true")

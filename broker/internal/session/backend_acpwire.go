@@ -173,6 +173,16 @@ func acpCancelParams(sessionID string) map[string]any {
 	return map[string]any{"sessionId": sessionID}
 }
 
+// acpSetModelParams builds session/set_model params (gemini-cli's
+// `unstable_setSessionModel` extension — verified live against gemini-cli
+// 0.42.0, method `session/set_model`, params `{sessionId, modelId}`).
+func acpSetModelParams(sessionID, modelID string) map[string]any {
+	return map[string]any{
+		"sessionId": sessionID,
+		"modelId":   modelID,
+	}
+}
+
 // --- handshake result parsers ---
 
 // acpInitializeResult is the parsed initialize response: the agent's declared
@@ -608,9 +618,7 @@ func acpPermissionResponseFor(answer string, options []acpPermissionOption) map[
 // session/set_mode after session/new. PermissionMode "plan" → the "plan" mode
 // (read-only); empty/other → "" (leave the agent's default mode). Only modes
 // the agent actually advertised are applied (ok=false otherwise) so a set_mode
-// for an unknown id is never sent. The model override is NOT applied here —
-// gemini selects the model per session/new's currentModelId; a future
-// per-prompt model option would ride acpPromptParams.
+// for an unknown id is never sent.
 func acpModeForOverride(o SpawnOverride, modes []acpMode) (string, bool) {
 	mode := strings.TrimSpace(o.PermissionMode)
 	if mode != "plan" {
@@ -619,6 +627,26 @@ func acpModeForOverride(o SpawnOverride, modes []acpMode) (string, bool) {
 	for _, m := range modes {
 		if m.id == "plan" {
 			return "plan", true
+		}
+	}
+	return "", false
+}
+
+// acpModelForOverride maps a conduit SpawnOverride.Model to the ACP modelId to
+// apply via session/set_model after session/new (gemini-cli's
+// unstable_setSessionModel extension). Only a model the agent actually
+// advertised in session/new's availableModels is applied (ok=false otherwise)
+// — same drop-if-unknown safety rule as the argv model override: a bad/stale
+// model id must never fail the spawn, it just leaves the agent's own default
+// (session/new's currentModelId) in place.
+func acpModelForOverride(o SpawnOverride, models []acpModel) (string, bool) {
+	model := strings.TrimSpace(o.Model)
+	if model == "" {
+		return "", false
+	}
+	for _, m := range models {
+		if m.id == model {
+			return model, true
 		}
 	}
 	return "", false
