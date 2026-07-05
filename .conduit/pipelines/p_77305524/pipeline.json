@@ -1,0 +1,27 @@
+{
+  "id": "p_77305524",
+  "title": "t",
+  "task": "do the thing",
+  "cwd": "",
+  "base": "",
+  "state": "running",
+  "current_step": 0,
+  "created": "2026-07-05T10:01:41Z",
+  "steps": [
+    {
+      "index": 0,
+      "agent_type": "claude",
+      "role": "",
+      "prompt_template": "{{task}}",
+      "input_from_prev": "none",
+      "gate_after": false,
+      "model": "opus",
+      "reasoning_effort": "high",
+      "permission_mode": "plan",
+      "instructions": "be terse",
+      "session_id": "f2a609b2-40a7-40d0-8cba-b3382d274493",
+      "phase": "running",
+      "started": "2026-07-05T10:01:41Z"
+    }
+  ]
+}
