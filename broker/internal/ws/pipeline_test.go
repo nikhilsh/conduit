@@ -418,6 +418,54 @@ func TestCapabilitiesPipelineFanout(t *testing.T) {
 	}
 }
 
+// TestCapabilitiesPipelineBlockConfig verifies the capabilities endpoint
+// advertises pipeline_block_config=true so apps know per-block model/effort/
+// permission_mode/instructions are honored by this broker.
+func TestCapabilitiesPipelineBlockConfig(t *testing.T) {
+	srv, tok := newTestServer(t)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/capabilities?token="+url.QueryEscape(tok), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET capabilities: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("capabilities status=%d", resp.StatusCode)
+	}
+	var body struct {
+		Features struct {
+			PipelineBlockConfig bool `json:"pipeline_block_config"`
+		} `json:"features"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode capabilities: %v", err)
+	}
+	if !body.Features.PipelineBlockConfig {
+		t.Error("features.pipeline_block_config is false; want true")
+	}
+}
+
+// TestCreatePipelineStepConfigFields verifies POST /api/pipeline accepts the
+// per-step model/reasoning_effort/permission_mode/instructions fields without
+// error (the create+start round trip already exercises real spawn via the
+// "cat" test adapter — see newTestRegistry).
+func TestCreatePipelineStepConfigFields(t *testing.T) {
+	srv, tok := newTestServer(t)
+	body := `{"title":"t","task":"do the thing","steps":[{"agent_type":"claude","prompt_template":"{{task}}","input_from_prev":"none","model":"opus","reasoning_effort":"high","permission_mode":"plan","instructions":"be terse"}]}`
+	req, _ := http.NewRequest(http.MethodPost,
+		srv.URL+"/api/pipeline?token="+url.QueryEscape(tok),
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST pipeline: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200; got %d", resp.StatusCode)
+	}
+}
+
 // setupAwaitingPickPipeline creates a fanout pipeline in awaiting_pick state.
 func setupAwaitingPickPipeline(t *testing.T, conduitRoot string) (pipelineID string) {
 	t.Helper()
@@ -572,6 +620,22 @@ func TestCreateValidatesFanoutConfig(t *testing.T) {
 		{
 			"agent_types length mismatch",
 			`{"title":"t","task":"t","steps":[{"agent_type":"claude","prompt_template":"p","input_from_prev":"none","fanout":{"count":2,"agent_types":["claude","codex","opencode"]}}]}`,
+		},
+		{
+			"models length mismatch",
+			`{"title":"t","task":"t","steps":[{"agent_type":"claude","prompt_template":"p","input_from_prev":"none","fanout":{"count":2,"models":["opus","gpt-5-codex","gemini"]}}]}`,
+		},
+		{
+			"reasoning_efforts length mismatch",
+			`{"title":"t","task":"t","steps":[{"agent_type":"claude","prompt_template":"p","input_from_prev":"none","fanout":{"count":3,"reasoning_efforts":["high","low"]}}]}`,
+		},
+		{
+			"permission_modes length mismatch",
+			`{"title":"t","task":"t","steps":[{"agent_type":"claude","prompt_template":"p","input_from_prev":"none","fanout":{"count":2,"permission_modes":["plan"]}}]}`,
+		},
+		{
+			"instructions length mismatch",
+			`{"title":"t","task":"t","steps":[{"agent_type":"claude","prompt_template":"p","input_from_prev":"none","fanout":{"count":2,"instructions":["a","b","c"]}}]}`,
 		},
 	}
 

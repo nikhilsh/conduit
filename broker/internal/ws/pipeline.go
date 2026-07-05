@@ -35,9 +35,15 @@ type pipelineSessionManager struct {
 	m *session.Manager
 }
 
-func (p *pipelineSessionManager) CreateSession(agentType, cwd, initialPrompt, branch string) (string, error) {
+func (p *pipelineSessionManager) CreateSession(agentType, cwd, initialPrompt, branch string, ov pipeline.StepOverride) (string, error) {
 	id := newSessionID()
-	opts := session.CreateOptions{CWD: cwd, Branch: branch}
+	opts := session.CreateOptions{CWD: cwd, Branch: branch, Override: session.SpawnOverride{
+		Model:           ov.Model,
+		ReasoningEffort: ov.ReasoningEffort,
+		PermissionMode:  ov.PermissionMode,
+		// ov.Instructions is prompt content, never argv — it is not part of
+		// SpawnOverride. See StepOverride's doc comment.
+	}}
 	sess, _, err := p.m.GetOrCreateWithOptions(id, agentType, opts)
 	if err != nil {
 		return "", err
@@ -145,10 +151,16 @@ func (s *Server) pipelineOrchestrator() *pipeline.Orchestrator {
 // ── POST /api/pipeline ──────────────────────────────────────────────────────
 
 // fanoutStepReq is the optional "fanout" object within a step in the create
-// request. Its presence makes the step a fanout step.
+// request. Its presence makes the step a fanout step. Models/ReasoningEfforts/
+// PermissionModes/Instructions are optional index-aligned parallel arrays
+// mirroring AgentTypes — see pipeline.FanoutConfig for the per-run fallback.
 type fanoutStepReq struct {
-	Count      int      `json:"count"`
-	AgentTypes []string `json:"agent_types,omitempty"`
+	Count            int      `json:"count"`
+	AgentTypes       []string `json:"agent_types,omitempty"`
+	Models           []string `json:"models,omitempty"`
+	ReasoningEfforts []string `json:"reasoning_efforts,omitempty"`
+	PermissionModes  []string `json:"permission_modes,omitempty"`
+	Instructions     []string `json:"instructions,omitempty"`
 }
 
 type createPipelineStepRequest struct {
@@ -157,6 +169,9 @@ type createPipelineStepRequest struct {
 	PromptTemplate string                 `json:"prompt_template"`
 	InputFromPrev  pipeline.InputFromPrev `json:"input_from_prev"`
 	GateAfter      bool                   `json:"gate_after"`
+	// StepConfig (embedded): model/reasoning_effort/permission_mode/
+	// instructions for this block. All optional.
+	pipeline.StepConfig
 	// Fanout, when present, declares this step as a fanout step.
 	Fanout *fanoutStepReq `json:"fanout,omitempty"`
 }
@@ -216,6 +231,12 @@ func (s *Server) serveCreatePipeline(w http.ResponseWriter, r *http.Request) {
 			PromptTemplate: rs.PromptTemplate,
 			InputFromPrev:  rs.InputFromPrev,
 			GateAfter:      rs.GateAfter,
+			StepConfig: pipeline.StepConfig{
+				Model:           strings.TrimSpace(rs.Model),
+				ReasoningEffort: strings.TrimSpace(rs.ReasoningEffort),
+				PermissionMode:  strings.TrimSpace(rs.PermissionMode),
+				Instructions:    rs.Instructions,
+			},
 		}
 		if step.AgentType == "" {
 			step.AgentType = "claude"
@@ -237,9 +258,33 @@ func (s *Server) serveCreatePipeline(w http.ResponseWriter, r *http.Request) {
 					"fanout agent_types length must equal count")
 				return
 			}
+			if len(fc.Models) > 0 && len(fc.Models) != count {
+				writeAPIError(w, http.StatusBadRequest, "invalid_request",
+					"fanout models length must equal count")
+				return
+			}
+			if len(fc.ReasoningEfforts) > 0 && len(fc.ReasoningEfforts) != count {
+				writeAPIError(w, http.StatusBadRequest, "invalid_request",
+					"fanout reasoning_efforts length must equal count")
+				return
+			}
+			if len(fc.PermissionModes) > 0 && len(fc.PermissionModes) != count {
+				writeAPIError(w, http.StatusBadRequest, "invalid_request",
+					"fanout permission_modes length must equal count")
+				return
+			}
+			if len(fc.Instructions) > 0 && len(fc.Instructions) != count {
+				writeAPIError(w, http.StatusBadRequest, "invalid_request",
+					"fanout instructions length must equal count")
+				return
+			}
 			step.Fanout = &pipeline.FanoutConfig{
-				Count:      count,
-				AgentTypes: fc.AgentTypes,
+				Count:            count,
+				AgentTypes:       fc.AgentTypes,
+				Models:           fc.Models,
+				ReasoningEfforts: fc.ReasoningEfforts,
+				PermissionModes:  fc.PermissionModes,
+				Instructions:     fc.Instructions,
 			}
 		}
 		p.Steps[i] = step
@@ -549,6 +594,9 @@ type templateStepRequest struct {
 	PromptTemplate string                 `json:"prompt_template"`
 	InputFromPrev  pipeline.InputFromPrev `json:"input_from_prev"`
 	GateAfter      bool                   `json:"gate_after"`
+	// StepConfig (embedded): model/reasoning_effort/permission_mode/
+	// instructions for this block. All optional.
+	pipeline.StepConfig
 }
 
 // createTemplateRequest is the body for POST /api/pipeline-templates.
@@ -619,6 +667,12 @@ func (s *Server) serveCreateTemplate(w http.ResponseWriter, r *http.Request) {
 			PromptTemplate: rs.PromptTemplate,
 			InputFromPrev:  rs.InputFromPrev,
 			GateAfter:      rs.GateAfter,
+			StepConfig: pipeline.StepConfig{
+				Model:           strings.TrimSpace(rs.Model),
+				ReasoningEffort: strings.TrimSpace(rs.ReasoningEffort),
+				PermissionMode:  strings.TrimSpace(rs.PermissionMode),
+				Instructions:    rs.Instructions,
+			},
 		}
 	}
 	if err := pipeline.SaveTemplate(s.Sessions.ConduitRoot(), tmpl); err != nil {

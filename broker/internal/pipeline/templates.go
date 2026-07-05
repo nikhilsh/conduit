@@ -31,6 +31,10 @@ type TemplateStep struct {
 	PromptTemplate string        `json:"prompt_template,omitempty"`
 	InputFromPrev  InputFromPrev `json:"input_from_prev"`
 	GateAfter      bool          `json:"gate_after"`
+	// StepConfig (embedded) — see pipeline.go / stepconfig.go. Embedding the
+	// same shared struct as Step is the lockstep guard: a field added there
+	// appears here automatically with no separate definition to drift.
+	StepConfig
 }
 
 // NewTemplateID generates a template ID using the same scheme as NewID.

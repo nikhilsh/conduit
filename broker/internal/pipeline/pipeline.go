@@ -59,6 +59,14 @@ type FanoutConfig struct {
 	// AgentTypes is an optional index-aligned list of agent types, one per run.
 	// When absent all runs use the step's own AgentType.
 	AgentTypes []string `json:"agent_types,omitempty"`
+	// Models, ReasoningEfforts, PermissionModes, and Instructions are optional
+	// index-aligned parallel arrays mirroring AgentTypes, one per run. Per-run
+	// resolution: arr[i] (if non-empty) falls back to the step's own
+	// StepConfig field, which falls back to the adapter default.
+	Models           []string `json:"models,omitempty"`
+	ReasoningEfforts []string `json:"reasoning_efforts,omitempty"`
+	PermissionModes  []string `json:"permission_modes,omitempty"`
+	Instructions     []string `json:"instructions,omitempty"`
 	// Runs is populated as runs are spawned. Mirrors how SessionID/Phase are
 	// populated on a normal step.
 	Runs []FanoutRun `json:"runs,omitempty"`
@@ -74,10 +82,13 @@ type Step struct {
 	PromptTemplate string        `json:"prompt_template"`
 	InputFromPrev  InputFromPrev `json:"input_from_prev"`
 	GateAfter      bool          `json:"gate_after"`
-	SessionID      string        `json:"session_id,omitempty"`
-	Phase          string        `json:"phase,omitempty"`
-	Started        string        `json:"started,omitempty"`
-	Ended          string        `json:"ended,omitempty"`
+	// StepConfig (embedded) carries the optional per-block model/reasoning-
+	// effort/permission-mode/instructions. See StepConfig for field docs.
+	StepConfig
+	SessionID string `json:"session_id,omitempty"`
+	Phase     string `json:"phase,omitempty"`
+	Started   string `json:"started,omitempty"`
+	Ended     string `json:"ended,omitempty"`
 	// Retries counts how many times this step has been re-spawned via Resume.
 	// 0 means the step has never been retried. Each Resume increments this and
 	// uses it to construct a unique branch name (pipeline-<id>-step-<k>-r<n>).

@@ -154,6 +154,13 @@ type capabilitiesResponse struct {
 		// (step.fanout config), and POST /api/pipeline/{id}/pick is available.
 		// Apps gate the fanout-step builder control and pick screen on this flag.
 		PipelineFanout bool `json:"pipeline_fanout"`
+		// PipelineBlockConfig: per-step model/reasoning_effort/permission_mode/
+		// instructions (and the matching fanout parallel arrays) are honored
+		// by POST /api/pipeline + /api/pipeline-templates. Apps MUST gate the
+		// per-block config UI on this flag — an old broker without it silently
+		// ignores the fields and every block runs adapter defaults with no
+		// error (the drift this flag exists to prevent).
+		PipelineBlockConfig bool `json:"pipeline_block_config"`
 	} `json:"features"`
 	// Models is the per-assistant model+effort catalog discovered live from
 	// the agent CLIs (claude control-protocol initialize, codex app-server
@@ -214,6 +221,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.PipelineResume = true      // POST /api/pipeline/{id}/resume
 	resp.Features.PipelineTemplates = true   // /api/pipeline-templates CRUD
 	resp.Features.PipelineFanout = true      // fanout steps + POST /api/pipeline/{id}/pick
+	resp.Features.PipelineBlockConfig = true // per-block model/effort/permission_mode/instructions
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
 	// Pass the pushed-credential store as a nil INTERFACE when unset:
