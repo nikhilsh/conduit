@@ -143,12 +143,18 @@ extension ConduitUI {
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
         @State private var title: String = ""
         @State private var task: String = ""
         @State private var cwd: String = ""
         @State private var baseBranch: String = "main"
-        @State private var steps: [PipelineStep] = [PipelineStep()]
+        // PLAN-HARNESS-BUILDER Phase 2: steps + selection live in a shared
+        // view model so the phone (stacked list + sheet) and tablet
+        // (two-pane rail + inspector) layouts read the same state.
+        @State private var viewModel = PipelineBuilderViewModel()
+        // Phone only: which step's config sheet is presented (nil = none).
+        @State private var configSheetStepID: UUID? = nil
 
         @State private var isSubmitting = false
         @State private var errorAlert: String? = nil
@@ -194,7 +200,7 @@ extension ConduitUI {
             return store.modelCatalog[agentType] ?? []
         }
 
-        /// Per PLAN-HARNESS-BUILDER §8.3 (owner decision, overriding the
+        /// Per PLAN-HARNESS-BUILDER 8.3 (owner decision, overriding the
         /// plan's "disabled with caption" text): the model override is a
         /// silent no-op for gemini (ACP picks its model at `session/new`,
         /// `backend_acpwire.go:611-613`), so the model row is HIDDEN
@@ -211,23 +217,16 @@ extension ConduitUI {
             store.agentDescriptors[agentType.lowercased()]?.supports.planMode ?? false
         }
 
+        private var isTablet: Bool { horizontalSizeClass == .regular }
+
         var body: some View {
             NavigationStack {
                 ZStack {
                     GlassAppBackground()
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 18) {
-                            metadataSection
-                            stepsSection
-                            if store.pipelineTemplates {
-                                saveTemplateButton
-                            }
-                            startButton
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 18)
-                        .frame(maxWidth: 760)
-                        .frame(maxWidth: .infinity)
+                    if isTablet {
+                        tabletBody
+                    } else {
+                        phoneBody
                     }
                 }
                 .navigationTitle("New pipeline")
@@ -271,6 +270,14 @@ extension ConduitUI {
                         .environment(store)
                     }
                 }
+                .sheet(isPresented: Binding(
+                    get: { configSheetStepID != nil },
+                    set: { if !$0 { configSheetStepID = nil } }
+                )) {
+                    if let id = configSheetStepID, let index = viewModel.index(for: id) {
+                        configSheet(index: index)
+                    }
+                }
                 .sheet(isPresented: $showTemplatePicker) {
                     templatePickerSheet
                 }
@@ -308,6 +315,194 @@ extension ConduitUI {
                 }
                 Telemetry.breadcrumb("pipeline", "builder opened")
             }
+        }
+
+        // MARK: Phone layout -- stacked block-card list + config sheet
+
+        private var phoneBody: some View {
+            List {
+                Section {
+                    metadataSection
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+
+                Section {
+                    stepsHeader
+                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+
+                    if viewModel.steps.count > 1 {
+                        topologyPreview
+                            .listRowInsets(EdgeInsets(top: 0, leading: 2, bottom: 8, trailing: 2))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                    }
+
+                    ForEach(Array(viewModel.steps.enumerated()), id: \.element.id) { index, step in
+                        blockCard(step: step, index: index)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: viewModel.canDeleteStep) {
+                                if viewModel.canDeleteStep {
+                                    Button(role: .destructive) {
+                                        viewModel.removeStep(id: step.id)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                            }
+                            .onTapGesture { configSheetStepID = step.id }
+                    }
+                    .onMove { offsets, destination in
+                        viewModel.moveSteps(from: offsets, to: destination)
+                    }
+
+                    addStepRow
+                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 0, trailing: 0))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+
+                if store.pipelineTemplates {
+                    Section {
+                        saveTemplateButton
+                            .listRowInsets(EdgeInsets())
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                    }
+                }
+
+                Section {
+                    startButton
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            // Always show reorder handles (Shortcuts-style always-draggable
+            // stack) -- no `onDelete` is supplied so edit mode contributes
+            // ONLY the drag handle, never the system delete circle (our own
+            // swipe/trash affordance stays authoritative).
+            .environment(\.editMode, .constant(.active))
+        }
+
+        private func configSheet(index: Int) -> some View {
+            NavigationStack {
+                ZStack {
+                    GlassAppBackground()
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            stepConfigEditor(step: stepBinding(index), index: index)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 18)
+                    }
+                }
+                .navigationTitle("Step \(index + 1)")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { configSheetStepID = nil }
+                            .foregroundStyle(neon.accent)
+                    }
+                    if viewModel.canDeleteStep {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button(role: .destructive) {
+                                let id = viewModel.steps[index].id
+                                configSheetStepID = nil
+                                viewModel.removeStep(id: id)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .foregroundStyle(neon.red)
+                        }
+                    }
+                }
+            }
+        }
+
+        // MARK: Tablet layout -- block-list rail + inspector pane
+
+        private var tabletBody: some View {
+            HStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        metadataSection
+                        VStack(alignment: .leading, spacing: 10) {
+                            stepsHeader
+                            if viewModel.steps.count > 1 {
+                                topologyPreview
+                            }
+                            ForEach(Array(viewModel.steps.enumerated()), id: \.element.id) { index, step in
+                                blockCard(step: step, index: index, isSelected: viewModel.selectedStepID == step.id)
+                                    .onTapGesture { viewModel.selectedStepID = step.id }
+                                    .contextMenu {
+                                        if viewModel.canDeleteStep {
+                                            Button(role: .destructive) {
+                                                viewModel.removeStep(id: step.id)
+                                            } label: {
+                                                Label("Delete step", systemImage: "trash")
+                                            }
+                                        }
+                                    }
+                            }
+                            addStepRow
+                        }
+                        if store.pipelineTemplates {
+                            saveTemplateButton
+                        }
+                        startButton
+                    }
+                    .padding(16)
+                }
+                .frame(width: 360)
+
+                Divider().background(neon.border)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if let selID = viewModel.selectedStepID,
+                           let index = viewModel.index(for: selID) {
+                            Text("Step \(index + 1)")
+                                .font(neon.mono(12).weight(.bold))
+                                .foregroundStyle(neon.textDim)
+                                .textCase(.uppercase)
+                            stepConfigEditor(step: stepBinding(index), index: index)
+                        } else {
+                            Text("Select a step to configure it.")
+                                .font(neon.sans(14))
+                                .foregroundStyle(neon.textFaint)
+                                .padding(.top, 40)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
+                    }
+                    .padding(20)
+                    .frame(maxWidth: 640, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
+
+        // MARK: Binding helper
+
+        /// Binding into `viewModel.steps[index]` by POSITION (steps carry no
+        /// client-side index field; the array position IS the order). The
+        /// index is recomputed by the caller (`viewModel.index(for:)`) on
+        /// every access, so this stays correct even if a drag-reorder moves
+        /// the step while its sheet/inspector is open.
+        private func stepBinding(_ index: Int) -> Binding<PipelineStep> {
+            Binding(
+                get: { viewModel.steps.indices.contains(index) ? viewModel.steps[index] : PipelineStep() },
+                set: { newValue in
+                    if viewModel.steps.indices.contains(index) { viewModel.steps[index] = newValue }
+                }
+            )
         }
 
         // MARK: Template picker sheet
@@ -470,53 +665,119 @@ extension ConduitUI {
             .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
         }
 
-        // MARK: Steps section
+        // MARK: Steps header + topology preview + add-step row
 
-        private var stepsSection: some View {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    sectionLabel("Steps")
-                    Spacer(minLength: 8)
-                    Button {
-                        steps.append(PipelineStep())
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 12, weight: .bold))
-                            Text("Add step")
-                                .font(neon.sans(12).weight(.semibold))
-                        }
-                        .foregroundStyle(neon.accent)
-                    }
-                    .buttonStyle(.plain)
+        private var stepsHeader: some View {
+            HStack {
+                sectionLabel("Steps")
+                Spacer(minLength: 8)
+            }
+        }
+
+        /// Compact read-only rail (`ConduitUI.PipelineTopologyRail`) giving
+        /// an at-a-glance view of the whole stack -- gate pause-markers +
+        /// indented fanout clusters -- above the editable block cards.
+        private var topologyPreview: some View {
+            ConduitUI.PipelineTopologyRail(items: viewModel.topologyItems) { id in
+                if isTablet {
+                    viewModel.selectedStepID = id
+                } else {
+                    configSheetStepID = id
                 }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .neonCardSurface(neon, fill: neon.surface2.opacity(0.5), cornerRadius: 12)
+        }
 
-                ForEach($steps) { $step in
-                    stepCard(step: $step, index: steps.firstIndex(where: { $0.id == step.id }) ?? 0)
+        private var addStepRow: some View {
+            Button {
+                viewModel.addStep()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .bold))
+                    Text("Add step")
+                        .font(neon.sans(12).weight(.semibold))
+                }
+                .foregroundStyle(neon.accent)
+            }
+            .buttonStyle(.plain)
+        }
+
+        // MARK: Block card (compact -- tap opens config)
+
+        private func blockCard(step: PipelineStep, index: Int, isSelected: Bool = false) -> some View {
+            ConduitUI.Card(
+                padding: 12,
+                tint: isSelected ? neon.accent : nil
+            ) {
+                HStack(alignment: .top, spacing: 12) {
+                    AgentAvatar(assistant: step.agentType, size: 32)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 6) {
+                            Text("\(index + 1). \(step.role.capitalized)")
+                                .font(neon.sans(13).weight(.semibold))
+                                .foregroundStyle(neon.text)
+                                .lineLimit(1)
+                            if step.gateAfter {
+                                Image(systemName: "hand.raised.fill")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(neon.yellow)
+                            }
+                            if step.fanoutEnabled {
+                                Image(systemName: "arrow.branch")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(neon.accent)
+                            }
+                        }
+
+                        blockChips(step: step)
+
+                        if !step.instructions.isEmpty {
+                            Text(step.instructions)
+                                .font(neon.sans(11))
+                                .foregroundStyle(neon.textFaint)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+
+                    Spacer(minLength: 4)
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(neon.textFaint)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+
+        /// Inline parameter chips: `agent - model - effort - mode`, only
+        /// the ones whose value is set/non-default (agent always shows;
+        /// model/effort/mode only when the block overrides the adapter
+        /// default).
+        private func blockChips(step: PipelineStep) -> some View {
+            HStack(spacing: 6) {
+                ConduitUI.Chip(label: step.agentType, tint: neon.agentTint(forAgent: step.agentType))
+                if !step.model.isEmpty {
+                    ConduitUI.Chip(label: modelLabel(step.model, in: modelCatalog(for: step.agentType)))
+                }
+                if !step.reasoningEffort.isEmpty {
+                    ConduitUI.Chip(label: ConduitUI.ForkOptions.effortLabel(step.reasoningEffort))
+                }
+                if !step.permissionMode.isEmpty {
+                    ConduitUI.Chip(label: ConduitUI.ForkOptions.permissionModeLabel(step.permissionMode))
                 }
             }
         }
 
-        private func stepCard(step: Binding<PipelineStep>, index: Int) -> some View {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("Step \(index + 1)")
-                        .font(neon.mono(11).weight(.bold))
-                        .foregroundStyle(neon.textDim)
-                        .textCase(.uppercase)
-                    Spacer(minLength: 8)
-                    if steps.count > 1 {
-                        Button {
-                            steps.removeAll { $0.id == step.wrappedValue.id }
-                        } label: {
-                            Image(systemName: "trash")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(neon.red)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+        // MARK: Per-step config editor (shared by the phone sheet + tablet inspector)
 
+        @ViewBuilder
+        private func stepConfigEditor(step: Binding<PipelineStep>, index: Int) -> some View {
+            VStack(alignment: .leading, spacing: 14) {
                 // Agent type picker
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Agent")
@@ -609,9 +870,6 @@ extension ConduitUI {
                     fanoutSection(step: step)
                 }
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
         }
 
         // MARK: Per-block config (model / effort / permission mode / instructions)
@@ -870,7 +1128,7 @@ extension ConduitUI {
         /// arrays (`fanoutModels` / `fanoutReasoningEfforts` /
         /// `fanoutPermissionModes`), padding with the inherit sentinel ("")
         /// -- NOT the step's agent type, since these have a real "inherit
-        /// from the step" meaning (§2.1 of PLAN-HARNESS-BUILDER).
+        /// from the step" meaning (2.1 of PLAN-HARNESS-BUILDER).
         private func fanoutArrayBinding(
             _ keyPath: WritableKeyPath<PipelineStep, [String]>,
             step: Binding<PipelineStep>,
@@ -891,9 +1149,9 @@ extension ConduitUI {
         }
 
         /// Per-run model/effort/permission-mode pickers (PLAN-HARNESS-BUILDER
-        /// §2.1/§2.5), index-aligned with the run and resolved against the
+        /// 2.1/2.5), index-aligned with the run and resolved against the
         /// RUN's agent (which may differ from the step's agent) -- NOT
-        /// instructions, which per owner decision (§8.1) are shared from the
+        /// instructions, which per owner decision (8.1) are shared from the
         /// block and have no per-run UI.
         @ViewBuilder
         private func runConfigRow(step: Binding<PipelineStep>, runIdx: Int) -> some View {
@@ -991,7 +1249,7 @@ extension ConduitUI {
         private var startDisabled: Bool {
             title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || steps.isEmpty
+                || viewModel.steps.isEmpty
         }
 
         // MARK: Helpers
@@ -1032,7 +1290,7 @@ extension ConduitUI {
         /// create/save time. Presence only -- never the instruction text
         /// itself (Telemetry standing order: no user content in telemetry).
         private func logBlockConfigTelemetry() {
-            for (i, s) in steps.enumerated() {
+            for (i, s) in viewModel.steps.enumerated() {
                 let hasConfig = !s.model.isEmpty || !s.reasoningEffort.isEmpty
                     || !s.permissionMode.isEmpty || !s.instructions.isEmpty
                 guard hasConfig else { continue }
@@ -1085,20 +1343,8 @@ extension ConduitUI {
                 data: ["id": tmpl.id, "title": tmpl.title])
             title = tmpl.title
             task = tmpl.task
-            steps = tmpl.steps.map { s in
-                PipelineStep(
-                    agentType: s.agent_type,
-                    role: s.role,
-                    promptTemplate: s.prompt_template,
-                    inputFromPrev: s.input_from_prev,
-                    gateAfter: s.gate_after,
-                    model: s.model ?? "",
-                    reasoningEffort: s.reasoning_effort ?? "",
-                    permissionMode: s.permission_mode ?? "",
-                    instructions: s.instructions ?? ""
-                )
-            }
-            if steps.isEmpty { steps = [PipelineStep()] }
+            viewModel.applyTemplate(tmpl)
+            configSheetStepID = nil
         }
 
         private func saveAsTemplate() {
@@ -1114,11 +1360,10 @@ extension ConduitUI {
 
             isSavingTemplate = true
             Telemetry.breadcrumb("pipeline", "template saved",
-                data: ["title": trimTitle, "steps": "\(steps.count)"])
+                data: ["title": trimTitle, "steps": "\(viewModel.steps.count)"])
 
             logBlockConfigTelemetry()
-            let reqSteps = steps.map { ConduitUI.PipelineRequestStep($0) }
-            let reqBody = ConduitUI.PipelineTemplateSaveRequest(title: trimTitle, task: trimTask, steps: reqSteps)
+            let reqBody = viewModel.templateSaveRequest(title: trimTitle, task: trimTask)
             guard let bodyData = try? JSONEncoder().encode(reqBody) else {
                 isSavingTemplate = false
                 return
@@ -1207,16 +1452,14 @@ extension ConduitUI {
 
             isSubmitting = true
             Telemetry.breadcrumb("pipeline", "create start",
-                data: ["title": trimTitle, "steps": "\(steps.count)", "host": endpoint.displayHost])
+                data: ["title": trimTitle, "steps": "\(viewModel.steps.count)", "host": endpoint.displayHost])
 
             logBlockConfigTelemetry()
-            let reqSteps = steps.map { ConduitUI.PipelineRequestStep($0) }
-            let reqBody = ConduitUI.PipelineCreateRequest(
+            let reqBody = viewModel.createRequest(
                 title: trimTitle,
                 task: trimTask,
                 cwd: cwd.trimmingCharacters(in: .whitespacesAndNewlines),
-                base: baseBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "main" : baseBranch.trimmingCharacters(in: .whitespacesAndNewlines),
-                steps: reqSteps
+                base: baseBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "main" : baseBranch.trimmingCharacters(in: .whitespacesAndNewlines)
             )
             guard let bodyData = try? JSONEncoder().encode(reqBody) else {
                 isSubmitting = false
