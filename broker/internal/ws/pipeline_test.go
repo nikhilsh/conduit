@@ -435,16 +435,22 @@ func TestCapabilitiesPipelineBlockConfig(t *testing.T) {
 	var body struct {
 		Features struct {
 			PipelineBlockConfig bool `json:"pipeline_block_config"`
+			PipelineBranch      bool `json:"pipeline_branch"`
+			PipelineLoop        bool `json:"pipeline_loop"`
 		} `json:"features"`
 		// Root-level mirrors: fielded apps (through v0.0.214) decode the
 		// pipeline_* flags from the JSON root, not features.* — both
-		// locations must advertise true.
+		// locations must advertise true. pipeline_branch/pipeline_loop are
+		// NEW flags (docs/PLAN-HARNESS-BUILDER.md §4.1/§4.2) but the same
+		// root-mirror footgun applies (#891) — they must be mirrored too.
 		Pipeline            bool `json:"pipeline"`
 		PipelineGatePreview bool `json:"pipeline_gate_preview"`
 		PipelineResume      bool `json:"pipeline_resume"`
 		PipelineTemplates   bool `json:"pipeline_templates"`
 		PipelineFanout      bool `json:"pipeline_fanout"`
 		PipelineBlockConfig bool `json:"pipeline_block_config"`
+		PipelineBranch      bool `json:"pipeline_branch"`
+		PipelineLoop        bool `json:"pipeline_loop"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode capabilities: %v", err)
@@ -452,8 +458,15 @@ func TestCapabilitiesPipelineBlockConfig(t *testing.T) {
 	if !body.Features.PipelineBlockConfig {
 		t.Error("features.pipeline_block_config is false; want true")
 	}
+	if !body.Features.PipelineBranch {
+		t.Error("features.pipeline_branch is false; want true")
+	}
+	if !body.Features.PipelineLoop {
+		t.Error("features.pipeline_loop is false; want true")
+	}
 	if !body.Pipeline || !body.PipelineGatePreview || !body.PipelineResume ||
-		!body.PipelineTemplates || !body.PipelineFanout || !body.PipelineBlockConfig {
+		!body.PipelineTemplates || !body.PipelineFanout || !body.PipelineBlockConfig ||
+		!body.PipelineBranch || !body.PipelineLoop {
 		t.Errorf("root-level pipeline flag mirrors missing: %+v", body)
 	}
 }
@@ -476,6 +489,114 @@ func TestCreatePipelineStepConfigFields(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200; got %d", resp.StatusCode)
+	}
+}
+
+// TestCreatePipelineWithBranchStep verifies POST /api/pipeline accepts a
+// step with kind=branch (condition + then/else nested steps) and starts the
+// pipeline without error.
+func TestCreatePipelineWithBranchStep(t *testing.T) {
+	srv, tok := newTestServer(t)
+	body := `{"title":"t","task":"do the thing","steps":[
+		{"agent_type":"claude","prompt_template":"{{task}}","input_from_prev":"none"},
+		{"kind":"branch","branch":{
+			"condition":{"source":"exit_status","predicate":"succeeded"},
+			"then":[{"agent_type":"claude","prompt_template":"then step"}],
+			"else":[{"agent_type":"claude","prompt_template":"else step"}]
+		}}
+	]}`
+	req, _ := http.NewRequest(http.MethodPost,
+		srv.URL+"/api/pipeline?token="+url.QueryEscape(tok),
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST pipeline: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200; got %d", resp.StatusCode)
+	}
+}
+
+// TestCreatePipelineWithLoopStep verifies POST /api/pipeline accepts a step
+// with kind=loop (body + until + max_iterations) and starts the pipeline
+// without error.
+func TestCreatePipelineWithLoopStep(t *testing.T) {
+	srv, tok := newTestServer(t)
+	body := `{"title":"t","task":"do the thing","steps":[
+		{"kind":"loop","loop":{
+			"body":[{"agent_type":"claude","prompt_template":"iterate: {{task}}"}],
+			"until":{"source":"prev_output","predicate":"contains","value":"DONE"},
+			"max_iterations":3
+		}}
+	]}`
+	req, _ := http.NewRequest(http.MethodPost,
+		srv.URL+"/api/pipeline?token="+url.QueryEscape(tok),
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST pipeline: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200; got %d", resp.StatusCode)
+	}
+}
+
+// TestCreatePipelineRejectsOversizedLoopIterations verifies POST
+// /api/pipeline returns 400 invalid_request when max_iterations > 5 (§8.5).
+func TestCreatePipelineRejectsOversizedLoopIterations(t *testing.T) {
+	srv, tok := newTestServer(t)
+	body := `{"title":"t","task":"do the thing","steps":[
+		{"kind":"loop","loop":{
+			"body":[{"agent_type":"claude","prompt_template":"iterate"}],
+			"until":{"source":"prev_output","predicate":"contains","value":"DONE"},
+			"max_iterations":6
+		}}
+	]}`
+	req, _ := http.NewRequest(http.MethodPost,
+		srv.URL+"/api/pipeline?token="+url.QueryEscape(tok),
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST pipeline: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400; got %d", resp.StatusCode)
+	}
+}
+
+// TestCreatePipelineRejectsDepth3Branch verifies POST /api/pipeline returns
+// 400 invalid_request when a branch is nested three levels deep (§4.1: depth
+// bound is 2).
+func TestCreatePipelineRejectsDepth3Branch(t *testing.T) {
+	srv, tok := newTestServer(t)
+	body := `{"title":"t","task":"do the thing","steps":[
+		{"kind":"branch","branch":{
+			"condition":{"source":"exit_status","predicate":"succeeded"},
+			"then":[
+				{"kind":"branch","branch":{
+					"condition":{"source":"exit_status","predicate":"succeeded"},
+					"then":[{"agent_type":"claude","prompt_template":"too deep"}]
+				}}
+			]
+		}}
+	]}`
+	req, _ := http.NewRequest(http.MethodPost,
+		srv.URL+"/api/pipeline?token="+url.QueryEscape(tok),
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST pipeline: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400; got %d", resp.StatusCode)
 	}
 }
 

@@ -161,6 +161,18 @@ type capabilitiesResponse struct {
 		// ignores the fields and every block runs adapter defaults with no
 		// error (the drift this flag exists to prevent).
 		PipelineBlockConfig bool `json:"pipeline_block_config"`
+		// PipelineBranch: step.kind == "branch" (If/Else) is supported in
+		// POST /api/pipeline + /api/pipeline-templates — condition sources
+		// prev_output/exit_status, predicates contains/not_contains/matches
+		// (prev_output) and succeeded/failed (exit_status), depth <= 2.
+		// Apps gate the branch-block builder control on this flag.
+		PipelineBranch bool `json:"pipeline_branch"`
+		// PipelineLoop: step.kind == "loop" (bounded Loop-until) is
+		// supported in POST /api/pipeline + /api/pipeline-templates —
+		// max_iterations <= 5, reaching the cap without a match is
+		// success-with-count. Apps gate the loop-block builder control on
+		// this flag.
+		PipelineLoop bool `json:"pipeline_loop"`
 	} `json:"features"`
 	// Pipeline flags mirrored at the JSON ROOT. Fielded app builds (through
 	// v0.0.214) decode all pipeline_* capability flags from the root — not
@@ -175,6 +187,8 @@ type capabilitiesResponse struct {
 	TopPipelineTemplates   bool `json:"pipeline_templates"`
 	TopPipelineFanout      bool `json:"pipeline_fanout"`
 	TopPipelineBlockConfig bool `json:"pipeline_block_config"`
+	TopPipelineBranch      bool `json:"pipeline_branch"`
+	TopPipelineLoop        bool `json:"pipeline_loop"`
 	// Models is the per-assistant model+effort catalog discovered live from
 	// the agent CLIs (claude control-protocol initialize, codex app-server
 	// model/list). Omitted while discovery hasn't completed (or on older
@@ -235,6 +249,8 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.PipelineTemplates = true   // /api/pipeline-templates CRUD
 	resp.Features.PipelineFanout = true      // fanout steps + POST /api/pipeline/{id}/pick
 	resp.Features.PipelineBlockConfig = true // per-block model/effort/permission_mode/instructions
+	resp.Features.PipelineBranch = true      // step.kind=="branch" (If/Else)
+	resp.Features.PipelineLoop = true        // step.kind=="loop" (bounded Loop-until)
 	// Root-level mirrors for fielded apps that decode pipeline_* from the JSON
 	// root (see the struct comment).
 	resp.TopPipeline = true
@@ -243,6 +259,8 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.TopPipelineTemplates = true
 	resp.TopPipelineFanout = true
 	resp.TopPipelineBlockConfig = true
+	resp.TopPipelineBranch = true
+	resp.TopPipelineLoop = true
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
 	// Pass the pushed-credential store as a nil INTERFACE when unset:

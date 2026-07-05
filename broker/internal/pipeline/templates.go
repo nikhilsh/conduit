@@ -35,6 +35,9 @@ type TemplateStep struct {
 	// same shared struct as Step is the lockstep guard: a field added there
 	// appears here automatically with no separate definition to drift.
 	StepConfig
+	// ControlFlow (embedded) — see controlflow.go. Same lockstep guard as
+	// StepConfig: kind/branch/loop appear here automatically, in step with Step.
+	ControlFlow
 }
 
 // NewTemplateID generates a template ID using the same scheme as NewID.

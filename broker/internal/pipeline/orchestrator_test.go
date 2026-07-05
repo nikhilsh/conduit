@@ -39,6 +39,10 @@ type fakeSessionManager struct {
 }
 
 func newFakeSessionManager() *fakeSessionManager {
+	// Every test constructs a fresh fake session manager as its first step —
+	// reset the process-global concurrency counter (concurrency.go) here so
+	// no prior test's leftover live-agent count leaks into this one.
+	resetLiveAgentsForTest()
 	return &fakeSessionManager{sessions: make(map[string]*fakeSession)}
 }
 
