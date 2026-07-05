@@ -27,6 +27,43 @@ import UIKit
 /// declaration (compiled into both targets — see `apps/ios/project.yml`)
 /// so the system can route `Activity.request(...)` payloads to the right
 /// widget.
+
+/// Pure decision helper for push-to-start adoption's update-token
+/// observation (§4.5 follow-up). Kept free of ActivityKit/UIKit types so
+/// it's unit-testable without a device or simulator -- the same reasoning
+/// `TurnLiveActivityBridgeCore` uses for the bridge's start/update/end
+/// decisions.
+///
+/// `adoptPushStartedActivities()` runs on every foreground, not just app
+/// launch, so it must distinguish three cases per discovered `Activity`:
+///   - never seen before -> adopt (seed the model) AND observe,
+///   - already adopted, token not yet received -> re-arm observation
+///     (the previous attempt likely got cut short by backgrounding),
+///   - already adopted, token already received -> steady state, no-op.
+enum PushLAAdoptionCore {
+    struct Decision: Equatable {
+        /// Seed `activeActivityIDs` + the per-session model. Only true for
+        /// a session not already tracked.
+        let shouldAdopt: Bool
+        /// (Re)start the update-token observation loop for this activity.
+        let shouldObserveToken: Bool
+        /// True when `shouldObserveToken` is a retry of an earlier miss
+        /// (already adopted, still no token) rather than a first attempt --
+        /// changes only the breadcrumb wording, not behavior.
+        let isReArm: Bool
+    }
+
+    /// Decide what `adoptPushStartedActivities()` should do for one
+    /// `Activity` on this pass.
+    static func decide(alreadyAdopted: Bool, tokenAlreadyReceived: Bool) -> Decision {
+        Decision(
+            shouldAdopt: !alreadyAdopted,
+            shouldObserveToken: !tokenAlreadyReceived,
+            isReArm: alreadyAdopted && !tokenAlreadyReceived
+        )
+    }
+}
+
 @MainActor
 public final class TurnLiveActivityController {
     /// Singleton shared with `ConduitApp` — there's exactly one active-turn
@@ -74,6 +111,17 @@ public final class TurnLiveActivityController {
     /// Lifetime task that drains `Activity<TurnActivityAttributes>.pushToStartTokenUpdates`.
     /// Cancelled and restarted by `startObservingPushToStartToken()`.
     private var pushToStartTask: Task<Void, Never>?
+
+    /// Session IDs whose ADOPTED activity has successfully delivered its
+    /// per-activity update token to ActivityKit at least once (see the
+    /// §4.5 follow-up in `adoptPushStartedActivities()` below). Once a
+    /// session is in this set, adoption stops re-observing it.
+    private var updateTokenReceived: Set<String> = []
+
+    /// In-flight update-token observation loop per session, keyed so a
+    /// re-arm can cancel a stale loop before starting a fresh one instead
+    /// of running two in parallel against the same activity.
+    private var updateTokenObservationTasks: [String: Task<Void, Never>] = [:]
 
     private init() {}
 
@@ -257,6 +305,9 @@ public final class TurnLiveActivityController {
         if let priorID = activeActivityIDs[sessionID] {
             Task { await Self.terminateActivity(id: priorID) }
             activeActivityIDs[sessionID] = nil
+            updateTokenObservationTasks[sessionID]?.cancel()
+            updateTokenObservationTasks[sessionID] = nil
+            updateTokenReceived.remove(sessionID)
         }
 
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
@@ -368,6 +419,12 @@ public final class TurnLiveActivityController {
         #if canImport(ActivityKit)
         guard let activityID = activeActivityIDs[sessionID] else { return }
         activeActivityIDs[sessionID] = nil
+        // The activity is going away -- drop its update-token bookkeeping so
+        // a future re-adoption for a reused sessionID starts clean instead
+        // of being skipped as "already received".
+        updateTokenObservationTasks[sessionID]?.cancel()
+        updateTokenObservationTasks[sessionID] = nil
+        updateTokenReceived.remove(sessionID)
         let content = TurnActivityAttributes.ContentState(from: Self.stamped(state))
         Task {
             for activity in Activity<TurnActivityAttributes>.activities where activity.id == activityID {
@@ -453,30 +510,56 @@ public final class TurnLiveActivityController {
     ///   - the bridge's first `evaluate()` takes the UPDATE branch, not
     ///     `.start` (which would open a second card).
     ///
-    /// Idempotent: sessions already in `activeActivityIDs` are skipped.
+    /// §4.5 follow-up: called from `ConduitApp` on EVERY foreground
+    /// (`scenePhase == .active`), not just app launch. A push-to-start
+    /// activity can be created by the system while the app is suspended in
+    /// the background; ActivityKit's `pushTokenUpdates` for that activity
+    /// may not deliver the update token until the app actually gets
+    /// foreground execution time. Re-running this on every foreground lets
+    /// an already-adopted session whose token missed an earlier window get
+    /// retried, instead of a single fixed deadline permanently giving up.
+    ///
+    /// Adoption itself (seeding `activeActivityIDs` + the model) is still
+    /// idempotent -- only sessions not already tracked get (re)seeded --
+    /// but token OBSERVATION re-arms independently of that, keyed off
+    /// whether a token has actually been received yet.
     public func adoptPushStartedActivities() {
         #if canImport(ActivityKit)
         guard #available(iOS 17.2, *) else { return }
         for activity in Activity<TurnActivityAttributes>.activities {
             let sid = activity.attributes.sessionID
-            guard activeActivityIDs[sid] == nil else { continue }
+            let decision = PushLAAdoptionCore.decide(
+                alreadyAdopted: activeActivityIDs[sid] != nil,
+                tokenAlreadyReceived: updateTokenReceived.contains(sid)
+            )
 
-            // Register the id first: this is the dedup invariant.
-            // `activeActivityIDs[sid] != nil ⟺ a card exists`.
-            activeActivityIDs[sid] = activity.id
+            if decision.shouldAdopt {
+                // Register the id first: this is the dedup invariant.
+                // `activeActivityIDs[sid] != nil ⟺ a card exists`.
+                activeActivityIDs[sid] = activity.id
 
-            // Seed the per-session model so the bridge's next evaluate()
-            // takes the UPDATE branch (model.isActive == true) rather than
-            // emitting a .start, which would request a duplicate card.
-            seedModelFromActivity(activity)
+                // Seed the per-session model so the bridge's next evaluate()
+                // takes the UPDATE branch (model.isActive == true) rather
+                // than emitting a .start, which would request a duplicate
+                // card.
+                seedModelFromActivity(activity)
 
-            // Start observing the activity's UPDATE token so the broker can
-            // push update/end to this card. This is the riskiest seam (§4.5):
-            // if the update-token registration never fires, the card freezes.
+                Telemetry.breadcrumb("push_la", "adopted push-started activity",
+                    data: ["session": sid, "activityID": activity.id])
+            }
+
+            guard decision.shouldObserveToken else { continue }
+            if decision.isReArm {
+                Telemetry.breadcrumb("push_la",
+                    "re-arming update-token observation on foreground",
+                    data: ["session": sid, "activityID": activity.id])
+            }
+            // Start (or restart) observing the activity's UPDATE token so
+            // the broker can push update/end to this card. This is the
+            // riskiest seam (§4.5): if the update-token registration never
+            // fires, the card freezes. Re-arming on every foreground (above)
+            // is the mitigation.
             observeUpdateTokenForAdoptedActivity(activity, sessionID: sid)
-
-            Telemetry.breadcrumb("push_la", "adopted push-started activity",
-                data: ["session": sid, "activityID": activity.id])
         }
         #endif
     }
@@ -531,33 +614,39 @@ public final class TurnLiveActivityController {
     /// the exact same `registerLAToken` path, so update/end pushes route
     /// to this card after adoption.
     ///
-    /// §4.5 mitigation: captures a Sentry error if the update-token never
-    /// arrives within 30 seconds of adoption.
+    /// §4.5: a 30s deadline logs a DIAGNOSTIC breadcrumb only (no Sentry
+    /// error/capture) if the token hasn't arrived yet -- a miss here is
+    /// expected whenever the app is backgrounded again before ActivityKit
+    /// delivers the token, and `adoptPushStartedActivities()` re-arms this
+    /// same observation on the next foreground until `updateTokenReceived`
+    /// actually contains the session. Cancels any previous observation loop
+    /// for this session first so a re-arm never runs two loops against the
+    /// same activity.
     private func observeUpdateTokenForAdoptedActivity(
         _ activity: Activity<TurnActivityAttributes>,
         sessionID: String
     ) {
+        updateTokenObservationTasks[sessionID]?.cancel()
         let endpoint = registrationEndpoint
-        Task { @MainActor in
+        Telemetry.breadcrumb("push_la", "adopted activity: observing update token",
+            data: ["session": sessionID, "activityID": activity.id])
+        let task = Task { @MainActor in
             var receivedToken = false
-            // Deadline check: fire an error event if no token within 30s.
+            // Diagnostic-only deadline: breadcrumb, not a Sentry error. The
+            // foreground re-arm in `adoptPushStartedActivities()` is the
+            // actual retry mechanism, so a single missed window here is not
+            // a terminal failure worth an error-level Sentry event.
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
                 if !receivedToken {
-                    Telemetry.capture(
-                        error: NSError(
-                            domain: "ios.push_la", code: 1,
-                            userInfo: [NSLocalizedDescriptionKey:
-                                "adopted push-started activity: update token never received"]
-                        ),
-                        message: "push-to-start adoption: update token not registered within 30s",
-                        tags: ["flow": "push_la"],
-                        extras: ["session": sessionID, "activityID": activity.id]
-                    )
+                    Telemetry.breadcrumb("push_la",
+                        "adopted activity: update token not yet received after 30s",
+                        data: ["session": sessionID, "activityID": activity.id])
                 }
             }
             for await tokenData in activity.pushTokenUpdates {
                 receivedToken = true
+                self.updateTokenReceived.insert(sessionID)
                 let hex = tokenData.apnsTokenHex
                 Telemetry.breadcrumb("push_la", "adopted activity: LA update token received",
                     data: ["session": sessionID, "hexLen": "\(hex.count)"])
@@ -572,6 +661,7 @@ public final class TurnLiveActivityController {
                 )
             }
         }
+        updateTokenObservationTasks[sessionID] = task
     }
 
     private static func terminateActivity(id: String) async {

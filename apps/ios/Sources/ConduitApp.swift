@@ -147,6 +147,20 @@ struct ConduitApp: App {
                         }
                     }
                     .onChange(of: scenePhase) { _, newPhase in
+                        // Foreground: re-run push-to-start adoption BEFORE
+                        // refreshAll()'s reap pass (§4.5 follow-up). A
+                        // push-started activity can appear while the app is
+                        // suspended in the background, and its update-token
+                        // observation loop may miss its window if the app is
+                        // backgrounded again before ActivityKit delivers the
+                        // token -- re-arming here on every foreground (not
+                        // just app launch) is what retries that instead of
+                        // leaving the card permanently un-updatable. Must run
+                        // before refreshAll()/reap so a newly adopted card is
+                        // "owned" before the orphan sweep runs.
+                        if newPhase == .active {
+                            liveActivity.adoptPushStartedActivities()
+                        }
                         // Foreground, background, inactive — any wake is
                         // execution time; re-stamp the live activities.
                         liveActivity.refreshAll()
