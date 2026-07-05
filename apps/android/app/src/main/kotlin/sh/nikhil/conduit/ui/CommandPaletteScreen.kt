@@ -104,6 +104,10 @@ fun CommandPaletteScreen(
     onFanOut: () -> Unit = {},
     // "New pipeline" action — caller presents PipelineBuilderScreen.
     onNewPipeline: () -> Unit = {},
+    // "Pipelines" action — caller presents `PipelineListScreen` (the list of
+    // running/past pipelines). Default no-op; only shown when
+    // `store.pipelinesEnabled` is true (old brokers omit the flag).
+    onPipelines: () -> Unit = {},
     onDismiss: () -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -112,6 +116,7 @@ fun CommandPaletteScreen(
     val displayNames by store.displayNames.collectAsState()
     val conversationLog by store.conversationLog.collectAsState()
     val endpoint by store.endpoint.collectAsState()
+    val pipelinesEnabled by store.pipelinesEnabled.collectAsState()
     // Name the connected box in the "Run on box" header when we have one
     // (`RUN ON <host>`); fall back to the generic label otherwise.
     val runOnBoxHeader = if (endpoint.isComplete) "Run on ${endpoint.displayHost}" else "Run on box"
@@ -139,13 +144,14 @@ fun CommandPaletteScreen(
         }
     }
 
-    val actions = remember(q) {
-        listOf(
-            PaletteActionSpec("new", "New session…", "⌘N"),
-            PaletteActionSpec("pair", "Pair a box", null),
-            PaletteActionSpec("fanout", "Fan out a task", null),
-            PaletteActionSpec("pipeline", "New pipeline", null),
-        ).filter { q.isEmpty() || it.title.lowercase().contains(q) }
+    val actions = remember(q, pipelinesEnabled) {
+        buildList {
+            add(PaletteActionSpec("new", "New session…", "⌘N"))
+            add(PaletteActionSpec("pair", "Pair a box", null))
+            add(PaletteActionSpec("fanout", "Fan out a task", null))
+            add(PaletteActionSpec("pipeline", "New pipeline", null))
+            if (pipelinesEnabled) add(PaletteActionSpec("pipelines", "Pipelines", null))
+        }.filter { q.isEmpty() || it.title.lowercase().contains(q) }
     }
 
     fun runAction(id: String) {
@@ -155,6 +161,7 @@ fun CommandPaletteScreen(
             "pair" -> onPairBox()
             "fanout" -> onFanOut()
             "pipeline" -> onNewPipeline()
+            "pipelines" -> onPipelines()
         }
     }
 

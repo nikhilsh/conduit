@@ -2185,6 +2185,12 @@ final class SessionStore {
     /// hide when false so the request stays byte-identical to today.
     private(set) var pipelineBlockConfig: Bool = false
 
+    /// Whether the broker supports pipelines at all
+    /// (`GET /api/capabilities` -> `"pipeline": true`, broker PR #891).
+    /// False on old brokers; gates the "Pipelines" command-palette action,
+    /// the Home active-pipeline affordance, and `PipelineListView`.
+    private(set) var pipelinesEnabled: Bool = false
+
     /// Single-flight + at-most-once-per-(box,version) guard for the
     /// post-connect broker auto-update (Fix: broker auto-update on reconnect).
     /// `reconnect()`/`selectSavedServer()` short-circuit to a WS-only bounce
@@ -2225,6 +2231,7 @@ final class SessionStore {
             let pipeline_templates: Bool?
             let pipeline_fanout: Bool?
             let pipeline_block_config: Bool?
+            let pipeline: Bool?
         }
         Telemetry.breadcrumb(
             "model_catalog", "refresh start",
@@ -2275,6 +2282,8 @@ final class SessionStore {
         // pipeline_block_config: per-block model/effort/mode/instructions
         // overrides (PLAN-HARNESS-BUILDER Phase 1); default false on old brokers.
         pipelineBlockConfig = caps.pipeline_block_config ?? false
+        // pipeline: pipelines exist at all (broker PR #891); default false on old brokers.
+        pipelinesEnabled = caps.pipeline ?? false
 
         // WS-H.1: parse the readiness block; nil on old brokers → consumers treat as unknown.
         if let r = caps.readiness {
@@ -2774,6 +2783,27 @@ final class SessionStore {
               let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode)
         else { return nil }
         return data
+    }
+
+    /// Fetch the broker's live pipeline list (`GET /api/pipelines`, broker
+    /// `serveListPipelines`). Best-effort: returns `[]` on any network/decode
+    /// failure (mirrors the `getJSON` convention above) rather than
+    /// throwing, so callers -- Home's active-pipeline affordance and the
+    /// Pipelines list screen -- can `await` it directly. This is the ONLY
+    /// app-side consumer of `GET /api/pipelines`; before it, a pipeline
+    /// became unreachable the moment its creation sheet was dismissed even
+    /// though the broker kept it running.
+    func refreshPipelines() async -> [ConduitUI.PipelineSummary] {
+        guard let data = await getJSON(endpoint: endpoint, path: "/api/pipelines") else {
+            Telemetry.breadcrumb("pipeline", "list fetch failed", data: ["host": endpoint.displayHost])
+            return []
+        }
+        struct Envelope: Decodable { let pipelines: [ConduitUI.PipelineSummary] }
+        guard let parsed = try? JSONDecoder().decode(Envelope.self, from: data) else {
+            Telemetry.breadcrumb("pipeline", "list decode failed", data: ["host": endpoint.displayHost])
+            return []
+        }
+        return parsed.pipelines
     }
 
     /// Fetch a session's persisted transcript read-only over HTTP

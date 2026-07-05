@@ -36,6 +36,9 @@ extension ConduitUI {
         @State private var showFanOut = false
         /// Pipeline builder, launched from the command palette.
         @State private var showPipelineBuilder = false
+        /// Pipelines list, launched from the command palette or the Home
+        /// active-pipeline affordance.
+        @State private var showPipelineList = false
         /// Approvals inbox, opened from the needs-you banner's Review.
         @State private var showApprovals = false
         /// Box selected from the Boxes list → Box health detail sheet.
@@ -59,6 +62,10 @@ extension ConduitUI {
         /// Shows the onboarding guide (re-opened from the no-boxes CTA or
         /// Settings "How it works" row).
         @State private var showOnboarding = false
+        /// Pipelines fetched for the Home active-pipeline affordance
+        /// (`GET /api/pipelines`, refreshed on appear -- no polling loop while
+        /// Home is the visible surface).
+        @State private var pipelineSummaries: [ConduitUI.PipelineSummary] = []
 
         var body: some View {
             @Bindable var store = store
@@ -162,7 +169,8 @@ extension ConduitUI {
                             }
                         },
                         onFanOut: { showFanOut = true },
-                        onNewPipeline: { showPipelineBuilder = true }
+                        onNewPipeline: { showPipelineBuilder = true },
+                        onPipelines: { showPipelineList = true }
                     )
                     .environment(store)
                     .presentationDetents([.medium, .large])
@@ -184,6 +192,15 @@ extension ConduitUI {
                     // Multi-step pipeline builder. Navigates internally to
                     // PipelineMonitorView on success.
                     ConduitUI.PipelineBuilderView()
+                        .environment(store)
+                        .presentationDetents([.large])
+                }
+                .sheet(isPresented: $showPipelineList) {
+                    // Lists pipelines (`GET /api/pipelines`) and reopens the
+                    // monitor for a running/past one -- the fix for a
+                    // pipeline becoming unreachable once its creation sheet
+                    // is dismissed.
+                    ConduitUI.PipelineListView()
                         .environment(store)
                         .presentationDetents([.large])
                 }
@@ -272,6 +289,14 @@ extension ConduitUI {
                     } else if store.harness == .disconnected {
                         store.connect()
                     }
+                }
+                .task(id: store.endpoint.displayHost) {
+                    // Active-pipeline affordance: refresh on appear / box
+                    // switch only -- no polling loop while Home just sits
+                    // idle. Gated on the broker's `pipeline` capability so
+                    // old brokers stay silent.
+                    guard store.pipelinesEnabled, store.endpoint.isComplete else { return }
+                    pipelineSummaries = await store.refreshPipelines()
                 }
                 .tint(neon.accent)
             }
@@ -548,6 +573,14 @@ extension ConduitUI {
             return banner.count > 0 ? banner : nil
         }
 
+        /// Pipelines currently ACTIVE (running / awaiting_gate /
+        /// awaiting_pick) -- the Home affordance's trigger. Terminal
+        /// pipelines (complete/failed/cancelled) never surface here; they're
+        /// only reachable via the full Pipelines list.
+        private var activePipelines: [ConduitUI.PipelineSummary] {
+            pipelineSummaries.filter { ConduitUI.PipelineListViewModel.isActiveForHomeAffordance($0.state) }
+        }
+
         /// One-line preview of the latest activity in a session for the
         /// home card. Pulls the most recent NON-user transcript item from
         /// `store.conversationLog` (assistant reply or tool action) — the
@@ -628,6 +661,21 @@ extension ConduitUI {
                             // blocked sessions) rather than jumping straight
                             // into the first session.
                             showApprovals = true
+                        }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
+                    }
+                }
+
+                // Active-pipeline affordance (§ "a running pipeline is
+                // unreachable once its sheet is dismissed"): surfaces ONLY
+                // when a pipeline is genuinely running/gated/picking, never
+                // a fabricated count. Tapping opens the full Pipelines list.
+                if !activePipelines.isEmpty {
+                    Section {
+                        ActivePipelinesBannerCard(pipelines: activePipelines) {
+                            showPipelineList = true
                         }
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -986,6 +1034,76 @@ private struct NeedsYouBannerCard: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(titleText)
         .accessibilityHint("Opens the session waiting on you")
+    }
+}
+
+/// Home's active-pipeline affordance: an accent-tinted card that appears
+/// ONLY when at least one pipeline is currently running / awaiting_gate /
+/// awaiting_pick (`ConduitUI.PipelineListViewModel.isActiveForHomeAffordance`).
+/// Tapping opens the full `PipelineListView`. This is the fix for a running
+/// pipeline becoming unreachable once its creation sheet is swiped away --
+/// before this, the Builder's own post-create navigation was the ONLY path
+/// to the monitor.
+private struct ActivePipelinesBannerCard: View {
+    let pipelines: [ConduitUI.PipelineSummary]
+    let onOpen: () -> Void
+    @Environment(\.neonTheme) private var neon
+
+    private var titleText: String {
+        pipelines.count == 1 ? "1 pipeline running" : "\(pipelines.count) pipelines running"
+    }
+
+    private var subText: String {
+        if pipelines.count == 1, let first = pipelines.first {
+            return first.title.isEmpty ? "step \(first.current_step + 1) / \(max(first.step_count, 1))" : first.title
+        }
+        return "tap to view progress"
+    }
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 11) {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(neon.accent.opacity(0.14))
+                    .frame(width: 34, height: 34)
+                    .overlay(
+                        Image(systemName: "arrow.triangle.merge")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(neon.accent)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(titleText)
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(1)
+                    Text(subText)
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(neon.textDim)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: 6)
+                Text("View")
+                    .font(neon.sans(12.5).weight(.semibold))
+                    .foregroundStyle(neon.bg)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(neon.accent))
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
+            .neonCardSurface(
+                neon,
+                fill: neon.accent.opacity(neon.dark ? 0.07 : 0.05),
+                cornerRadius: 12,
+                border: neon.accent.opacity(0.27),
+                glowTint: neon.glow ? neon.accent : nil
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(titleText)
+        .accessibilityHint("Opens the pipelines list")
     }
 }
 

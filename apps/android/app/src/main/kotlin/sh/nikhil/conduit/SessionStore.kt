@@ -4849,6 +4849,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _pipelineBlockConfig = MutableStateFlow(false)
     val pipelineBlockConfig: StateFlow<Boolean> = _pipelineBlockConfig.asStateFlow()
 
+    /**
+     * Whether the broker supports pipelines at all
+     * (`GET /api/capabilities` -> `"pipeline": true`, broker PR #891).
+     * False on old brokers; gates the "Pipelines" command-palette action,
+     * the Home active-pipeline affordance, and `PipelineListScreen`. Mirror
+     * of iOS `SessionStore.pipelinesEnabled`.
+     */
+    private val _pipelinesEnabled = MutableStateFlow(false)
+    val pipelinesEnabled: StateFlow<Boolean> = _pipelinesEnabled.asStateFlow()
+
     /** Broker advertises transactional mid-session agent switching. */
     private val _switchAgentSupported = MutableStateFlow(false)
     val switchAgentSupported: StateFlow<Boolean> = _switchAgentSupported.asStateFlow()
@@ -4946,6 +4956,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
             JSONObject(raw).optBoolean("pipeline_block_config", false)
         }.getOrDefault(false)
         _pipelineBlockConfig.value = pipelineBlockConfig
+        // pipeline: pipelines exist at all (broker PR #891); default false on old brokers.
+        val pipelinesEnabled = runCatching {
+            JSONObject(raw).optBoolean("pipeline", false)
+        }.getOrDefault(false)
+        _pipelinesEnabled.value = pipelinesEnabled
     }
 
     /**
@@ -5346,6 +5361,44 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 conn.disconnect()
             }
         }.getOrNull()
+    }
+
+    /**
+     * Fetch the broker's live pipeline list (`GET /api/pipelines`, broker
+     * `serveListPipelines`). Best-effort: returns an empty list on any
+     * network/decode failure (mirrors [getJsonOrNull]'s convention) rather
+     * than throwing, so callers -- Home's active-pipeline affordance and
+     * `PipelineListScreen` -- can call this directly. This is the ONLY
+     * app-side consumer of `GET /api/pipelines`; before it, a pipeline
+     * became unreachable the moment its creation sheet was dismissed even
+     * though the broker kept it running.
+     */
+    suspend fun refreshPipelines(): List<sh.nikhil.conduit.ui.PipelineSummary> = withContext(Dispatchers.IO) {
+        val ep = _endpoint.value
+        val raw = getJsonOrNull(ep, "/api/pipelines")
+        if (raw == null) {
+            Telemetry.breadcrumb("pipeline", "list fetch failed", mapOf("host" to ep.displayHost))
+            return@withContext emptyList()
+        }
+        val parsed = runCatching<List<sh.nikhil.conduit.ui.PipelineSummary>> {
+            val arr = JSONObject(raw).optJSONArray("pipelines") ?: return@runCatching emptyList()
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                sh.nikhil.conduit.ui.PipelineSummary(
+                    id = o.optString("id", ""),
+                    title = o.optString("title", ""),
+                    state = o.optString("state", ""),
+                    currentStep = o.optInt("current_step", 0),
+                    stepCount = o.optInt("step_count", 0),
+                    created = o.optString("created", "").takeIf { it.isNotEmpty() },
+                )
+            }
+        }.getOrNull()
+        if (parsed == null) {
+            Telemetry.breadcrumb("pipeline", "list decode failed", mapOf("host" to ep.displayHost))
+            return@withContext emptyList()
+        }
+        parsed
     }
 
     /**

@@ -1,0 +1,212 @@
+import SwiftUI
+
+// MARK: - ConduitPipelineListView
+//
+// Lists pipelines from `GET /api/pipelines` and opens
+// `ConduitUI.PipelineMonitorView` for the tapped one. This closes the gap
+// where a pipeline kept running server-side but became unreachable in the
+// app the moment its creation sheet was dismissed -- the Builder's own
+// post-create navigation (`ConduitPipelineBuilderView.swift`) was
+// previously the ONLY path to the monitor.
+//
+// HOW TO PRESENT:
+//   .sheet(isPresented: $showPipelines) {
+//       ConduitUI.PipelineListView()
+//           .environment(store)
+//   }
+
+extension ConduitUI {
+
+    /// One row of `GET /api/pipelines`. Mirrors
+    /// `broker/internal/ws/pipeline.go`'s `pipelineListItem` JSON shape.
+    /// `state` is decoded as a raw string (not an enum) so an unrecognized
+    /// future state from a newer broker never fails decode -- it just
+    /// falls into the "active" default sort bucket (see
+    /// `PipelineListViewModel.group(for:)`), staying visible instead of
+    /// vanishing or crashing the list.
+    struct PipelineSummary: Identifiable, Decodable, Hashable {
+        let id: String
+        let title: String
+        let state: String
+        let current_step: Int
+        let step_count: Int
+        let created: String?
+    }
+
+    /// Pure sort/group helpers for the pipeline list -- lives off SwiftUI so
+    /// they're unit-testable without a view tree (mirrors
+    /// `ApprovalsViewModel` / `HomeViewModel`).
+    enum PipelineListViewModel {
+        enum Group: Int, Comparable {
+            case needsYou = 0
+            case active = 1
+            case terminal = 2
+            static func < (lhs: Group, rhs: Group) -> Bool { lhs.rawValue < rhs.rawValue }
+        }
+
+        /// `awaiting_gate` / `awaiting_pick` need the user; `complete` /
+        /// `failed` / `cancelled` are terminal; everything else (`pending`,
+        /// `running`, `step_done`, and any unrecognized future state) is
+        /// treated as active so new broker states stay visible rather than
+        /// vanishing or misfiling as "needs you".
+        static func group(for state: String) -> Group {
+            switch state {
+            case "awaiting_gate", "awaiting_pick": return .needsYou
+            case "complete", "failed", "cancelled": return .terminal
+            default: return .active
+            }
+        }
+
+        /// Sort order: needs-you first, then active/running, then terminal
+        /// pipelines most-recently-created first. Stable within the
+        /// needs-you/active groups (preserves broker list order); terminal
+        /// pipelines sort by `created` descending (ISO8601 strings sort
+        /// lexicographically).
+        static func sorted(_ items: [PipelineSummary]) -> [PipelineSummary] {
+            items.enumerated().sorted { a, b in
+                let ga = group(for: a.element.state)
+                let gb = group(for: b.element.state)
+                if ga != gb { return ga < gb }
+                if ga == .terminal {
+                    let ca = a.element.created ?? ""
+                    let cb = b.element.created ?? ""
+                    if ca != cb { return ca > cb }
+                }
+                return a.offset < b.offset
+            }.map { $0.element }
+        }
+
+        /// Home's "any pipeline active" affordance gate -- explicitly the
+        /// three live states (running / awaiting_gate / awaiting_pick), not
+        /// every non-terminal state, per spec.
+        static func isActiveForHomeAffordance(_ state: String) -> Bool {
+            state == "running" || state == "awaiting_gate" || state == "awaiting_pick"
+        }
+    }
+
+    struct PipelineListView: View {
+        @Environment(SessionStore.self) private var store
+        @Environment(\.neonTheme) private var neon
+        @Environment(\.dismiss) private var dismiss
+
+        @State private var pipelines: [PipelineSummary] = []
+        @State private var isLoading = true
+        @State private var selectedPipeline: PipelineSummary?
+
+        var body: some View {
+            NavigationStack {
+                ZStack {
+                    GlassAppBackground()
+                    if pipelines.isEmpty {
+                        emptyState
+                    } else {
+                        List {
+                            ForEach(PipelineListViewModel.sorted(pipelines)) { p in
+                                pipelineRow(p)
+                                    .listRowBackground(Color.clear)
+                                    .listRowSeparator(.hidden)
+                                    .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        Telemetry.breadcrumb("pipeline", "reentered monitor",
+                                            data: ["id_prefix": String(p.id.prefix(8))])
+                                        selectedPipeline = p
+                                    }
+                            }
+                        }
+                        .listStyle(.plain)
+                        .scrollContentBackground(.hidden)
+                        .refreshable { await load() }
+                    }
+                }
+                .navigationTitle("Pipelines")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") { dismiss() }
+                            .foregroundStyle(neon.textDim)
+                    }
+                }
+                .navigationDestination(item: $selectedPipeline) { p in
+                    ConduitUI.PipelineMonitorView(
+                        pipelineID: p.id,
+                        pipelineTitle: p.title.isEmpty ? "Pipeline" : p.title
+                    )
+                    .environment(store)
+                }
+            }
+            .appearanceColorScheme()
+            .tint(neon.accent)
+            .task { await load() }
+        }
+
+        private var emptyState: some View {
+            VStack(spacing: 12) {
+                if isLoading {
+                    ProgressView().tint(neon.accent)
+                    Text("Loading pipelines...")
+                        .font(neon.sans(14))
+                        .foregroundStyle(neon.textDim)
+                } else {
+                    Image(systemName: "arrow.triangle.merge")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(neon.textFaint)
+                    Text("No pipelines yet")
+                        .font(neon.sans(15).weight(.semibold))
+                        .foregroundStyle(neon.text)
+                    Text("Pipelines you create keep running here even after you close the sheet.")
+                        .font(neon.sans(13))
+                        .foregroundStyle(neon.textDim)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+
+        private func pipelineRow(_ p: PipelineSummary) -> some View {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(p.title.isEmpty ? "Pipeline" : p.title)
+                        .font(neon.sans(14).weight(.semibold))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(1)
+                    Text("Step \(min(p.current_step + 1, max(p.step_count, 1))) / \(max(p.step_count, 1))")
+                        .font(neon.mono(11))
+                        .foregroundStyle(neon.textDim)
+                }
+                Spacer(minLength: 8)
+                stateChip(p.state)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(neon.textFaint)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
+        }
+
+        private func stateChip(_ state: String) -> some View {
+            let (label, color): (String, Color) = {
+                switch state {
+                case "running":       return ("Running", neon.accent)
+                case "awaiting_gate": return ("Needs you", neon.yellow)
+                case "awaiting_pick": return ("Needs you", neon.yellow)
+                case "complete":      return ("Complete", neon.textDim)
+                case "failed":        return ("Failed", neon.red)
+                case "cancelled":     return ("Cancelled", neon.textFaint)
+                default:              return (state, neon.textFaint)
+                }
+            }()
+            return ConduitUI.Chip(label: label, tint: color)
+        }
+
+        private func load() async {
+            isLoading = true
+            defer { isLoading = false }
+            let fetched = await store.refreshPipelines()
+            pipelines = fetched
+            Telemetry.breadcrumb("pipeline", "list opened", data: ["count": "\(fetched.count)"])
+        }
+    }
+}
