@@ -1,6 +1,9 @@
 # PLAN — Harness Builder
 
-Status: design. A user-facing visual composer for multi-agent setups. "Harness"
+Status: SHIPPED through Phase 3 (P1 #888/#889, P2 #899, P3 #900/#901/#902 —
+all merged 2026-07-05/06; on-device verification pending). Kept for the schema
+reference, §8 decisions, and the §7 non-goals list.
+A user-facing visual composer for multi-agent setups. "Harness"
 is the product name for what the shipped **pipeline** subsystem
 (`broker/internal/pipeline/`) becomes once each block carries its own agent,
 model, reasoning effort, and instructions. Users stack blocks vertically (Apple

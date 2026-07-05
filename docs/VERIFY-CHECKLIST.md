@@ -24,6 +24,68 @@ _(empty)_
 
 ---
 
+## v0.0.216
+
+**Harness builder Phase 3: If/Else + Loop blocks — broker + apps. PRs #901 + #902.**
+
+- **Broker (#901)** — `kind: branch|loop` steps: branch evaluates
+  `prev_output` (contains/not_contains/matches) or `exit_status`
+  (succeeded/failed) deterministically (no agent spawned) and splices
+  then/else inline (persisted post-splice; depth ≤ 2; no fanout inside);
+  loop runs its body up to `max_iterations` (≤ 5, cap-hit = success,
+  iteration surfaced live; body reaped between passes). Global concurrency
+  cap: `CONDUIT_MAX_CONCURRENT_AGENTS` (default 3) queues fanout runs.
+  Flags `pipeline_branch` / `pipeline_loop` (features.* + root mirrors).
+  [broker, **redeploy required**]
+- **Apps (#902)** — Builder gains If/Else + Loop block types rendered as
+  indented sub-stacks (Shortcuts-style); condition editor; loop iteration
+  stepper; sub-steps structurally can't nest control flow (depth bound by
+  construction); topology rail shows fork/repeat glyphs; Monitor shows
+  "iteration k/N" and spliced-from annotations; templates carry control
+  flow. [iOS + Android, **needs on-device verify**: build a pipeline with
+  an If/Else (VERDICT marker condition) and a 2-iteration loop; run it;
+  check splice/iteration rendering; all four layouts]
+
+**Gemini model override — broker. PR #900.**
+
+- `SpawnOverride.Model` now honored for gemini/ACP via the `session/set_model`
+  RPC (drop-if-unknown vs advertised models; live-verified against the real
+  gemini CLI on the box). New `supports.model_override` descriptor bit
+  (true for claude/codex/gemini, false for opencode). [broker, **redeploy
+  required**; app side of the gemini model row ships in #902's gating]
+
+**Harness builder Phase 2: visual block-stack Builder — iOS + Android. PR #899.**
+
+- Builder rebuilt as a Shortcuts-style block-card stack: Card+Chip block
+  cards (agent · model · effort · mode), drag-reorder (native onMove on
+  iOS, long-press drag on Android), per-block config sheet on phone /
+  two-pane inspector on tablets, new read-only topology rail component
+  (both platforms), extracted view models with wire-format byte-equivalence
+  tests. [iOS + Android, **needs on-device verify**: compose/reorder/edit
+  blocks on all four layouts; save + reload a template]
+
+**Live Activity update-token registration — iOS. PR #898.**
+
+- Sentry "push-to-start adoption: update token not registered within 30s" +
+  paired `ios.push_la` NSError: adoption only ran once at app launch, so an
+  LA push-started while backgrounded never got its token observed. Now
+  re-arms on every foreground; 30s deadline is breadcrumb-only; observation
+  is cancel-and-replace with cleanup. [iOS, **needs on-device verify**:
+  push-start an LA with the app backgrounded, foreground later, confirm the
+  LA updates/dismisses remotely]
+
+**CALayer NaN fatal crash fix — iOS. PR #897.**
+
+- Sentry fatal `CALayer bounds contains NaN [nan nan; 402 703]` (8×):
+  keyboard-show notifications can carry duration 0, which fed
+  `.spring(response: 0)` (internal divide) driving the chat scroll —
+  NaN contentOffset. Duration now sanitized (≤0/non-finite → 0.25
+  fallback) with unit tests; all other view-layer divisions audited (list
+  in PR). [iOS, **needs on-device verify**: none targeted — watch Sentry
+  for recurrence]
+
+---
+
 ## v0.0.215
 
 **Pipelines list + re-entry — iOS + Android. PR #895.**
