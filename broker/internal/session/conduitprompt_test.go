@@ -97,6 +97,10 @@ func TestClaudeAppendSystemPrompt(t *testing.T) {
 func TestUpsertConduitAwarenessSection(t *testing.T) {
 	section := conduitAwarenessAgentsMDSection()
 
+	if !strings.Contains(section, codexRepoInstructions) {
+		t.Fatalf("managed AGENTS.md section must direct Codex to the shared repo instructions: %q", section)
+	}
+
 	t.Run("empty yields just the section", func(t *testing.T) {
 		got := upsertConduitAwarenessSection("")
 		if got != section+"\n" {
@@ -274,5 +278,8 @@ func TestUpsertConduitAwarenessSectionWithKBIdempotent(t *testing.T) {
 	}
 	if !strings.Contains(twice, "Knowledge base") {
 		t.Error("KB section missing from AGENTS.md content")
+	}
+	if !strings.Contains(twice, codexRepoInstructions) {
+		t.Error("shared repo instruction bootstrap missing from AGENTS.md content")
 	}
 }

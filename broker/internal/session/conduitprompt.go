@@ -66,8 +66,9 @@ func conduitAwarenessPrompt() string {
 // block inside a project's AGENTS.md so it can be idempotently inserted and
 // replaced without clobbering the user's own content.
 const (
-	agentsMDSectionBegin = "<!-- BEGIN CONDUIT AWARENESS (managed by Conduit) -->"
-	agentsMDSectionEnd   = "<!-- END CONDUIT AWARENESS (managed by Conduit) -->"
+	agentsMDSectionBegin  = "<!-- BEGIN CONDUIT AWARENESS (managed by Conduit) -->"
+	agentsMDSectionEnd    = "<!-- END CONDUIT AWARENESS (managed by Conduit) -->"
+	codexRepoInstructions = "Before planning or changing files, read CLAUDE.md in the workspace root in full if it exists. Treat its repository-wide operating rules as mandatory instructions for Codex too. If CLAUDE.md conflicts with this AGENTS.md, follow AGENTS.md."
 )
 
 // conduitAwarenessAgentsMDSection renders the fenced markdown block written
@@ -75,6 +76,7 @@ const (
 func conduitAwarenessAgentsMDSection() string {
 	return agentsMDSectionBegin + "\n\n" +
 		"## Running under Conduit\n\n" +
+		codexRepoInstructions + "\n\n" +
 		conduitAwarenessPrompt() + "\n\n" +
 		agentsMDSectionEnd
 }
@@ -275,6 +277,7 @@ func conduitAwarenessAgentsMDSectionWithKB(workspaceDir string) string {
 	prompt := conduitAwarenessPromptWithKB(workspaceDir)
 	return agentsMDSectionBegin + "\n\n" +
 		"## Running under Conduit\n\n" +
+		codexRepoInstructions + "\n\n" +
 		prompt + "\n\n" +
 		agentsMDSectionEnd
 }
