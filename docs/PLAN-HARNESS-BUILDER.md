@@ -247,11 +247,10 @@ model, do not re-fetch.
 **Gemini caveat surfaced in the UI:** a gemini model picker is a **silent no-op**
 until Phase 3 — `SpawnOverride.Model` is ignored for ACP
 (`backend_acpwire.go:611-613`: gemini picks its model at `session/new`), and
-gemini has modes not efforts. In Phase 1 the gemini model row is shown
-**disabled with a "model fixed by agent" caption**, and the effort control is
-hidden (its `Efforts[]` is empty). Permission mode (Auto/Plan) DOES work for
-gemini via `acpModeForOverride`, so it stays enabled. This avoids shipping a
-control that lies.
+gemini has modes not efforts. In Phase 1 the gemini model row is **hidden
+entirely** (owner decision, §8.3 — a visible control must always be honored),
+and the effort control is hidden (its `Efforts[]` is empty). Permission mode
+(Auto/Plan) DOES work for gemini via `acpModeForOverride`, so it stays enabled.
 
 ### 2.6 Files touched — Phase 1
 
