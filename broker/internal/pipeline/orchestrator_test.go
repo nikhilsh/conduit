@@ -21,19 +21,28 @@ type fakeSession struct {
 	turnComplete bool // simulates structured-chat turn completion
 }
 
+// createdCall records the args of a single CreateSession call, in order, for
+// assertions (branch names, resolved StepOverride, rendered prompt).
+type createdCall struct {
+	id     string
+	branch string
+	prompt string
+	ov     StepOverride
+}
+
 // fakeSessionManager is a test double for SessionManager.
 type fakeSessionManager struct {
 	sessions map[string]*fakeSession
 	nextID   int
-	// created records branch args in order for Feature 3 assertions.
-	created []struct{ id, branch string }
+	// created records each CreateSession call in order for assertions.
+	created []createdCall
 }
 
 func newFakeSessionManager() *fakeSessionManager {
 	return &fakeSessionManager{sessions: make(map[string]*fakeSession)}
 }
 
-func (f *fakeSessionManager) CreateSession(agentType, cwd, initialPrompt, branch string) (string, error) {
+func (f *fakeSessionManager) CreateSession(agentType, cwd, initialPrompt, branch string, ov StepOverride) (string, error) {
 	f.nextID++
 	id := strings.Repeat("0", 7) + string(rune('0'+f.nextID))
 	sess := &fakeSession{
@@ -44,7 +53,7 @@ func (f *fakeSessionManager) CreateSession(agentType, cwd, initialPrompt, branch
 		phase:     "running",
 	}
 	f.sessions[id] = sess
-	f.created = append(f.created, struct{ id, branch string }{id, branch})
+	f.created = append(f.created, createdCall{id: id, branch: branch, prompt: initialPrompt, ov: ov})
 	return id, nil
 }
 
@@ -1246,5 +1255,214 @@ func TestFanoutJSONRoundtrip(t *testing.T) {
 	}
 	if len(fc.Runs) != 2 || fc.Runs[1].Phase != "turn_complete" {
 		t.Errorf("Runs=%+v", fc.Runs)
+	}
+}
+
+// ── Phase 1 block-config plumbing (docs/PLAN-HARNESS-BUILDER.md §2) ─────────
+
+// TestSpawnStepPassesResolvedStepOverride verifies a normal (non-fanout) step
+// resolves its Model/ReasoningEffort/PermissionMode onto the StepOverride
+// CreateSession receives.
+func TestSpawnStepPassesResolvedStepOverride(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			StepConfig: StepConfig{
+				Model:           "opus",
+				ReasoningEffort: "high",
+				PermissionMode:  "plan",
+			},
+		},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep: %v", err)
+	}
+	if len(sm.created) != 1 {
+		t.Fatalf("expected 1 CreateSession call; got %d", len(sm.created))
+	}
+	ov := sm.created[0].ov
+	if ov.Model != "opus" || ov.ReasoningEffort != "high" || ov.PermissionMode != "plan" {
+		t.Errorf("StepOverride=%+v, want {opus high plan}", ov)
+	}
+}
+
+// TestSpawnFanoutPerRunOverrideFallback verifies fanout per-run resolution:
+// fc.Models[i] (when non-empty) wins; otherwise the step's own Model is used
+// as the fallback. Same chain for ReasoningEfforts/PermissionModes/
+// Instructions.
+func TestSpawnFanoutPerRunOverrideFallback(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			StepConfig: StepConfig{
+				Model:           "step-default-model",
+				ReasoningEffort: "step-default-effort",
+				PermissionMode:  "step-default-mode",
+				Instructions:    "step-default-instructions",
+			},
+			Fanout: &FanoutConfig{
+				Count:            3,
+				AgentTypes:       []string{"claude", "codex", "opencode"},
+				Models:           []string{"opus", "", "gpt-5-codex"},
+				ReasoningEfforts: []string{"", "high", ""},
+				PermissionModes:  []string{"plan", "", ""},
+				Instructions:     []string{"", "run 1 instructions", ""},
+			},
+		},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep: %v", err)
+	}
+	if len(sm.created) != 3 {
+		t.Fatalf("expected 3 CreateSession calls; got %d", len(sm.created))
+	}
+
+	cases := []struct {
+		i                          int
+		wantModel, wantEffort      string
+		wantMode, wantInstructions string
+	}{
+		// run 0: model+mode set, effort+instructions fall back to step default.
+		{0, "opus", "step-default-effort", "plan", "step-default-instructions"},
+		// run 1: effort+instructions set, model+mode fall back to step default.
+		{1, "step-default-model", "high", "step-default-mode", "run 1 instructions"},
+		// run 2: only model set, everything else falls back to step default.
+		{2, "gpt-5-codex", "step-default-effort", "step-default-mode", "step-default-instructions"},
+	}
+	for _, tc := range cases {
+		ov := sm.created[tc.i].ov
+		if ov.Model != tc.wantModel {
+			t.Errorf("run %d: Model=%q, want %q", tc.i, ov.Model, tc.wantModel)
+		}
+		if ov.ReasoningEffort != tc.wantEffort {
+			t.Errorf("run %d: ReasoningEffort=%q, want %q", tc.i, ov.ReasoningEffort, tc.wantEffort)
+		}
+		if ov.PermissionMode != tc.wantMode {
+			t.Errorf("run %d: PermissionMode=%q, want %q", tc.i, ov.PermissionMode, tc.wantMode)
+		}
+		if ov.Instructions != tc.wantInstructions {
+			t.Errorf("run %d: Instructions=%q, want %q", tc.i, ov.Instructions, tc.wantInstructions)
+		}
+	}
+}
+
+// TestInstructionsPreamblePresentOnNormalSpawn verifies a step with
+// Instructions set gets the <block-instructions> preamble prepended to its
+// rendered prompt on a normal spawn.
+func TestInstructionsPreamblePresentOnNormalSpawn(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			StepConfig:     StepConfig{Instructions: "Be terse. Only touch the parser."},
+		},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep: %v", err)
+	}
+	prompt := sm.created[0].prompt
+	want := "<block-instructions>\nBe terse. Only touch the parser.\n</block-instructions>\n\ndo: do things"
+	if prompt != want {
+		t.Errorf("prompt=%q, want %q", prompt, want)
+	}
+}
+
+// TestInstructionsPreambleAbsentOnResume verifies the resume/overridePrompt
+// path does NOT re-prepend the preamble — the amended prompt is delivered
+// verbatim, even when the step's Instructions field is still set from before
+// the failure.
+func TestInstructionsPreambleAbsentOnResume(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			StepConfig:     StepConfig{Instructions: "Be terse. Only touch the parser."},
+		},
+	})
+
+	// Spawn, then fail it so Resume is legal.
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep: %v", err)
+	}
+	if err := orch.Advance(p, 0, "exited(1)"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if p.State != PipelineFailed {
+		t.Fatalf("state=%s, want failed", p.State)
+	}
+
+	if err := orch.Resume(p, "verbatim amended prompt"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if len(sm.created) != 2 {
+		t.Fatalf("expected 2 CreateSession calls; got %d", len(sm.created))
+	}
+	prompt := sm.created[1].prompt
+	if prompt != "verbatim amended prompt" {
+		t.Errorf("resumed prompt=%q, want verbatim %q (no preamble)", prompt, "verbatim amended prompt")
+	}
+	if strings.Contains(prompt, "block-instructions") {
+		t.Errorf("resumed prompt unexpectedly contains the instructions preamble: %q", prompt)
+	}
+}
+
+// TestBogusModelStillReachesRunning verifies a malformed/unknown model or
+// effort does not fail the spawn — the override layer (session package)
+// silently drops bad values; the pipeline orchestrator itself must never
+// validate or reject StepOverride contents.
+func TestBogusModelStillReachesRunning(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			StepConfig: StepConfig{
+				Model:           "totally-bogus-model-xyz",
+				ReasoningEffort: "ludicrous-effort",
+			},
+		},
+	})
+
+	if err := orch.Start(p); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if p.State != PipelineRunning {
+		t.Fatalf("state=%s, want running", p.State)
+	}
+	if p.Steps[0].SessionID == "" {
+		t.Fatal("step 0 has no session ID after Start with a bogus model")
+	}
+	ov := sm.created[0].ov
+	if ov.Model != "totally-bogus-model-xyz" {
+		t.Errorf("ov.Model=%q, want the bogus value passed through unchanged", ov.Model)
 	}
 }

@@ -26,14 +26,41 @@ var ErrNotAtPick = errors.New("pipeline is not awaiting pick")
 // ErrRunFailed is returned by Pick when the selected run did not exit(0).
 var ErrRunFailed = errors.New("selected run failed")
 
+// StepOverride carries the resolved per-block model/reasoning-effort/
+// permission-mode/instructions for a single CreateSession call. It lives in
+// the pipeline package (not session) so the SessionManager interface below
+// does not import session types; the ws layer maps it onto
+// session.SpawnOverride{Model, ReasoningEffort, PermissionMode}.
+//
+// Instructions is NOT part of that mapping — instructions are prompt
+// content, not argv, so they never ride SpawnOverride. For the normal
+// (non-fanout) spawn path, spawnStepOpts has ALREADY folded Instructions
+// into initialPrompt as a <block-instructions> preamble before calling
+// CreateSession, so Instructions is left "" on the StepOverride passed
+// there — setting it again would document nothing new and risk a caller
+// double-applying it. The field is populated only on the fanout per-run
+// path (spawnFanout), where each run's resolved instructions are prepended
+// to that run's own prompt and also recorded here for introspection.
+type StepOverride struct {
+	Model, ReasoningEffort, PermissionMode, Instructions string
+}
+
+// instructionsPreambleFmt is the exact wire shape for a block-instructions
+// preamble (docs/PLAN-HARNESS-BUILDER.md §1.1): fenced instructions, a blank
+// line, then the rendered prompt. Empty instructions never call this —
+// callers gate on step.Instructions != "" — so the byte-identical-when-empty
+// invariant holds without a special case here.
+const instructionsPreambleFmt = "<block-instructions>\n%s\n</block-instructions>\n\n%s"
+
 // SessionManager is the minimal interface the Orchestrator needs to interact
 // with the session manager. The ws layer wires the concrete *session.Manager
 // behind this interface to avoid an import cycle (pipeline → ws → pipeline).
 type SessionManager interface {
 	// CreateSession spawns a new session with the given agent type, CWD,
-	// initial prompt, and branch name. The branch is used when worktree mode
-	// is enabled (Gap A seam); ignored otherwise. Returns the new session ID.
-	CreateSession(agentType, cwd, initialPrompt, branch string) (sessionID string, err error)
+	// initial prompt, branch name, and resolved per-block override. The
+	// branch is used when worktree mode is enabled (Gap A seam); ignored
+	// otherwise. Returns the new session ID.
+	CreateSession(agentType, cwd, initialPrompt, branch string, ov StepOverride) (sessionID string, err error)
 	// GetPhase returns the session's current phase string (e.g. "running",
 	// "exited(0)", "exited(1)"). Returns "" when the session is unknown.
 	GetPhase(sessionID string) string
@@ -347,6 +374,15 @@ func (o *Orchestrator) spawnStepOpts(p *Pipeline, k int, overridePrompt string) 
 			// No prev substitution needed; remove any {{prev}} placeholder.
 			prompt = strings.ReplaceAll(prompt, "{{prev}}", "")
 		}
+
+		// Prepend the block-instructions preamble (§1.1). Only on the
+		// rendered-template path — the overridePrompt (resume) path above
+		// delivers the amended prompt verbatim; re-prepending here would
+		// double the preamble on a resume.
+		if step.Instructions != "" {
+			prompt = fmt.Sprintf(instructionsPreambleFmt, step.Instructions, prompt)
+			log.Printf("pipeline %s step %d: prepended block instructions (len=%d)", p.ID, k, len(step.Instructions))
+		}
 	}
 
 	// Branch name: incorporate Retries to avoid a git collision on re-spawns.
@@ -354,7 +390,14 @@ func (o *Orchestrator) spawnStepOpts(p *Pipeline, k int, overridePrompt string) 
 	if step.Retries > 0 {
 		branch = fmt.Sprintf("pipeline-%s-step-%d-r%d", p.ID, k, step.Retries)
 	}
-	sessID, err := o.sessions.CreateSession(step.AgentType, p.CWD, prompt, branch)
+	ov := StepOverride{
+		Model:           step.Model,
+		ReasoningEffort: step.ReasoningEffort,
+		PermissionMode:  step.PermissionMode,
+		// Instructions deliberately left "" — already folded into prompt
+		// above (or, on the resume path, intentionally not re-applied).
+	}
+	sessID, err := o.sessions.CreateSession(step.AgentType, p.CWD, prompt, branch, ov)
 	if err != nil {
 		return fmt.Errorf("create session (agent=%s): %w", step.AgentType, err)
 	}
@@ -493,8 +536,33 @@ func (o *Orchestrator) spawnFanout(p *Pipeline, k int) error {
 		if i < len(fc.AgentTypes) && fc.AgentTypes[i] != "" {
 			agentType = fc.AgentTypes[i]
 		}
+		// Per-run resolution: fc.<Array>[i] (if set) → step's own StepConfig
+		// field → adapter default (the fallback is expressed by passing the
+		// step field as the fallback argument here).
+		model := resolveFanoutStr(fc.Models, i, step.Model)
+		effort := resolveFanoutStr(fc.ReasoningEfforts, i, step.ReasoningEffort)
+		mode := resolveFanoutStr(fc.PermissionModes, i, step.PermissionMode)
+		instructions := resolveFanoutStr(fc.Instructions, i, step.Instructions)
+
+		runPrompt := prompt
+		if instructions != "" {
+			runPrompt = fmt.Sprintf(instructionsPreambleFmt, instructions, prompt)
+			log.Printf("pipeline %s step %d fanout: run %d prepended block instructions (len=%d)",
+				p.ID, k, i, len(instructions))
+		}
+
+		ov := StepOverride{
+			Model:           model,
+			ReasoningEffort: effort,
+			PermissionMode:  mode,
+			// Instructions IS carried here (unlike the normal path) — this
+			// is the "fanout per-run rendering" case StepOverride's doc
+			// comment calls out; it mirrors what was just prepended above.
+			Instructions: instructions,
+		}
+
 		branch := fmt.Sprintf("pipeline-%s-step-%d-run-%d", p.ID, k, i)
-		sessID, err := o.sessions.CreateSession(agentType, p.CWD, prompt, branch)
+		sessID, err := o.sessions.CreateSession(agentType, p.CWD, runPrompt, branch, ov)
 		if err != nil {
 			// Mark spawned runs as cancelled and return error.
 			log.Printf("pipeline %s step %d fanout: run %d spawn error: %v", p.ID, k, i, err)
@@ -791,6 +859,16 @@ func (o *Orchestrator) sendGatePush(p *Pipeline, stepIndex int) {
 	if err := o.notifier.Notify(ctx, title, body); err != nil {
 		log.Printf("pipeline %s: gate push notify: %v", p.ID, err)
 	}
+}
+
+// resolveFanoutStr returns arr[i] when present and non-empty, else fallback.
+// Shared by spawnFanout's per-run model/reasoning_effort/permission_mode/
+// instructions resolution — mirrors the inline AgentTypes[i] fallback above.
+func resolveFanoutStr(arr []string, i int, fallback string) string {
+	if i < len(arr) && arr[i] != "" {
+		return arr[i]
+	}
+	return fallback
 }
 
 // isRunSettled returns true when a fanout run's phase indicates it has
