@@ -23,11 +23,21 @@ extension ConduitUI {
         var promptTemplate: String = ""
         var inputFromPrev: String = "none"
         var gateAfter: Bool = false
+        // Per-block config (PLAN-HARNESS-BUILDER Phase 1, gated on
+        // store.pipelineBlockConfig). "" = adapter default / inherit.
+        var model: String = ""
+        var reasoningEffort: String = ""
+        var permissionMode: String = ""
+        var instructions: String = ""
         // Fanout config (present only when fanoutEnabled == true)
         var fanoutEnabled: Bool = false
         var fanoutCount: Int = 2
         // Per-run agent types (index-aligned); empty = use step agent for all runs
         var fanoutAgentTypes: [String] = []
+        // Per-run config overrides (index-aligned; "" = inherit from the step).
+        var fanoutModels: [String] = []
+        var fanoutReasoningEfforts: [String] = []
+        var fanoutPermissionModes: [String] = []
     }
 
     struct CreatedPipeline: Identifiable {
@@ -51,6 +61,80 @@ extension ConduitUI {
         let prompt_template: String
         let input_from_prev: String
         let gate_after: Bool
+        // Per-block config (PLAN-HARNESS-BUILDER Phase 1). Optional so a
+        // template saved before this shipped (or an old broker's response)
+        // decodes fine with these absent.
+        let model: String?
+        let reasoning_effort: String?
+        let permission_mode: String?
+        let instructions: String?
+    }
+
+    // MARK: - Request wire types (PLAN-HARNESS-BUILDER Phase 1)
+    //
+    // Type-level (not function-local) so ConduitTests can round-trip them
+    // directly. Shape mirrors the broker's embedded `StepConfig`
+    // (broker/internal/pipeline/stepconfig.go) -- flat on the step, omitted
+    // when empty. Identical shape for both `/api/pipeline` (create) and
+    // `/api/pipeline-templates` (save) -- one step encoder, no lockstep risk.
+
+    struct PipelineRequestFanout: Encodable, Equatable {
+        var count: Int
+        var agent_types: [String]?
+        // Per-run config overrides; "" = inherit from the step. No per-run
+        // instructions -- runs share the block's instructions (owner
+        // decision §8.1).
+        var models: [String]?
+        var reasoning_efforts: [String]?
+        var permission_modes: [String]?
+    }
+
+    struct PipelineRequestStep: Encodable, Equatable {
+        var agent_type: String
+        var role: String
+        var prompt_template: String
+        var input_from_prev: String
+        var gate_after: Bool
+        var fanout: PipelineRequestFanout?
+        // Per-block config (PLAN-HARNESS-BUILDER Phase 1); omitted when
+        // empty so an old broker's decode is unaffected.
+        var model: String?
+        var reasoning_effort: String?
+        var permission_mode: String?
+        var instructions: String?
+
+        init(_ s: PipelineStep) {
+            agent_type = s.agentType
+            role = s.role
+            prompt_template = s.promptTemplate
+            input_from_prev = s.inputFromPrev
+            gate_after = s.gateAfter
+            fanout = s.fanoutEnabled ? PipelineRequestFanout(
+                count: s.fanoutCount,
+                agent_types: s.fanoutAgentTypes.isEmpty ? nil : s.fanoutAgentTypes,
+                models: s.fanoutModels.isEmpty ? nil : s.fanoutModels,
+                reasoning_efforts: s.fanoutReasoningEfforts.isEmpty ? nil : s.fanoutReasoningEfforts,
+                permission_modes: s.fanoutPermissionModes.isEmpty ? nil : s.fanoutPermissionModes
+            ) : nil
+            model = s.model.isEmpty ? nil : s.model
+            reasoning_effort = s.reasoningEffort.isEmpty ? nil : s.reasoningEffort
+            permission_mode = s.permissionMode.isEmpty ? nil : s.permissionMode
+            instructions = s.instructions.isEmpty ? nil : s.instructions
+        }
+    }
+
+    struct PipelineCreateRequest: Encodable {
+        var title: String
+        var task: String
+        var cwd: String
+        var base: String
+        var steps: [PipelineRequestStep]
+    }
+
+    struct PipelineTemplateSaveRequest: Encodable {
+        var title: String
+        var task: String
+        var steps: [PipelineRequestStep]
     }
 
     // MARK: - Builder view
@@ -78,9 +162,54 @@ extension ConduitUI {
         @State private var isSavingTemplate = false
         @State private var templateDeleteConfirm: PipelineTemplate? = nil
 
-        private let agentOptions = ["claude", "codex", "opencode"]
+        private static let staticAgentOptions = ["claude", "codex", "opencode"]
         private let roleOptions = ["researcher", "architect", "engineer", "custom"]
         private let inputFromPrevOptions = ["none", "output", "memory", "memory+output"]
+
+        /// Live assistant list from the broker's capabilities descriptors
+        /// (`store.agentDescriptors`, WS-3.1) -- the same store data the
+        /// fork / new-session pickers consume, in the same order (claude,
+        /// codex first, then extras alphabetically -- mirrors
+        /// `ConduitAgentPickerSheet.allAgentKinds`). "shell" is excluded --
+        /// it is a raw terminal, not an agent. Falls back to the static
+        /// list before the first successful capabilities fetch (old broker,
+        /// or fetch still pending) so the picker never renders empty.
+        private var agentOptions: [String] {
+            let descriptors = store.agentDescriptors
+            guard !descriptors.isEmpty else { return Self.staticAgentOptions }
+            let known = ["claude", "codex"].filter { descriptors.keys.contains($0) }
+            let extras = descriptors.keys
+                .filter { !known.contains($0) && $0.lowercased() != "shell" }
+                .sorted()
+            return known + extras
+        }
+
+        /// The model catalog for `agentType`: prefer the descriptor's own
+        /// `models[]` (WS-3.1), fall back to the top-level `modelCatalog`
+        /// (same broker data, different seam) so either fetch path populates
+        /// the picker.
+        private func modelCatalog(for agentType: String) -> [ConduitUI.AgentModel] {
+            let key = agentType.lowercased()
+            if let m = store.agentDescriptors[key]?.models, !m.isEmpty { return m }
+            return store.modelCatalog[agentType] ?? []
+        }
+
+        /// Per PLAN-HARNESS-BUILDER §8.3 (owner decision, overriding the
+        /// plan's "disabled with caption" text): the model override is a
+        /// silent no-op for gemini (ACP picks its model at `session/new`,
+        /// `backend_acpwire.go:611-613`), so the model row is HIDDEN
+        /// entirely for gemini rather than shown disabled.
+        private func modelRowHidden(agentType: String, catalog: [ConduitUI.AgentModel]) -> Bool {
+            agentType.lowercased() == "gemini" || catalog.isEmpty
+        }
+
+        private func effortOptions(model: String, catalog: [ConduitUI.AgentModel]) -> [String] {
+            ConduitUI.ForkOptions.catalogEntry(for: model, in: catalog.isEmpty ? nil : catalog)?.efforts ?? []
+        }
+
+        private func supportsPlanMode(agentType: String) -> Bool {
+            store.agentDescriptors[agentType.lowercased()]?.supports.planMode ?? false
+        }
 
         var body: some View {
             NavigationStack {
@@ -403,6 +532,13 @@ extension ConduitUI {
                     .tint(neon.accent)
                 }
 
+                // Per-block config (model / effort / permission mode /
+                // instructions), gated on pipeline_block_config so an old
+                // broker never sees controls it would silently drop.
+                if store.pipelineBlockConfig {
+                    blockConfigSection(step: step)
+                }
+
                 // Role picker
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Role")
@@ -476,6 +612,121 @@ extension ConduitUI {
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
+        }
+
+        // MARK: Per-block config (model / effort / permission mode / instructions)
+
+        @ViewBuilder
+        private func blockConfigSection(step: Binding<PipelineStep>) -> some View {
+            let agentType = step.wrappedValue.agentType
+            let catalog = modelCatalog(for: agentType)
+            let showModel = !modelRowHidden(agentType: agentType, catalog: catalog)
+            let efforts = effortOptions(model: step.wrappedValue.model, catalog: catalog)
+            let showEffort = !efforts.isEmpty
+            let showMode = supportsPlanMode(agentType: agentType)
+
+            VStack(alignment: .leading, spacing: 10) {
+                if showModel {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Model")
+                            .font(neon.mono(10).weight(.semibold))
+                            .foregroundStyle(neon.textFaint)
+                            .textCase(.uppercase)
+                        Menu {
+                            Picker("Model", selection: step.model) {
+                                Text("Default").tag("")
+                                ForEach(catalog, id: \.id) { m in
+                                    Text(m.displayName.isEmpty ? m.id : m.displayName).tag(m.id)
+                                }
+                            }
+                        } label: {
+                            HStack {
+                                Text(modelLabel(step.wrappedValue.model, in: catalog))
+                                    .foregroundStyle(neon.text)
+                                Spacer()
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(neon.textFaint)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(neon.surface2)
+                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(neon.border, lineWidth: 1))
+                            )
+                        }
+                        .tint(neon.accent)
+                        .onChange(of: step.wrappedValue.model) { _, _ in
+                            // A model switch can change the supported effort
+                            // range; snap back to Default rather than carry
+                            // a stale level the new model doesn't offer.
+                            let newEfforts = effortOptions(model: step.wrappedValue.model, catalog: catalog)
+                            if !newEfforts.contains(step.wrappedValue.reasoningEffort) {
+                                step.wrappedValue.reasoningEffort = ""
+                            }
+                        }
+                    }
+                }
+
+                if showEffort {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Reasoning effort")
+                            .font(neon.mono(10).weight(.semibold))
+                            .foregroundStyle(neon.textFaint)
+                            .textCase(.uppercase)
+                        Picker("Reasoning effort", selection: step.reasoningEffort) {
+                            Text("Default").tag("")
+                            ForEach(efforts, id: \.self) { level in
+                                Text(ConduitUI.ForkOptions.effortLabel(level)).tag(level)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .tint(neon.accent)
+                    }
+                }
+
+                if showMode {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Permission mode")
+                            .font(neon.mono(10).weight(.semibold))
+                            .foregroundStyle(neon.textFaint)
+                            .textCase(.uppercase)
+                        Picker("Permission mode", selection: step.permissionMode) {
+                            ForEach(ConduitUI.ForkOptions.permissionModes, id: \.self) { mode in
+                                Text(ConduitUI.ForkOptions.permissionModeLabel(mode)).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .tint(neon.accent)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Instructions for this block")
+                        .font(neon.mono(10).weight(.semibold))
+                        .foregroundStyle(neon.textFaint)
+                        .textCase(.uppercase)
+                    TextField("Optional standing guidance for this block...", text: step.instructions, axis: .vertical)
+                        .font(neon.sans(13))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(2...5)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(neon.surface2)
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(neon.border, lineWidth: 1))
+                        )
+                        .tint(neon.accent)
+                }
+            }
+        }
+
+        private func modelLabel(_ id: String, in catalog: [ConduitUI.AgentModel]) -> String {
+            if id.isEmpty { return "Default" }
+            if let m = catalog.first(where: { $0.id == id }), !m.displayName.isEmpty { return m.displayName }
+            return id
         }
 
         @ViewBuilder
@@ -593,6 +844,9 @@ extension ConduitUI {
                                 .pickerStyle(.segmented)
                                 .tint(neon.accent)
                             }
+                            if store.pipelineBlockConfig {
+                                runConfigRow(step: step, runIdx: runIdx)
+                            }
                         }
                     }
                 }
@@ -610,6 +864,95 @@ extension ConduitUI {
                             ? neon.accent.opacity(0.25)
                             : neon.border.opacity(0.5), lineWidth: 1)
             )
+        }
+
+        /// Binding into one of `PipelineStep`'s index-aligned fanout config
+        /// arrays (`fanoutModels` / `fanoutReasoningEfforts` /
+        /// `fanoutPermissionModes`), padding with the inherit sentinel ("")
+        /// -- NOT the step's agent type, since these have a real "inherit
+        /// from the step" meaning (§2.1 of PLAN-HARNESS-BUILDER).
+        private func fanoutArrayBinding(
+            _ keyPath: WritableKeyPath<PipelineStep, [String]>,
+            step: Binding<PipelineStep>,
+            runIdx: Int
+        ) -> Binding<String> {
+            Binding(
+                get: {
+                    let arr = step.wrappedValue[keyPath: keyPath]
+                    return arr.indices.contains(runIdx) ? arr[runIdx] : ""
+                },
+                set: { newValue in
+                    var arr = step.wrappedValue[keyPath: keyPath]
+                    while arr.count <= runIdx { arr.append("") }
+                    arr[runIdx] = newValue
+                    step.wrappedValue[keyPath: keyPath] = arr
+                }
+            )
+        }
+
+        /// Per-run model/effort/permission-mode pickers (PLAN-HARNESS-BUILDER
+        /// §2.1/§2.5), index-aligned with the run and resolved against the
+        /// RUN's agent (which may differ from the step's agent) -- NOT
+        /// instructions, which per owner decision (§8.1) are shared from the
+        /// block and have no per-run UI.
+        @ViewBuilder
+        private func runConfigRow(step: Binding<PipelineStep>, runIdx: Int) -> some View {
+            let runAgent = step.wrappedValue.fanoutAgentTypes.indices.contains(runIdx)
+                ? step.wrappedValue.fanoutAgentTypes[runIdx]
+                : step.wrappedValue.agentType
+            let catalog = modelCatalog(for: runAgent)
+            let showModel = !modelRowHidden(agentType: runAgent, catalog: catalog)
+            let modelBinding = fanoutArrayBinding(\.fanoutModels, step: step, runIdx: runIdx)
+            let effortBinding = fanoutArrayBinding(\.fanoutReasoningEfforts, step: step, runIdx: runIdx)
+            let modeBinding = fanoutArrayBinding(\.fanoutPermissionModes, step: step, runIdx: runIdx)
+            let efforts = effortOptions(model: modelBinding.wrappedValue, catalog: catalog)
+            let showEffort = !efforts.isEmpty
+            let showMode = supportsPlanMode(agentType: runAgent)
+
+            if showModel || showEffort || showMode {
+                HStack(alignment: .top, spacing: 8) {
+                    Spacer().frame(width: 44)
+                    VStack(alignment: .leading, spacing: 6) {
+                        if showModel {
+                            Menu {
+                                Picker("Model", selection: modelBinding) {
+                                    Text("Default").tag("")
+                                    ForEach(catalog, id: \.id) { m in
+                                        Text(m.displayName.isEmpty ? m.id : m.displayName).tag(m.id)
+                                    }
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text("Model: \(modelLabel(modelBinding.wrappedValue, in: catalog))")
+                                        .font(neon.mono(11))
+                                    Image(systemName: "chevron.up.chevron.down")
+                                        .font(.system(size: 9, weight: .semibold))
+                                }
+                                .foregroundStyle(neon.textDim)
+                            }
+                        }
+                        if showEffort {
+                            Picker("Effort", selection: effortBinding) {
+                                Text("Default").tag("")
+                                ForEach(efforts, id: \.self) { level in
+                                    Text(ConduitUI.ForkOptions.effortLabel(level)).tag(level)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .tint(neon.accent)
+                        }
+                        if showMode {
+                            Picker("Mode", selection: modeBinding) {
+                                ForEach(ConduitUI.ForkOptions.permissionModes, id: \.self) { mode in
+                                    Text(ConduitUI.ForkOptions.permissionModeLabel(mode)).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .tint(neon.accent)
+                        }
+                    }
+                }
+            }
         }
 
         // MARK: Start button
@@ -685,6 +1028,24 @@ extension ConduitUI {
             }
         }
 
+        /// Breadcrumb for any step carrying non-default per-block config, at
+        /// create/save time. Presence only -- never the instruction text
+        /// itself (Telemetry standing order: no user content in telemetry).
+        private func logBlockConfigTelemetry() {
+            for (i, s) in steps.enumerated() {
+                let hasConfig = !s.model.isEmpty || !s.reasoningEffort.isEmpty
+                    || !s.permissionMode.isEmpty || !s.instructions.isEmpty
+                guard hasConfig else { continue }
+                Telemetry.breadcrumb("pipeline", "block config set", data: [
+                    "step": "\(i)",
+                    "model": s.model.isEmpty ? "" : "set",
+                    "effort": s.reasoningEffort.isEmpty ? "" : "set",
+                    "mode": s.permissionMode,
+                    "instructions": s.instructions.isEmpty ? "" : "set",
+                ])
+            }
+        }
+
         // MARK: - Template API
 
         private func loadTemplates() {
@@ -730,7 +1091,11 @@ extension ConduitUI {
                     role: s.role,
                     promptTemplate: s.prompt_template,
                     inputFromPrev: s.input_from_prev,
-                    gateAfter: s.gate_after
+                    gateAfter: s.gate_after,
+                    model: s.model ?? "",
+                    reasoningEffort: s.reasoning_effort ?? "",
+                    permissionMode: s.permission_mode ?? "",
+                    instructions: s.instructions ?? ""
                 )
             }
             if steps.isEmpty { steps = [PipelineStep()] }
@@ -751,38 +1116,9 @@ extension ConduitUI {
             Telemetry.breadcrumb("pipeline", "template saved",
                 data: ["title": trimTitle, "steps": "\(steps.count)"])
 
-            struct TemplateRequestFanout: Encodable {
-                let count: Int
-                let agent_types: [String]?
-            }
-            struct TemplateRequestStep: Encodable {
-                let agent_type: String
-                let role: String
-                let prompt_template: String
-                let input_from_prev: String
-                let gate_after: Bool
-                let fanout: TemplateRequestFanout?
-            }
-            struct TemplateRequest: Encodable {
-                let title: String
-                let task: String
-                let steps: [TemplateRequestStep]
-            }
-            let reqSteps = steps.map { s in
-                let fo: TemplateRequestFanout? = s.fanoutEnabled ? TemplateRequestFanout(
-                    count: s.fanoutCount,
-                    agent_types: s.fanoutAgentTypes.isEmpty ? nil : s.fanoutAgentTypes
-                ) : nil
-                return TemplateRequestStep(
-                    agent_type: s.agentType,
-                    role: s.role,
-                    prompt_template: s.promptTemplate,
-                    input_from_prev: s.inputFromPrev,
-                    gate_after: s.gateAfter,
-                    fanout: fo
-                )
-            }
-            let reqBody = TemplateRequest(title: trimTitle, task: trimTask, steps: reqSteps)
+            logBlockConfigTelemetry()
+            let reqSteps = steps.map { ConduitUI.PipelineRequestStep($0) }
+            let reqBody = ConduitUI.PipelineTemplateSaveRequest(title: trimTitle, task: trimTask, steps: reqSteps)
             guard let bodyData = try? JSONEncoder().encode(reqBody) else {
                 isSavingTemplate = false
                 return
@@ -873,40 +1209,9 @@ extension ConduitUI {
             Telemetry.breadcrumb("pipeline", "create start",
                 data: ["title": trimTitle, "steps": "\(steps.count)", "host": endpoint.displayHost])
 
-            struct PipelineRequestFanout: Encodable {
-                let count: Int
-                let agent_types: [String]?
-            }
-            struct PipelineRequestStep: Encodable {
-                let agent_type: String
-                let role: String
-                let prompt_template: String
-                let input_from_prev: String
-                let gate_after: Bool
-                let fanout: PipelineRequestFanout?
-            }
-            struct PipelineRequest: Encodable {
-                let title: String
-                let task: String
-                let cwd: String
-                let base: String
-                let steps: [PipelineRequestStep]
-            }
-            let reqSteps = steps.map { s in
-                let fanoutPayload: PipelineRequestFanout? = s.fanoutEnabled ? PipelineRequestFanout(
-                    count: s.fanoutCount,
-                    agent_types: s.fanoutAgentTypes.isEmpty ? nil : s.fanoutAgentTypes
-                ) : nil
-                return PipelineRequestStep(
-                    agent_type: s.agentType,
-                    role: s.role,
-                    prompt_template: s.promptTemplate,
-                    input_from_prev: s.inputFromPrev,
-                    gate_after: s.gateAfter,
-                    fanout: fanoutPayload
-                )
-            }
-            let reqBody = PipelineRequest(
+            logBlockConfigTelemetry()
+            let reqSteps = steps.map { ConduitUI.PipelineRequestStep($0) }
+            let reqBody = ConduitUI.PipelineCreateRequest(
                 title: trimTitle,
                 task: trimTask,
                 cwd: cwd.trimmingCharacters(in: .whitespacesAndNewlines),

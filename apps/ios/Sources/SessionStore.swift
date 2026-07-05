@@ -2156,6 +2156,13 @@ final class SessionStore {
     /// pick panel in the monitor hide when false.
     private(set) var pipelineFanout: Bool = false
 
+    /// Whether the broker supports per-block model/effort/permission-mode/
+    /// instructions overrides (`GET /api/capabilities` ->
+    /// `"pipeline_block_config": true`, PLAN-HARNESS-BUILDER Phase 1).
+    /// False on old brokers; the per-step config controls in the builder
+    /// hide when false so the request stays byte-identical to today.
+    private(set) var pipelineBlockConfig: Bool = false
+
     /// Single-flight + at-most-once-per-(box,version) guard for the
     /// post-connect broker auto-update (Fix: broker auto-update on reconnect).
     /// `reconnect()`/`selectSavedServer()` short-circuit to a WS-only bounce
@@ -2195,6 +2202,7 @@ final class SessionStore {
             let pipeline_resume: Bool?
             let pipeline_templates: Bool?
             let pipeline_fanout: Bool?
+            let pipeline_block_config: Bool?
         }
         Telemetry.breadcrumb(
             "model_catalog", "refresh start",
@@ -2242,6 +2250,9 @@ final class SessionStore {
         pipelineTemplates = caps.pipeline_templates ?? false
         // pipeline_fanout: fanout-as-a-step; default false on old brokers.
         pipelineFanout = caps.pipeline_fanout ?? false
+        // pipeline_block_config: per-block model/effort/mode/instructions
+        // overrides (PLAN-HARNESS-BUILDER Phase 1); default false on old brokers.
+        pipelineBlockConfig = caps.pipeline_block_config ?? false
 
         // WS-H.1: parse the readiness block; nil on old brokers → consumers treat as unknown.
         if let r = caps.readiness {
