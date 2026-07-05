@@ -24,7 +24,7 @@ extension ConduitUI {
     /// falls into the "active" default sort bucket (see
     /// `PipelineListViewModel.group(for:)`), staying visible instead of
     /// vanishing or crashing the list.
-    struct PipelineSummary: Identifiable, Decodable, Equatable {
+    struct PipelineSummary: Identifiable, Decodable, Hashable {
         let id: String
         let title: String
         let state: String

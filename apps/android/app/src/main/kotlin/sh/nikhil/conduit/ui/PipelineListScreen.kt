@@ -271,7 +271,7 @@ private fun PipelineListRow(pipeline: PipelineSummary, neon: NeonTheme, onTap: (
 
 @Composable
 private fun PipelineListStateChip(state: String, neon: NeonTheme) {
-    val (label, color): Pair<String, Color> = when (state) {
+    val (label, color) = when (state) {
         "running" -> "Running" to neon.accent
         "awaiting_gate" -> "Needs you" to neon.yellow
         "awaiting_pick" -> "Needs you" to neon.yellow
