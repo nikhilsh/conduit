@@ -70,6 +70,7 @@ fun AppRoot(
     var compareRuns by remember { mutableStateOf<List<FanOutCompareRun>?>(null) }
     // Pipeline screens
     var showPipelineBuilder by remember { mutableStateOf(false) }
+    var showPipelineList by remember { mutableStateOf(false) }
     var pipelineMonitorTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showApprovals by remember { mutableStateOf(false) }
     var boxHealthTarget by remember { mutableStateOf<sh.nikhil.conduit.SavedServer?>(null) }
@@ -182,6 +183,7 @@ fun AppRoot(
                                 onVoice = { showVoice = true },
                                 onOpenApprovals = { showApprovals = true },
                                 onOpenBoxHealth = { server -> boxHealthTarget = server },
+                                onOpenPipelines = { showPipelineList = true },
                                 // The tablet rail header already shows a Settings
                                 // gear -- don't render a second one in the center.
                                 showSettingsButton = false,
@@ -237,6 +239,7 @@ fun AppRoot(
                         onVoice = { showVoice = true },
                         onOpenApprovals = { showApprovals = true },
                         onOpenBoxHealth = { server -> boxHealthTarget = server },
+                        onOpenPipelines = { showPipelineList = true },
                         onOpenOnboarding = {
                             onboardingEntry = FeatureFlags.OnboardingEntry.replay
                             showOnboarding = true
@@ -311,6 +314,7 @@ fun AppRoot(
             onOpenSession = { id -> showCommandPalette = false; store.select(id) },
             onFanOut = { showCommandPalette = false; showFanOut = true },
             onNewPipeline = { showCommandPalette = false; showPipelineBuilder = true },
+            onPipelines = { showCommandPalette = false; showPipelineList = true },
             onRunOnBox = { text ->
                 // CommandPaletteScreen always calls onDismiss() before onRunOnBox(),
                 // so the palette is already in its dismiss-animation by the time this
@@ -488,6 +492,22 @@ fun AppRoot(
             pipelineTitle = title,
             onOpenSession = { sessionId -> pipelineMonitorTarget = null; store.select(sessionId) },
             onBack = { pipelineMonitorTarget = null },
+        )
+    }
+
+    // Pipeline list screen -- reopens the monitor for a running/past
+    // pipeline. The fix for a pipeline becoming unreachable once its
+    // creation sheet is dismissed (only the Builder's own post-create
+    // navigation reached the monitor before this).
+    if (showPipelineList) {
+        BackHandler(enabled = true) { showPipelineList = false }
+        PipelineListScreen(
+            store = store,
+            onOpenPipeline = { id, title ->
+                showPipelineList = false
+                pipelineMonitorTarget = Pair(id, title)
+            },
+            onDismiss = { showPipelineList = false },
         )
     }
 

@@ -1,0 +1,284 @@
+package sh.nikhil.conduit.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallSplit
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
+import sh.nikhil.conduit.ui.components.ConduitChip
+import kotlin.math.max
+import kotlin.math.min
+
+/**
+ * One row of `GET /api/pipelines`. Mirrors
+ * `broker/internal/ws/pipeline.go`'s `pipelineListItem` JSON shape and iOS
+ * `ConduitUI.PipelineSummary`. `state` is a raw string (not an enum) so an
+ * unrecognized future state from a newer broker never fails decode -- it
+ * just falls into the "active" default sort bucket (see
+ * [PipelineListViewModel.group]).
+ */
+data class PipelineSummary(
+    val id: String,
+    val title: String,
+    val state: String,
+    val currentStep: Int,
+    val stepCount: Int,
+    val created: String?,
+)
+
+/**
+ * Pure sort/group helpers for the pipeline list -- kept off Compose so
+ * they're unit-testable from a plain JVM test (mirrors iOS
+ * `ConduitUI.PipelineListViewModel`).
+ */
+object PipelineListViewModel {
+    enum class Group { NEEDS_YOU, ACTIVE, TERMINAL }
+
+    /**
+     * `awaiting_gate` / `awaiting_pick` need the user; `complete` / `failed` /
+     * `cancelled` are terminal; everything else (`pending`, `running`,
+     * `step_done`, and any unrecognized future state) is treated as active
+     * so new broker states stay visible rather than vanishing or misfiling
+     * as "needs you".
+     */
+    fun group(state: String): Group = when (state) {
+        "awaiting_gate", "awaiting_pick" -> Group.NEEDS_YOU
+        "complete", "failed", "cancelled" -> Group.TERMINAL
+        else -> Group.ACTIVE
+    }
+
+    /**
+     * Sort order: needs-you first, then active/running, then terminal
+     * pipelines most-recently-created first. Stable within the needs-you/
+     * active groups (preserves broker list order); terminal pipelines sort
+     * by `created` descending (ISO8601 strings sort lexicographically).
+     */
+    fun sorted(items: List<PipelineSummary>): List<PipelineSummary> {
+        return items.withIndex().sortedWith(
+            compareBy<IndexedValue<PipelineSummary>> { group(it.value.state).ordinal }
+                .thenByDescending { if (group(it.value.state) == Group.TERMINAL) (it.value.created ?: "") else "" }
+                .thenBy { it.index },
+        ).map { it.value }
+    }
+
+    /**
+     * Home's "any pipeline active" affordance gate -- explicitly the three
+     * live states (running / awaiting_gate / awaiting_pick), not every
+     * non-terminal state, per spec.
+     */
+    fun isActiveForHomeAffordance(state: String): Boolean =
+        state == "running" || state == "awaiting_gate" || state == "awaiting_pick"
+}
+
+/**
+ * Lists pipelines from `GET /api/pipelines` and opens the monitor for the
+ * tapped one via [onOpenPipeline]. Android mirror of iOS
+ * `ConduitUI.PipelineListView`. This closes the gap where a pipeline kept
+ * running server-side but became unreachable in the app the moment its
+ * creation sheet was dismissed -- `PipelineBuilderScreen`'s own post-create
+ * navigation was previously the ONLY path to the monitor.
+ */
+@Composable
+fun PipelineListScreen(
+    store: SessionStore,
+    onOpenPipeline: (id: String, title: String) -> Unit,
+    onDismiss: () -> Unit = {},
+) {
+    val neon = LocalNeonTheme.current
+    var pipelines by remember { mutableStateOf<List<PipelineSummary>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    suspend fun load() {
+        isLoading = true
+        val fetched = store.refreshPipelines()
+        pipelines = fetched
+        isLoading = false
+        Telemetry.breadcrumb("pipeline", "list opened", mapOf("count" to fetched.size.toString()))
+    }
+
+    LaunchedEffect(Unit) { load() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(neon.bg)
+            .windowInsetsPadding(WindowInsets.navigationBars),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .background(neon.surface, CircleShape)
+                        .border(1.dp, neon.border, CircleShape)
+                        .clickable(onClick = onDismiss),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Default.Close, "Close", tint = neon.textDim, modifier = Modifier.size(16.dp))
+                }
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    "Pipelines",
+                    fontFamily = neon.mono,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    color = neon.text,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            when {
+                isLoading && pipelines.isEmpty() -> EmptyPipelines(neon, loading = true)
+                pipelines.isEmpty() -> EmptyPipelines(neon, loading = false)
+                else -> {
+                    val sorted = remember(pipelines) { PipelineListViewModel.sorted(pipelines) }
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 18.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(sorted, key = { it.id }) { p ->
+                            PipelineListRow(
+                                pipeline = p,
+                                neon = neon,
+                                onTap = {
+                                    Telemetry.breadcrumb(
+                                        "pipeline", "reentered monitor",
+                                        mapOf("id_prefix" to p.id.take(8)),
+                                    )
+                                    onOpenPipeline(p.id, p.title.ifEmpty { "Pipeline" })
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyPipelines(neon: NeonTheme, loading: Boolean) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        if (loading) {
+            CircularProgressIndicator(color = neon.accent)
+            Spacer(Modifier.height(12.dp))
+            Text("Loading pipelines...", fontFamily = neon.sans, fontSize = 14.sp, color = neon.textDim)
+        } else {
+            Icon(Icons.AutoMirrored.Filled.CallSplit, null, tint = neon.textFaint, modifier = Modifier.size(28.dp))
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "No pipelines yet",
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 15.sp,
+                color = neon.text,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Pipelines you create keep running here even after you close the sheet.",
+                fontFamily = neon.sans,
+                fontSize = 13.sp,
+                color = neon.textDim,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 32.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PipelineListRow(pipeline: PipelineSummary, neon: NeonTheme, onTap: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface)
+            .clickable(onClick = onTap)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                pipeline.title.ifEmpty { "Pipeline" },
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+                color = neon.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(4.dp))
+            val stepCount = max(pipeline.stepCount, 1)
+            Text(
+                "Step ${min(pipeline.currentStep + 1, stepCount)} / $stepCount",
+                fontFamily = neon.mono,
+                fontSize = 11.sp,
+                color = neon.textDim,
+            )
+        }
+        PipelineListStateChip(state = pipeline.state, neon = neon)
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = neon.textFaint, modifier = Modifier.size(14.dp))
+    }
+}
+
+@Composable
+private fun PipelineListStateChip(state: String, neon: NeonTheme) {
+    val (label, color): Pair<String, Color> = when (state) {
+        "running" -> "Running" to neon.accent
+        "awaiting_gate" -> "Needs you" to neon.yellow
+        "awaiting_pick" -> "Needs you" to neon.yellow
+        "complete" -> "Complete" to neon.textDim
+        "failed" -> "Failed" to neon.red
+        "cancelled" -> "Cancelled" to neon.textFaint
+        else -> state to neon.textFaint
+    }
+    ConduitChip(label = label, tint = color)
+}

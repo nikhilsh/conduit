@@ -64,6 +64,10 @@ extension ConduitUI {
         /// "New pipeline" action — caller presents PipelineBuilderView.
         /// Default no-op so the sheet compiles standalone.
         var onNewPipeline: () -> Void = {}
+        /// "Pipelines" action — caller presents `ConduitUI.PipelineListView`
+        /// (the list of running/past pipelines). Default no-op; only shown
+        /// when `store.pipelinesEnabled` is true (old brokers omit the flag).
+        var onPipelines: () -> Void = {}
 
         @State private var query: String = ""
         @FocusState private var fieldFocused: Bool
@@ -178,7 +182,10 @@ extension ConduitUI {
                               shortcut: nil, run: onFanOut),
                 PaletteAction(id: "pipeline", title: "New pipeline", systemImage: "arrow.triangle.merge",
                               shortcut: nil, run: onNewPipeline),
-            ]
+            ] + (store.pipelinesEnabled ? [
+                PaletteAction(id: "pipelines", title: "Pipelines", systemImage: "list.bullet.rectangle",
+                              shortcut: nil, run: onPipelines),
+            ] : [])
         }
 
         private var filteredActions: [PaletteAction] {

@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CloudOff
@@ -115,6 +116,9 @@ fun HomeScreen(
     // Approvals inbox; a Boxes-list tap opens that box's health detail.
     onOpenApprovals: () -> Unit = {},
     onOpenBoxHealth: (SavedServer) -> Unit = {},
+    // Active-pipeline affordance tap -- opens `PipelineListScreen`. Default
+    // no-op so existing call sites compile without change.
+    onOpenPipelines: () -> Unit = {},
     // On the 3-pane tablet the rail header already owns the Settings gear,
     // so the center home screen must not render a second one (two gears on
     // the tablet home — device feedback 2026-06-02). Phone keeps it: the
@@ -147,6 +151,20 @@ fun HomeScreen(
     // the tablet path where the phone drawer (ProjectListScreen) is absent.
     val brokerReadiness by store.brokerReadiness.collectAsState()
     val pendingBrokerUpdate by store.pendingBrokerUpdate.collectAsState()
+
+    // Active-pipeline affordance: refresh on appear / box switch only -- no
+    // polling loop while Home just sits idle. Gated on the broker's
+    // `pipeline` capability so old brokers stay silent.
+    val pipelinesEnabled by store.pipelinesEnabled.collectAsState()
+    var pipelineSummaries by remember { mutableStateOf<List<PipelineSummary>>(emptyList()) }
+    LaunchedEffect(endpoint.displayHost, pipelinesEnabled) {
+        if (pipelinesEnabled && endpoint.isComplete) {
+            pipelineSummaries = store.refreshPipelines()
+        }
+    }
+    val activePipelines = remember(pipelineSummaries) {
+        pipelineSummaries.filter { PipelineListViewModel.isActiveForHomeAffordance(it.state) }
+    }
 
     // Pending exit target for the session-row long-press confirmation.
     // Mirror of iOS PR #128's `pendingDelete` on ConduitHomeView — we
@@ -303,6 +321,20 @@ fun HomeScreen(
                 // Review opens the Approvals inbox (the queue of blocked
                 // sessions) rather than jumping into the first session.
                 onReview = onOpenApprovals,
+            )
+        }
+
+        // Active-pipeline affordance (fix for a running pipeline becoming
+        // unreachable once its creation sheet is dismissed): surfaces ONLY
+        // when a pipeline is genuinely running/gated/picking, never a
+        // fabricated count. Tapping opens the full Pipelines list.
+        if (activePipelines.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            ActivePipelinesBannerCard(
+                neon = neon,
+                pipelines = activePipelines,
+                modifier = Modifier.padding(horizontal = 14.dp),
+                onOpen = onOpenPipelines,
             )
         }
 
@@ -1185,6 +1217,75 @@ private fun NeedsYouBannerCard(
             variant = ActionPillVariant.Solid,
             tint = neon.claude,
             onClick = onReview,
+        )
+    }
+}
+
+/**
+ * Home's active-pipeline affordance: an accent-tinted card shown ONLY when
+ * at least one pipeline is currently running / awaiting_gate / awaiting_pick
+ * ([PipelineListViewModel.isActiveForHomeAffordance]). Tapping opens the
+ * full `PipelineListScreen`. This is the fix for a running pipeline becoming
+ * unreachable once its creation sheet is swiped away -- before this,
+ * `PipelineBuilderScreen`'s own post-create navigation was the ONLY path to
+ * the monitor. Mirror of iOS `ActivePipelinesBannerCard`.
+ */
+@Composable
+private fun ActivePipelinesBannerCard(
+    neon: NeonTheme,
+    pipelines: List<PipelineSummary>,
+    modifier: Modifier = Modifier,
+    onOpen: () -> Unit,
+) {
+    val title = if (pipelines.size == 1) "1 pipeline running" else "${pipelines.size} pipelines running"
+    val sub = pipelines.singleOrNull()?.let { first ->
+        first.title.ifEmpty { "step ${first.currentStep + 1} / ${maxOf(first.stepCount, 1)}" }
+    } ?: "tap to view progress"
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .neonCardSurface(
+                neon = neon,
+                shape = RoundedCornerShape(12.dp),
+                fill = neon.accent.copy(alpha = 0.07f),
+                borderColor = neon.accent.copy(alpha = 0.27f),
+                glowTint = neon.accent,
+            )
+            .clickable(onClick = onOpen)
+            .padding(horizontal = 13.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+    ) {
+        Box(
+            modifier = Modifier.size(34.dp).background(neon.accent.copy(alpha = 0.14f), RoundedCornerShape(9.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.AutoMirrored.Filled.CallSplit, null, modifier = Modifier.size(18.dp), tint = neon.accent)
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                color = neon.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                sub,
+                fontFamily = neon.mono,
+                fontSize = 10.5.sp,
+                color = neon.textDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        ConduitActionPill(
+            label = "View",
+            variant = ActionPillVariant.Solid,
+            tint = neon.accent,
+            onClick = onOpen,
         )
     }
 }
