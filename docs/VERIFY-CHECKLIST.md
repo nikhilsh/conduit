@@ -20,6 +20,25 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Harness builder Phase 1: per-block model/effort/mode/instructions — broker + apps. PRs #888 + #889 (design doc PR #885).**
+
+- **Broker (PLAN-HARNESS-BUILDER.md §2)** — shared `StepConfig` embedded in
+  `Step` + `TemplateStep` (lockstep guard); fanout parallel arrays
+  (`models`/`reasoning_efforts`/`permission_modes`/`instructions`, len==count
+  validated); pipeline `CreateSession` widened with `StepOverride` →
+  `SpawnOverride`; `<block-instructions>` preamble prepended to the rendered
+  prompt (skipped on resume); `pipeline_block_config` capability flag.
+  [broker, **redeploy required** — done 2026-07-05, v0.0.213-8]
+- **Apps (iOS + Android)** — Builder agent list now catalog-driven (gemini
+  appears; its model row hidden per plan §8.3); per-step model/effort/
+  permission-mode pickers + instructions field; per-run fanout config pickers
+  (runs share the block's instructions); template save/load carries the four
+  fields; all gated on `pipeline_block_config`. [iOS + Android, **needs
+  on-device verify**: build a 2-step pipeline with per-block model + effort +
+  instructions, confirm the spawned sessions use them (session info shows the
+  model); check gemini shows in the agent picker without a model row; save +
+  reload a template and confirm config survives]
+
 **Peer-session messaging MVP — broker. PR #884.**
 
 - Sessions can message each other: `POST /api/session/message` + one-shot

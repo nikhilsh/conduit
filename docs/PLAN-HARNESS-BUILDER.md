@@ -247,11 +247,10 @@ model, do not re-fetch.
 **Gemini caveat surfaced in the UI:** a gemini model picker is a **silent no-op**
 until Phase 3 — `SpawnOverride.Model` is ignored for ACP
 (`backend_acpwire.go:611-613`: gemini picks its model at `session/new`), and
-gemini has modes not efforts. In Phase 1 the gemini model row is shown
-**disabled with a "model fixed by agent" caption**, and the effort control is
-hidden (its `Efforts[]` is empty). Permission mode (Auto/Plan) DOES work for
-gemini via `acpModeForOverride`, so it stays enabled. This avoids shipping a
-control that lies.
+gemini has modes not efforts. In Phase 1 the gemini model row is **hidden
+entirely** (owner decision, §8.3 — a visible control must always be honored),
+and the effort control is hidden (its `Efforts[]` is empty). Permission mode
+(Auto/Plan) DOES work for gemini via `acpModeForOverride`, so it stays enabled.
 
 ### 2.6 Files touched — Phase 1
 
@@ -520,21 +519,42 @@ iteration cap chip. This keeps the mental model = Claude Code subagents
 
 ---
 
-## 8. Open questions for the owner
+## 8. Decisions (owner, 2026-07-05)
 
-1. **Fanout per-run instructions** — worth the config surface, or is per-run
-   agent+model enough for v1 fanout (instructions only on sequential blocks)?
-   The parallel-array field is cheap to carry; the UI is the cost.
-2. **Concurrency cap value** — default 3? On the ~3.9GB box with memwatch at
-   1500MB, is 2 safer as the default (fanout-of-6 then queues 4)?
-3. **Gemini model row in Phase 1** — disabled-with-caption (my recommendation) or
-   hidden entirely until Phase 3 makes it real? Disabled advertises the coming
-   capability; hidden avoids a dead control.
-4. **Branch condition sources** — is `prev_output` (last assistant text) enough,
-   or do we also want `prev_memory` (the `.conduit/memory` handoff) and an exit-
-   code source? More sources = more power, more UI.
-5. **Loop `max_iterations` hard cap** — 5 proposed. Too low for an iterate-until-
-   tests-pass block? It trades runaway-cost safety against usefulness.
-6. **Template vs harness naming** — do shipped "pipeline templates" become
-   "harness presets" in the product copy, and does the API rename
-   (`/api/pipeline-templates`) or stay put and only the UI copy changes?
+1. **Fanout per-run instructions — NO for v1.** Runs share the block's
+   instructions ("share block for now"). Per-run agent+model stays; the
+   parallel-array field can be added later without a wire break.
+2. **Concurrency cap — default 3.** Purpose (owner asked): RAM protection.
+   Each claude/codex process runs 1–1.5GB against a ~3.9GB box shared with the
+   live broker, and memwatch kills any agent >1500MB/120s — an uncapped
+   fanout-of-6 would demand ~6–9GB and surface as spurious step failures when
+   the watchdog fires. Excess runs queue; nothing is dropped. 3 matches the
+   repo's proven ~3-concurrent-agent operating envelope; make it a broker
+   flag so it can be lowered to 2 if OOMs recur.
+3. **Model pickers offer ONLY what the box actually reports** ("just enable
+   models that the VPS has"): options come from the live
+   `capabilities.agents[<agent>].models[]` catalog, never a hardcoded list.
+   Consequence for gemini: since the ACP backend drops `SpawnOverride.Model`
+   until Phase 3, gemini gets NO model row in Phase 1 (hidden, not
+   disabled-with-caption) — a visible control must always be honored.
+4. **Branch condition sources — proposed options** (owner asked for options;
+   pick before Phase 3 starts, Phases 1–2 are unaffected):
+   - **A. `prev_output`** (last assistant text; predicates
+     `contains|not_contains|matches`) — already designed in §4.1. The
+     harness author instructs the block to end with a marker line
+     (e.g. `VERDICT: PASS`). **Recommended for v1.**
+   - **B. `exit_status`** (previous step succeeded vs failed) — free,
+     fully deterministic, no prompt discipline needed. **Recommended for
+     v1** alongside A (it is ~20 lines given the phase is already tracked).
+   - C. `git` facts (files_changed / insertions from `DiffSummary`, numeric
+     predicates `gt|eq`) — enables "did it actually change anything?"
+     branches. Defer unless a real harness needs it.
+   - D. `prev_memory` (match against the HANDOFF-OUT section) — defer;
+     overlaps A once markers are in the handoff.
+5. **Loop `max_iterations` cap stays 5.** Purpose (owner asked): runaway
+   protection — an until-condition that never matches would otherwise re-spawn
+   paid agent turns forever and wedge the run. Hitting the cap is success-with-
+   count (§4.2), so 5 is a ceiling on spend, not a correctness limit.
+6. **Naming stays "pipeline"** ("pipeline is okay for now") — no API or
+   product-copy rename; "harness builder" remains the design doc's working
+   title only.
