@@ -67,6 +67,13 @@ type BackendCapabilities struct {
 	AskUserQuestion bool
 	// Effort: the protocol honors a reasoning-effort override.
 	Effort bool
+	// ModelOverride: the protocol honors SpawnOverride.Model (a per-session
+	// model choice applied at spawn, distinct from the discovered catalog
+	// itself). claude/codex apply it via argv (extraArgsForAdapter) /
+	// thread-start params; the ACP backend applies it via session/set_model
+	// when the model is in the session's advertised catalog. opencode does
+	// not wire it (false) — a documented gap, not silently true.
+	ModelOverride bool
 	// Resume: a session's conversation survives a respawn / broker restart.
 	Resume bool
 	// Interrupt: a running turn can be stopped without ending the session
@@ -97,13 +104,15 @@ type AgentDescriptor struct {
 }
 
 // AgentSupports is the descriptor's feature-flag block, the wire shape the apps
-// read instead of name-switching. compact/clear/ask_user_question/effort/usage/steer
-// come from BackendCapabilities; plan_mode from the manifest's permission_modes.
+// read instead of name-switching. compact/clear/ask_user_question/effort/
+// model_override/usage/steer come from BackendCapabilities; plan_mode from the
+// manifest's permission_modes.
 type AgentSupports struct {
 	Compact         bool `json:"compact"`
 	Clear           bool `json:"clear"`
 	AskUserQuestion bool `json:"ask_user_question"`
 	Effort          bool `json:"effort"`
+	ModelOverride   bool `json:"model_override"`
 	PlanMode        bool `json:"plan_mode"`
 	Usage           bool `json:"usage"`
 	Steer           bool `json:"steer"`

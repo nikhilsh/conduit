@@ -330,6 +330,21 @@ block, maps to `ModelInfo`, and kills the child (the opencode probe pattern).
 Effort/mode is the `modes` list, applied via `session/set_mode {sessionId,
 modeId}` rather than a CLI flag.
 
+Model selection is a separate, **undocumented-in-the-published-schema but
+real** RPC: `session/set_model {sessionId, modelId}`. Confirmed by reading
+gemini-cli 0.42.0's bundled ACP SDK (`AGENT_METHODS.session_set_model` →
+`"session/set_model"`, backed by `agent.unstable_setSessionModel`) and
+**verified live** against the real binary (a raw JSON-RPC probe against
+`gemini --acp`: `session/new` → pick a non-default `modelId` from
+`availableModels` → `session/set_model` → `{"result":{}}`, i.e. accepted). The
+broker applies `SpawnOverride.Model` this way after `session/new`/`session/load`
+in `applyModelOverride` (`backend_acp.go`), drop-if-unknown against the
+session's advertised `availableModels` — same safety rule as the argv model
+override (a bad/stale model id never fails the spawn). There is no
+model-changed `session/update` notification to await, so the broker
+optimistically latches `currentModel` to the requested id on a successful
+write (best-effort, matching `applyModeOverride`'s posture for `session/set_mode`).
+
 ### `BackendCapabilities` for ACP
 
 | Flag | Value | Why |
@@ -337,6 +352,7 @@ modeId}` rather than a CLI flag.
 | `Compact` | **false** (v1) | no `session/compact` in base ACP; revisit if an agent exposes a slash `/compact` via `available_commands_update` |
 | `AskUserQuestion` | **true** | `session/request_permission` → approval card |
 | `Effort` | **true** | `modes` (default/plan/yolo/autoEdit) via `session/set_mode`; or false if an agent reports no modes |
+| `ModelOverride` | **true** | `SpawnOverride.Model` applied via `session/set_model` when in the advertised catalog |
 | `Resume` | **true** when `agentCapabilities.loadSession`, else false | per-agent from the initialize result |
 | `Interrupt` | **true** | `session/cancel` |
 | `Usage` | **false** | no account-usage source (per-turn tokens only) |

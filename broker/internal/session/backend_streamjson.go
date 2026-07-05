@@ -82,6 +82,7 @@ func (streamjsonBackend) Capabilities() BackendCapabilities {
 		Clear:           true, // /clear pass-through → new session_id, confirmation
 		AskUserQuestion: true, // stdio control bridge → tappable cards
 		Effort:          true,
+		ModelOverride:   true, // --model argv (extraArgsForAdapter)
 		Resume:          true, // --resume / --continue across respawns
 		Interrupt:       true, // control_request{interrupt}
 		Usage:           true, // api.anthropic.com/api/oauth/usage

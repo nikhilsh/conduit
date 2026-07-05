@@ -50,6 +50,7 @@ func (opencodeBackend) Capabilities() BackendCapabilities {
 		Compact:         false, // /session/{id}/summarize exists; a follow-up
 		AskUserQuestion: false, // /permissions reply exists; a follow-up
 		Effort:          false, // model variants carry effort; not wired in v1
+		ModelOverride:   false, // SpawnOverride.Model not wired for opencode yet
 		Resume:          true,  // global session store, re-prompt the same ses_
 		Interrupt:       true,  // POST /session/{id}/abort
 		Usage:           false, // scoped out (zen models report cost:0 anyway)
