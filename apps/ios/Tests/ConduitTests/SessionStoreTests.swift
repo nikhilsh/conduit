@@ -1876,6 +1876,122 @@ struct ConversationRefreshGateTests {
 
 }
 
+// MARK: - FIX 2: stale-conversation gate (fan-out only refreshes what's visible)
+
+/// Regression coverage for the follow-up to FIX 1: `refreshSessions()`'s
+/// fan-out used to re-pull EVERY session whose `conversationLog` was
+/// merely non-nil-but-empty on EVERY status delta (most sessions with no
+/// chat content stay that way forever) -- the App Hang 17-17.8s root
+/// cause. `refreshStaleAwareConversations(for:)` is the extracted gate;
+/// these tests drive it directly (no live client needed -- `clientForSession`
+/// returns nil in these fixtures, so `refreshConversationOffMain` no-ops
+/// synchronously and the gate's bookkeeping is what's under test).
+@Suite("SessionStore - FIX 2 stale-conversation gate")
+@MainActor
+struct StaleConversationGateTests {
+
+    private func session(_ id: String) -> ProjectSession {
+        ProjectSession(
+            id: id, name: id, assistant: "claude", branch: nil,
+            preview: nil, reasoningEffort: nil, cwd: nil,
+            startedAt: nil, lastActivityAt: nil, displayName: nil,
+            totalInputTokens: nil, totalOutputTokens: nil, totalCachedTokens: nil,
+            totalCostUsd: nil, contextUsedTokens: nil, contextWindowTokens: nil
+        )
+    }
+
+    private let sampleItem = ConversationItem(
+        id: "seed", role: "assistant", kind: "message",
+        status: "done", content: "hi",
+        ts: "2026-07-02T14:49:00.000Z", files: [],
+        toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+        diffSummary: nil, pendingOptions: [],
+        sourceAgent: nil, targetAgent: nil, taskText: nil,
+        resultSummary: nil, planSteps: []
+    )
+
+    /// A fan-out over N already-hydrated sessions marks every NON-selected
+    /// one stale and refreshes only the selected one -- not all N.
+    @Test func fanOutSkipsNonSelectedSessionsAndMarksStale() {
+        let store = SessionStore()
+        let a = "gate-a-\(UUID().uuidString)"
+        let b = "gate-b-\(UUID().uuidString)"
+        let c = "gate-c-\(UUID().uuidString)"
+        store.sessions = [session(a), session(b), session(c)]
+        // All three already hydrated (non-nil) so none takes the cold-join
+        // eager path -- isolates the selected-vs-stale branch.
+        store.conversationLog[a] = [sampleItem]
+        store.conversationLog[b] = [sampleItem]
+        store.conversationLog[c] = [sampleItem]
+        store.selectedSessionID = b
+
+        store.refreshStaleAwareConversations(for: store.sessions)
+
+        #expect(store.staleConversations.contains(a),
+            "non-selected hydrated session must be marked stale")
+        #expect(store.staleConversations.contains(c),
+            "non-selected hydrated session must be marked stale")
+        #expect(!store.staleConversations.contains(b),
+            "the selected session must never be marked stale")
+    }
+
+    /// Cold-join sessions (no conversationLog entry at all) always refresh
+    /// eagerly regardless of selection -- they must not be marked stale.
+    @Test func coldJoinSessionsAreNotMarkedStale() {
+        let store = SessionStore()
+        let coldA = "gate-cold-a-\(UUID().uuidString)"
+        let coldB = "gate-cold-b-\(UUID().uuidString)"
+        store.sessions = [session(coldA), session(coldB)]
+        store.selectedSessionID = "some-other-session"
+        // Neither cold session has a conversationLog entry yet.
+
+        store.refreshStaleAwareConversations(for: store.sessions)
+
+        #expect(!store.staleConversations.contains(coldA),
+            "a never-pulled (cold-join) session must refresh eagerly, not go stale")
+        #expect(!store.staleConversations.contains(coldB),
+            "a never-pulled (cold-join) session must refresh eagerly, not go stale")
+    }
+
+    /// Opening a session that the fan-out marked stale drains it from
+    /// `staleConversations` -- the lazy half of the gate.
+    @Test func openingAStaleSessionClearsIt() {
+        let store = SessionStore()
+        let a = "gate-open-a-\(UUID().uuidString)"
+        let b = "gate-open-b-\(UUID().uuidString)"
+        store.sessions = [session(a), session(b)]
+        store.conversationLog[a] = [sampleItem]
+        store.conversationLog[b] = [sampleItem]
+        store.selectedSessionID = b
+
+        store.refreshStaleAwareConversations(for: store.sessions)
+        #expect(store.staleConversations.contains(a), "precondition: a must be stale")
+
+        // Open the stale session -- selecting it must drain the stale flag.
+        store.selectedSessionID = a
+
+        #expect(!store.staleConversations.contains(a),
+            "opening a stale session must clear it from staleConversations")
+    }
+
+    /// Re-running the fan-out with the SAME selection never accumulates the
+    /// selected session into staleConversations across repeated deltas.
+    @Test func repeatedFanOutNeverStalesSelectedSession() {
+        let store = SessionStore()
+        let a = "gate-repeat-a-\(UUID().uuidString)"
+        store.sessions = [session(a)]
+        store.conversationLog[a] = [sampleItem]
+        store.selectedSessionID = a
+
+        store.refreshStaleAwareConversations(for: store.sessions)
+        store.refreshStaleAwareConversations(for: store.sessions)
+        store.refreshStaleAwareConversations(for: store.sessions)
+
+        #expect(!store.staleConversations.contains(a),
+            "the selected session must stay live across repeated status deltas")
+    }
+}
+
 // MARK: - Grace-window derivation tests (Change 4)
 
 /// Tests the "assume connected" grace window: when the app foregrounds and the
