@@ -20,6 +20,12 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+_(empty)_
+
+---
+
+## v0.0.214
+
 **Harness builder Phase 1: per-block model/effort/mode/instructions — broker + apps. PRs #888 + #889 (design doc PR #885).**
 
 - **Broker (PLAN-HARNESS-BUILDER.md §2)** — shared `StepConfig` embedded in
