@@ -174,6 +174,18 @@ type createPipelineStepRequest struct {
 	pipeline.StepConfig
 	// Fanout, when present, declares this step as a fanout step.
 	Fanout *fanoutStepReq `json:"fanout,omitempty"`
+	// Kind discriminates a control-flow step from a normal agent step: ""
+	// (default, back-compatible) = agent step; "branch" = Branch must be
+	// set; "loop" = Loop must be set. Nested then/else/body steps decode
+	// directly as pipeline.Step (same field names as this request, plus
+	// their own optional kind/branch/loop) — see pipeline.BranchConfig/
+	// pipeline.LoopConfig. pipeline.PrepareSteps validates + normalizes the
+	// whole tree (depth <= 2, max_iterations <= 5, well-formed conditions,
+	// no fanout nested inside a branch arm or loop body) after this request
+	// is decoded into pipeline.Step values, below.
+	Kind   string                 `json:"kind,omitempty"`
+	Branch *pipeline.BranchConfig `json:"branch,omitempty"`
+	Loop   *pipeline.LoopConfig   `json:"loop,omitempty"`
 }
 
 type createPipelineRequest struct {
@@ -237,7 +249,16 @@ func (s *Server) serveCreatePipeline(w http.ResponseWriter, r *http.Request) {
 				PermissionMode:  strings.TrimSpace(rs.PermissionMode),
 				Instructions:    rs.Instructions,
 			},
+			ControlFlow: pipeline.ControlFlow{
+				Kind:   strings.TrimSpace(rs.Kind),
+				Branch: rs.Branch,
+				Loop:   rs.Loop,
+			},
 		}
+		// AgentType defaulting for THIS (top-level) step happens here to
+		// preserve existing behavior; pipeline.PrepareSteps (called once
+		// below, after this loop) applies the same default recursively to
+		// nested branch/loop steps and validates the whole tree.
 		if step.AgentType == "" {
 			step.AgentType = "claude"
 		}
@@ -288,6 +309,11 @@ func (s *Server) serveCreatePipeline(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		p.Steps[i] = step
+	}
+
+	if err := pipeline.PrepareSteps(p.Steps); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
 	}
 
 	log.Printf("pipeline: creating %s title=%q steps=%d", p.ID, p.Title, len(p.Steps))
@@ -597,6 +623,12 @@ type templateStepRequest struct {
 	// StepConfig (embedded): model/reasoning_effort/permission_mode/
 	// instructions for this block. All optional.
 	pipeline.StepConfig
+	// Kind/Branch/Loop: same control-flow fields as createPipelineStepRequest
+	// (see its doc comment) — templates carry the same shape so a pipeline
+	// created FROM a template round-trips its branch/loop blocks too.
+	Kind   string                 `json:"kind,omitempty"`
+	Branch *pipeline.BranchConfig `json:"branch,omitempty"`
+	Loop   *pipeline.LoopConfig   `json:"loop,omitempty"`
 }
 
 // createTemplateRequest is the body for POST /api/pipeline-templates.
@@ -661,8 +693,20 @@ func (s *Server) serveCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		if at == "" {
 			at = "claude"
 		}
+		cf := pipeline.ControlFlow{Kind: strings.TrimSpace(rs.Kind), Branch: rs.Branch, Loop: rs.Loop}
+		// Validate/normalize this step's control-flow content (depth <= 2,
+		// max_iterations <= 5, well-formed conditions, no fanout nested
+		// inside a branch arm or loop body). TemplateStep has no Fanout
+		// field of its own, so a fresh wrapper Step is enough context —
+		// nested Then/Else/Body are []pipeline.Step, mutated in place
+		// through the SAME pointers stored in cf.Branch/cf.Loop.
+		wrapper := pipeline.Step{AgentType: at, ControlFlow: cf}
+		if err := pipeline.PrepareSteps([]pipeline.Step{wrapper}); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
 		tmpl.Steps[i] = pipeline.TemplateStep{
-			AgentType:      at,
+			AgentType:      wrapper.AgentType,
 			Role:           strings.TrimSpace(rs.Role),
 			PromptTemplate: rs.PromptTemplate,
 			InputFromPrev:  rs.InputFromPrev,
@@ -673,6 +717,7 @@ func (s *Server) serveCreateTemplate(w http.ResponseWriter, r *http.Request) {
 				PermissionMode:  strings.TrimSpace(rs.PermissionMode),
 				Instructions:    rs.Instructions,
 			},
+			ControlFlow: wrapper.ControlFlow,
 		}
 	}
 	if err := pipeline.SaveTemplate(s.Sessions.ConduitRoot(), tmpl); err != nil {

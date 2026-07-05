@@ -112,6 +112,21 @@ func (o *Orchestrator) Start(p *Pipeline) error {
 	}
 	p.State = PipelineRunning
 	p.CurrentStep = 0
+	if err := o.resolveBranches(p, 0); err != nil {
+		p.State = PipelineFailed
+		_ = p.Save(o.conduitRoot)
+		return fmt.Errorf("pipeline %s: resolve branch at step 0: %w", p.ID, err)
+	}
+	if len(p.Steps) == 0 {
+		// Every top-level step resolved to an empty branch arm — nothing
+		// left to run.
+		p.State = PipelineComplete
+		if err := p.Save(o.conduitRoot); err != nil {
+			return fmt.Errorf("pipeline %s: save after empty-branch complete: %w", p.ID, err)
+		}
+		log.Printf("pipeline %s: COMPLETE (every top-level step resolved to an empty branch arm)", p.ID)
+		return nil
+	}
 	if err := o.spawnStep(p, 0); err != nil {
 		p.State = PipelineFailed
 		_ = p.Save(o.conduitRoot)
@@ -121,7 +136,12 @@ func (o *Orchestrator) Start(p *Pipeline) error {
 		return fmt.Errorf("pipeline %s: save after start: %w", p.ID, err)
 	}
 	log.Printf("pipeline %s: started, step 0 session=%s", p.ID, p.Steps[0].SessionID)
-	go o.pollStep(p.ID, 0)
+	// Fanout and loop steps start their own poll goroutine internally
+	// (pollFanout/pollLoopStep) — only start pollStep for a plain
+	// sequential step, which has no SessionID until spawnStep sets it above.
+	if p.Steps[0].Kind != StepKindLoop && !p.Steps[0].IsFanout() {
+		go o.pollStep(p.ID, 0)
+	}
 	return nil
 }
 
@@ -148,22 +168,40 @@ func (o *Orchestrator) Cancel(p *Pipeline) error {
 	k := p.CurrentStep
 	if k < len(p.Steps) {
 		step := &p.Steps[k]
-		if step.IsFanout() && step.Fanout != nil {
-			// Kill all live fanout run sessions.
+		switch {
+		case step.IsFanout() && step.Fanout != nil:
+			// Kill all live fanout run sessions (queued runs have no
+			// SessionID yet — nothing to kill, they just never start).
 			for _, run := range step.Fanout.Runs {
-				if run.SessionID != "" {
-					if err := o.sessions.CancelSession(run.SessionID); err != nil {
-						log.Printf("pipeline %s: cancel fanout run %d session %s: %v",
-							p.ID, run.Index, run.SessionID, err)
+				if run.SessionID == "" {
+					continue
+				}
+				if err := o.sessions.CancelSession(run.SessionID); err != nil {
+					log.Printf("pipeline %s: cancel fanout run %d session %s: %v",
+						p.ID, run.Index, run.SessionID, err)
+				}
+				decLiveAgents(run.SessionID)
+			}
+		case step.Kind == StepKindLoop && step.Loop != nil:
+			// Kill the current pass's live body session, if any.
+			lc := step.Loop
+			if lc.BodyStep < len(lc.Body) {
+				body := &lc.Body[lc.BodyStep]
+				if body.SessionID != "" {
+					if err := o.sessions.CancelSession(body.SessionID); err != nil {
+						log.Printf("pipeline %s: cancel loop step %d body %d session %s: %v",
+							p.ID, k, lc.BodyStep, body.SessionID, err)
 					}
+					decLiveAgents(body.SessionID)
 				}
 			}
-		} else {
+		default:
 			// Kill the single live session.
 			if step.SessionID != "" {
 				if err := o.sessions.CancelSession(step.SessionID); err != nil {
 					log.Printf("pipeline %s: cancel session %s: %v", p.ID, step.SessionID, err)
 				}
+				decLiveAgents(step.SessionID)
 			}
 		}
 	}
@@ -272,6 +310,13 @@ func (o *Orchestrator) Advance(p *Pipeline, stepIndex int, phase string) error {
 func (o *Orchestrator) spawnNext(p *Pipeline) error {
 	prevIdx := p.CurrentStep
 	next := prevIdx + 1
+	if err := o.resolveBranches(p, next); err != nil {
+		p.Gate = nil
+		p.State = PipelineFailed
+		_ = p.Save(o.conduitRoot)
+		o.terminateStepSession(p, prevIdx)
+		return fmt.Errorf("pipeline %s: resolve branch at step %d: %w", p.ID, next, err)
+	}
 	if next >= len(p.Steps) {
 		// All steps done.
 		p.Gate = nil // clear gate preview on completion
@@ -299,17 +344,110 @@ func (o *Orchestrator) spawnNext(p *Pipeline) error {
 	}
 	log.Printf("pipeline %s: spawned step %d session=%s", p.ID, next, p.Steps[next].SessionID)
 	o.terminateStepSession(p, prevIdx)
-	go o.pollStep(p.ID, next)
+	// Fanout and loop steps start their own poll goroutine internally.
+	if p.Steps[next].Kind != StepKindLoop && !p.Steps[next].IsFanout() {
+		go o.pollStep(p.ID, next)
+	}
 	return nil
 }
 
 // spawnStep creates the child session(s) for step k. For fanout steps this
-// spawns N parallel runs; for normal steps it delegates to spawnStepOpts.
+// spawns N parallel runs; for loop steps it begins the first iteration; for
+// normal steps it delegates to spawnStepOpts. Callers (Start/spawnNext) MUST
+// have already run resolveBranches at index k — a branch step reaching this
+// function is a bug (defensive error, not a panic).
 func (o *Orchestrator) spawnStep(p *Pipeline, k int) error {
-	if p.Steps[k].IsFanout() {
+	step := &p.Steps[k]
+	switch step.Kind {
+	case StepKindLoop:
+		return o.startLoop(p, k)
+	case StepKindBranch:
+		return fmt.Errorf("pipeline %s: step %d: unresolved branch step reached spawnStep (resolveBranches should have spliced it away)", p.ID, k)
+	}
+	if step.IsFanout() {
 		return o.spawnFanout(p, k)
 	}
 	return o.spawnStepOpts(p, k, "")
+}
+
+// resolveBranches splices away any branch step(s) sitting at position k,
+// choosing the matched arm's steps and inlining them at k (§4.1). No agent
+// is spawned to decide — deterministic evaluation against the PRECEDING
+// step's already-harvested output/exit status. It loops while p.Steps[k] is
+// itself a (possibly chained, adjacent) branch step: the depth-2 validation
+// enforced at create time (PrepareSteps) guarantees a spliced-in arm's own
+// steps are always plain agent steps, so this always terminates — either at
+// a plain step, or at k == len(p.Steps) if every remaining top-level step
+// resolved to an empty arm.
+//
+// Splicing happens synchronously, before any session is spawned for step k,
+// and the caller (Start/spawnNext) persists the pipeline immediately after
+// this call succeeds — so pipeline.json ALWAYS reflects the flattened,
+// post-splice form once saved (Step.SplicedFrom records provenance: which
+// branch step and arm produced it). A crash in the narrow window between a
+// successful splice and that Save is the same pre-existing risk any other
+// step-spawn call already has (e.g. between CreateSession succeeding and the
+// subsequent Save) — this feature does not introduce a NEW recovery gap: a
+// broker restart only ever inspects/resumes a pipeline via its persisted
+// pipeline.json, which by construction never has a branch step that hasn't
+// already been resolved by the time it was last saved mid-run.
+func (o *Orchestrator) resolveBranches(p *Pipeline, k int) error {
+	for k < len(p.Steps) && p.Steps[k].Kind == StepKindBranch {
+		if err := o.spliceBranchAt(p, k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// spliceBranchAt evaluates the branch step at p.Steps[k] and replaces it
+// in-place with its matched arm's steps (§4.1).
+func (o *Orchestrator) spliceBranchAt(p *Pipeline, k int) error {
+	bc := p.Steps[k].Branch
+	if bc == nil {
+		return fmt.Errorf("pipeline %s: step %d: kind=branch missing branch config", p.ID, k)
+	}
+
+	var prevOutput, prevPhase string
+	if k > 0 {
+		prev := p.Steps[k-1]
+		prevPhase = prev.Phase
+		prevSessID := prev.SessionID
+		if prevSessID == "" && len(prev.PrevSessionIDs) > 0 {
+			prevSessID = prev.PrevSessionIDs[len(prev.PrevSessionIDs)-1]
+		}
+		if prevSessID != "" {
+			prevOutput = o.sessions.GetLastAssistantText(prevSessID)
+		}
+	}
+
+	matched, err := evalCondition(bc.Condition, prevOutput, prevPhase)
+	if err != nil {
+		return fmt.Errorf("pipeline %s: step %d: eval branch condition: %w", p.ID, k, err)
+	}
+	chosen, arm := bc.Else, "else"
+	if matched {
+		chosen, arm = bc.Then, "then"
+	}
+
+	spliced := make([]Step, len(chosen))
+	copy(spliced, chosen)
+	for i := range spliced {
+		spliced[i].SplicedFrom = fmt.Sprintf("step %d branch (%s)", k, arm)
+	}
+
+	newSteps := make([]Step, 0, len(p.Steps)-1+len(spliced))
+	newSteps = append(newSteps, p.Steps[:k]...)
+	newSteps = append(newSteps, spliced...)
+	newSteps = append(newSteps, p.Steps[k+1:]...)
+	for i := range newSteps {
+		newSteps[i].Index = i
+	}
+	p.Steps = newSteps
+
+	log.Printf("pipeline %s: step %d branch resolved -> %s (%d step(s) spliced, matched=%v)",
+		p.ID, k, arm, len(spliced), matched)
+	return nil
 }
 
 // spawnStepOpts is the shared implementation for spawning step k. When
@@ -401,6 +539,7 @@ func (o *Orchestrator) spawnStepOpts(p *Pipeline, k int, overridePrompt string) 
 	if err != nil {
 		return fmt.Errorf("create session (agent=%s): %w", step.AgentType, err)
 	}
+	incLiveAgents(sessID)
 	step.SessionID = sessID
 	step.Started = time.Now().UTC().Format(time.RFC3339)
 	step.Phase = "running"
@@ -461,7 +600,11 @@ func (o *Orchestrator) pollStep(pipelineID string, stepIndex int) {
 		//    a claude pipeline step would NEVER advance.
 		phase := o.sessions.GetPhase(sessID)
 		if strings.HasPrefix(phase, "exited") {
-			// Process-style exit.
+			// Process-style exit — the process is confirmed no longer live
+			// (unlike turn_complete below, which does NOT mean the process
+			// exited). Mark it now for accurate global cap accounting; the
+			// later terminateStepSession reap is a safe idempotent no-op.
+			decLiveAgents(sessID)
 			log.Printf("pipeline %s: step %d session %s exited with phase=%s", pipelineID, stepIndex, sessID, phase)
 			if advErr := o.Advance(p, stepIndex, phase); advErr != nil {
 				log.Printf("pipeline %s: advance step %d: %v", pipelineID, stepIndex, advErr)
@@ -489,19 +632,33 @@ func (o *Orchestrator) pollStep(pipelineID string, stepIndex int) {
 
 // ── Fanout support ────────────────────────────────────────────────────────────
 
-// spawnFanout spawns N parallel runs for a fanout step, names their branches
-// with the -run-<i> suffix, populates fanout.runs, and starts a pollFanout
-// goroutine that waits for all runs to settle then calls advanceFanout.
-func (o *Orchestrator) spawnFanout(p *Pipeline, k int) error {
-	step := &p.Steps[k]
+// fanoutRunConfig resolves the agent/model/effort/mode/instructions for run
+// i of a fanout step, per the parallel-array fallback rule (§2.1 of the
+// plan): fc.<Array>[i] (if set) → step's own StepConfig field → adapter
+// default.
+func fanoutRunConfig(step *Step, i int) (agentType, model, effort, mode, instructions string) {
 	fc := step.Fanout
+	agentType = step.AgentType
+	if i < len(fc.AgentTypes) && fc.AgentTypes[i] != "" {
+		agentType = fc.AgentTypes[i]
+	}
+	model = resolveFanoutStr(fc.Models, i, step.Model)
+	effort = resolveFanoutStr(fc.ReasoningEfforts, i, step.ReasoningEffort)
+	mode = resolveFanoutStr(fc.PermissionModes, i, step.PermissionMode)
+	instructions = resolveFanoutStr(fc.Instructions, i, step.Instructions)
+	return
+}
 
-	// Build the prompt once — identical for every run.
-	prompt := step.PromptTemplate
-	prompt = strings.ReplaceAll(prompt, "{{task}}", p.Task)
-
+// buildFanoutBasePrompt renders the {{task}}/{{prev}} substituted prompt
+// shared by every run of fanout step k. It is deterministic given p.Task and
+// the previous step's already-harvested output, so it can be recomputed
+// later — identically — when pollFanout starts a QUEUED run (§4.4), with no
+// extra persistence needed. Returns the rendered prompt and the raw prevText
+// (for SaveInput's audit record, written once by the initial spawnFanout call).
+func (o *Orchestrator) buildFanoutBasePrompt(p *Pipeline, k int) (prompt, prevText string) {
+	step := &p.Steps[k]
+	prompt = strings.ReplaceAll(step.PromptTemplate, "{{task}}", p.Task)
 	if k > 0 && step.InputFromPrev != InputNone {
-		var prevText string
 		if p.Gate != nil && p.Gate.Step == k-1 {
 			prevText = p.Gate.Prev
 			log.Printf("pipeline %s step %d fanout: using gate preview prev (len=%d)", p.ID, k, len(prevText))
@@ -511,76 +668,103 @@ func (o *Orchestrator) spawnFanout(p *Pipeline, k int) error {
 			if prevSessID == "" && len(prev.PrevSessionIDs) > 0 {
 				prevSessID = prev.PrevSessionIDs[len(prev.PrevSessionIDs)-1]
 			}
-			workdir := ""
+			workdir, transcriptText := "", ""
 			if prevSessID != "" {
 				workdir = o.sessions.GetWorktreeDir(prevSessID)
-			}
-			transcriptText := ""
-			if prevSessID != "" {
 				transcriptText = o.sessions.GetLastAssistantText(prevSessID)
 			}
 			prevText = BuildPrev(workdir, transcriptText, step.InputFromPrev)
 		}
 		prompt = strings.ReplaceAll(prompt, "{{prev}}", prevText)
-		if saveErr := SaveInput(o.conduitRoot, p.ID, k, prevText); saveErr != nil {
-			log.Printf("pipeline %s step %d fanout: save input.md: %v", p.ID, k, saveErr)
-		}
 	} else {
 		prompt = strings.ReplaceAll(prompt, "{{prev}}", "")
 	}
+	return prompt, prevText
+}
 
-	// Spawn N runs in parallel.
+// spawnFanoutRun spawns a single run i of fanout step k using the given
+// (already {{task}}/{{prev}} substituted) base prompt, prepending the run's
+// own resolved instructions if any. Populates fc.Runs[i] on success.
+func (o *Orchestrator) spawnFanoutRun(p *Pipeline, k, i int, basePrompt string) error {
+	step := &p.Steps[k]
+	fc := step.Fanout
+	agentType, model, effort, mode, instructions := fanoutRunConfig(step, i)
+
+	runPrompt := basePrompt
+	if instructions != "" {
+		runPrompt = fmt.Sprintf(instructionsPreambleFmt, instructions, basePrompt)
+		log.Printf("pipeline %s step %d fanout: run %d prepended block instructions (len=%d)",
+			p.ID, k, i, len(instructions))
+	}
+
+	ov := StepOverride{
+		Model:           model,
+		ReasoningEffort: effort,
+		PermissionMode:  mode,
+		// Instructions IS carried here (unlike the normal path) — this
+		// is the "fanout per-run rendering" case StepOverride's doc
+		// comment calls out; it mirrors what was just prepended above.
+		Instructions: instructions,
+	}
+
+	branch := fmt.Sprintf("pipeline-%s-step-%d-run-%d", p.ID, k, i)
+	sessID, err := o.sessions.CreateSession(agentType, p.CWD, runPrompt, branch, ov)
+	if err != nil {
+		return fmt.Errorf("fanout run %d (agent=%s): %w", i, agentType, err)
+	}
+	incLiveAgents(sessID)
+	fc.Runs[i] = FanoutRun{
+		Index:     i,
+		AgentType: agentType,
+		SessionID: sessID,
+		Branch:    branch,
+		Phase:     "running",
+		Started:   time.Now().UTC().Format(time.RFC3339),
+	}
+	log.Printf("pipeline %s step %d fanout: spawned run %d session=%s branch=%s agent=%s (live=%d)",
+		p.ID, k, i, sessID, branch, agentType, liveAgents())
+	return nil
+}
+
+// spawnFanout spawns up to MaxConcurrentAgents() parallel runs for a fanout
+// step immediately; any remaining runs are marked "queued" and started
+// later by pollFanout as slots free up (§4.4 concurrency cap — this bounds
+// peak RSS regardless of the declared fanout width). Names branches with
+// the -run-<i> suffix, populates fanout.runs, and starts a pollFanout
+// goroutine that both settles running runs and starts queued ones.
+func (o *Orchestrator) spawnFanout(p *Pipeline, k int) error {
+	step := &p.Steps[k]
+	fc := step.Fanout
+
+	prompt, prevText := o.buildFanoutBasePrompt(p, k)
+	if k > 0 && step.InputFromPrev != InputNone {
+		if saveErr := SaveInput(o.conduitRoot, p.ID, k, prevText); saveErr != nil {
+			log.Printf("pipeline %s step %d fanout: save input.md: %v", p.ID, k, saveErr)
+		}
+	}
+
 	fc.Runs = make([]FanoutRun, fc.Count)
+	cap64 := int64(MaxConcurrentAgents())
 	for i := 0; i < fc.Count; i++ {
-		agentType := step.AgentType
-		if i < len(fc.AgentTypes) && fc.AgentTypes[i] != "" {
-			agentType = fc.AgentTypes[i]
+		if liveAgents() >= cap64 {
+			agentType, _, _, _, _ := fanoutRunConfig(step, i)
+			fc.Runs[i] = FanoutRun{Index: i, AgentType: agentType, Phase: "queued"}
+			log.Printf("pipeline %s step %d fanout: run %d queued (cap=%d, live=%d)",
+				p.ID, k, i, cap64, liveAgents())
+			continue
 		}
-		// Per-run resolution: fc.<Array>[i] (if set) → step's own StepConfig
-		// field → adapter default (the fallback is expressed by passing the
-		// step field as the fallback argument here).
-		model := resolveFanoutStr(fc.Models, i, step.Model)
-		effort := resolveFanoutStr(fc.ReasoningEfforts, i, step.ReasoningEffort)
-		mode := resolveFanoutStr(fc.PermissionModes, i, step.PermissionMode)
-		instructions := resolveFanoutStr(fc.Instructions, i, step.Instructions)
-
-		runPrompt := prompt
-		if instructions != "" {
-			runPrompt = fmt.Sprintf(instructionsPreambleFmt, instructions, prompt)
-			log.Printf("pipeline %s step %d fanout: run %d prepended block instructions (len=%d)",
-				p.ID, k, i, len(instructions))
-		}
-
-		ov := StepOverride{
-			Model:           model,
-			ReasoningEffort: effort,
-			PermissionMode:  mode,
-			// Instructions IS carried here (unlike the normal path) — this
-			// is the "fanout per-run rendering" case StepOverride's doc
-			// comment calls out; it mirrors what was just prepended above.
-			Instructions: instructions,
-		}
-
-		branch := fmt.Sprintf("pipeline-%s-step-%d-run-%d", p.ID, k, i)
-		sessID, err := o.sessions.CreateSession(agentType, p.CWD, runPrompt, branch, ov)
-		if err != nil {
-			// Mark spawned runs as cancelled and return error.
+		if err := o.spawnFanoutRun(p, k, i, prompt); err != nil {
 			log.Printf("pipeline %s step %d fanout: run %d spawn error: %v", p.ID, k, i, err)
+			// Cancel everything spawned so far in this call.
 			for j := 0; j < i; j++ {
+				if fc.Runs[j].SessionID == "" {
+					continue
+				}
 				_ = o.sessions.CancelSession(fc.Runs[j].SessionID)
+				decLiveAgents(fc.Runs[j].SessionID)
 			}
-			return fmt.Errorf("fanout run %d (agent=%s): %w", i, agentType, err)
+			return fmt.Errorf("fanout spawn: %w", err)
 		}
-		fc.Runs[i] = FanoutRun{
-			Index:     i,
-			AgentType: agentType,
-			SessionID: sessID,
-			Branch:    branch,
-			Phase:     "running",
-			Started:   time.Now().UTC().Format(time.RFC3339),
-		}
-		log.Printf("pipeline %s step %d fanout: spawned run %d session=%s branch=%s agent=%s",
-			p.ID, k, i, sessID, branch, agentType)
 	}
 
 	step.Started = time.Now().UTC().Format(time.RFC3339)
@@ -589,77 +773,132 @@ func (o *Orchestrator) spawnFanout(p *Pipeline, k int) error {
 	return nil
 }
 
-// pollFanout polls all fanout runs every 5 seconds until every run has exited,
-// then calls advanceFanout.
+// pollFanout polls all fanout runs every 5 seconds via pollFanoutTick, until
+// a tick reports done.
 func (o *Orchestrator) pollFanout(pipelineID string, stepIndex int) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		p, err := Load(o.conduitRoot, pipelineID)
+		done, err := o.pollFanoutTick(pipelineID, stepIndex)
 		if err != nil {
-			log.Printf("pipeline %s: pollFanout: load error: %v", pipelineID, err)
+			log.Printf("pipeline %s: pollFanout: %v", pipelineID, err)
 			return
 		}
-		if p.State == PipelineCancelled || p.State == PipelineComplete || p.State == PipelineFailed {
-			return
-		}
-		if p.CurrentStep != stepIndex || stepIndex >= len(p.Steps) {
-			return
-		}
-		step := &p.Steps[stepIndex]
-		if !step.IsFanout() || step.Fanout == nil {
-			return
-		}
-
-		// Update phase for each run. A run settles when its process exits OR
-		// when TurnComplete is true (see pollStep for the rationale — same
-		// signals apply to fanout runs that use structured-chat backends).
-		allSettled := true
-		changed := false
-		for i := range step.Fanout.Runs {
-			run := &step.Fanout.Runs[i]
-			if isRunSettled(run.Phase) {
-				continue // already settled
-			}
-			phase := o.sessions.GetPhase(run.SessionID)
-			if strings.HasPrefix(phase, "exited") {
-				run.Phase = phase
-				run.Ended = time.Now().UTC().Format(time.RFC3339)
-				changed = true
-				log.Printf("pipeline %s step %d fanout: run %d session %s exited phase=%s",
-					pipelineID, stepIndex, run.Index, run.SessionID, phase)
-			} else if o.sessions.TurnComplete(run.SessionID) {
-				run.Phase = "turn_complete"
-				run.Ended = time.Now().UTC().Format(time.RFC3339)
-				changed = true
-				log.Printf("pipeline %s step %d fanout: run %d session %s turn_complete",
-					pipelineID, stepIndex, run.Index, run.SessionID)
-			} else {
-				allSettled = false
-			}
-		}
-
-		if changed {
-			if saveErr := p.Save(o.conduitRoot); saveErr != nil {
-				log.Printf("pipeline %s: pollFanout: save: %v", pipelineID, saveErr)
-			}
-		}
-
-		if allSettled {
-			log.Printf("pipeline %s step %d fanout: all runs settled", pipelineID, stepIndex)
-			// Reload after save for clean state.
-			p2, err := Load(o.conduitRoot, pipelineID)
-			if err != nil {
-				log.Printf("pipeline %s: pollFanout: reload before advance: %v", pipelineID, err)
-				return
-			}
-			if advErr := o.advanceFanout(p2, stepIndex); advErr != nil {
-				log.Printf("pipeline %s: advanceFanout step %d: %v", pipelineID, stepIndex, advErr)
-			}
+		if done {
 			return
 		}
 	}
+}
+
+// pollFanoutTick runs one polling pass over fanout step stepIndex: settles
+// runs that have finished, starts any QUEUED runs while there is room under
+// the global concurrency cap (§4.4 — this is how a fanout wider than the
+// cap "catches up" as earlier runs are reaped: terminateStepSession/Pick/
+// advanceFanout all call decLiveAgents via CancelSession), then — once
+// every run has settled — calls advanceFanout. Returns done=true once the
+// poll loop should stop (pipeline left this step, reached a terminal state,
+// or advanceFanout was just called). Split out from pollFanout so a test
+// can drive exactly one tick without waiting on the real ticker.
+func (o *Orchestrator) pollFanoutTick(pipelineID string, stepIndex int) (done bool, err error) {
+	p, err := Load(o.conduitRoot, pipelineID)
+	if err != nil {
+		return true, fmt.Errorf("load: %w", err)
+	}
+	if p.State == PipelineCancelled || p.State == PipelineComplete || p.State == PipelineFailed {
+		return true, nil
+	}
+	if p.CurrentStep != stepIndex || stepIndex >= len(p.Steps) {
+		return true, nil
+	}
+	step := &p.Steps[stepIndex]
+	if !step.IsFanout() || step.Fanout == nil {
+		return true, nil
+	}
+
+	// Update phase for each run. A run settles when its process exits OR
+	// when TurnComplete is true (see pollStep for the rationale — same
+	// signals apply to fanout runs that use structured-chat backends).
+	// A "queued" run has no session yet — it is handled in the second pass
+	// below, not polled here.
+	allSettled := true
+	changed := false
+	for i := range step.Fanout.Runs {
+		run := &step.Fanout.Runs[i]
+		if isRunSettled(run.Phase) {
+			continue // already settled
+		}
+		if run.Phase == "queued" {
+			allSettled = false
+			continue
+		}
+		phase := o.sessions.GetPhase(run.SessionID)
+		if strings.HasPrefix(phase, "exited") {
+			run.Phase = phase
+			run.Ended = time.Now().UTC().Format(time.RFC3339)
+			changed = true
+			// The process is confirmed no longer live — free its slot now
+			// (unlike turn_complete below) so a queued run can start this
+			// same tick; the later Pick/advanceFanout reap is a safe
+			// idempotent no-op.
+			decLiveAgents(run.SessionID)
+			log.Printf("pipeline %s step %d fanout: run %d session %s exited phase=%s",
+				pipelineID, stepIndex, run.Index, run.SessionID, phase)
+		} else if o.sessions.TurnComplete(run.SessionID) {
+			run.Phase = "turn_complete"
+			run.Ended = time.Now().UTC().Format(time.RFC3339)
+			changed = true
+			log.Printf("pipeline %s step %d fanout: run %d session %s turn_complete",
+				pipelineID, stepIndex, run.Index, run.SessionID)
+		} else {
+			allSettled = false
+		}
+	}
+
+	// Start queued runs while slots are free under the global cap.
+	cap64 := int64(MaxConcurrentAgents())
+	var basePrompt string
+	havePrompt := false
+	for i := range step.Fanout.Runs {
+		run := &step.Fanout.Runs[i]
+		if run.Phase != "queued" {
+			continue
+		}
+		if liveAgents() >= cap64 {
+			break // still full; retry next tick
+		}
+		if !havePrompt {
+			basePrompt, _ = o.buildFanoutBasePrompt(p, stepIndex)
+			havePrompt = true
+		}
+		if spawnErr := o.spawnFanoutRun(p, stepIndex, i, basePrompt); spawnErr != nil {
+			log.Printf("pipeline %s step %d fanout: start queued run %d: %v", pipelineID, stepIndex, i, spawnErr)
+			run.Phase = "exited(1)" // treat as a failed run rather than hang forever
+			run.Ended = time.Now().UTC().Format(time.RFC3339)
+		}
+		changed = true
+	}
+
+	if changed {
+		if saveErr := p.Save(o.conduitRoot); saveErr != nil {
+			log.Printf("pipeline %s: pollFanoutTick: save: %v", pipelineID, saveErr)
+		}
+	}
+
+	if !allSettled {
+		return false, nil
+	}
+
+	log.Printf("pipeline %s step %d fanout: all runs settled", pipelineID, stepIndex)
+	// Reload after save for clean state.
+	p2, err := Load(o.conduitRoot, pipelineID)
+	if err != nil {
+		return true, fmt.Errorf("reload before advance: %w", err)
+	}
+	if advErr := o.advanceFanout(p2, stepIndex); advErr != nil {
+		return true, fmt.Errorf("advanceFanout step %d: %w", stepIndex, advErr)
+	}
+	return true, nil
 }
 
 // advanceFanout is called when all fanout runs have settled. If all runs
@@ -694,6 +933,7 @@ func (o *Orchestrator) advanceFanout(p *Pipeline, stepIndex int) error {
 				log.Printf("pipeline %s: fanout all-failed: terminate run %d session %s: %v",
 					p.ID, run.Index, run.SessionID, err)
 			}
+			decLiveAgents(run.SessionID)
 		}
 		return nil
 	}
@@ -760,6 +1000,7 @@ func (o *Orchestrator) Pick(p *Pipeline, runIdx int) error {
 			log.Printf("pipeline %s: pick step %d: terminate loser run %d session %s: %v",
 				p.ID, k, loser.Index, loser.SessionID, err)
 		}
+		decLiveAgents(loser.SessionID)
 	}
 
 	return o.afterStepSuccess(p, k)
@@ -829,6 +1070,7 @@ func (o *Orchestrator) terminateStepSession(p *Pipeline, k int) {
 	if err := o.sessions.CancelSession(sessID); err != nil {
 		log.Printf("pipeline %s: terminate step %d session %s: %v", p.ID, k, sessID, err)
 	}
+	decLiveAgents(sessID)
 }
 
 // sendPickPush sends a push notification informing the user that all fanout
@@ -886,4 +1128,253 @@ func exitCodeFromPhase(phase string) int {
 	}
 	// Any other exited(*) — e.g. "exited(1)", "exited(2)" — is a failure.
 	return 1
+}
+
+// ── Loop support ─────────────────────────────────────────────────────────────
+
+// startLoop begins the first iteration (pass 0, body step 0) of a loop step.
+// A background pollLoopStep goroutine watches the running body step and
+// drives subsequent passes via advanceLoop.
+func (o *Orchestrator) startLoop(p *Pipeline, k int) error {
+	step := &p.Steps[k]
+	lc := step.Loop
+	if lc == nil || len(lc.Body) == 0 {
+		return fmt.Errorf("pipeline %s: step %d: kind=loop missing body", p.ID, k)
+	}
+	lc.Iteration = 0
+	lc.BodyStep = 0
+	if err := o.spawnLoopBodyStep(p, k, 0, 0); err != nil {
+		return err
+	}
+	step.Started = time.Now().UTC().Format(time.RFC3339)
+	step.Phase = "running"
+	go o.pollLoopStep(p.ID, k)
+	return nil
+}
+
+// spawnLoopBodyStep spawns Body[bodyIdx] of loop step k's iteration-th pass.
+// {{prev}} resolves from: the previous body step in the SAME pass
+// (bodyIdx > 0); the last body step of the PREVIOUS pass (bodyIdx == 0 &&
+// iteration > 0); or the loop step's own predecessor in p.Steps (bodyIdx ==
+// 0 && iteration == 0) — i.e. a loop's body consumes {{prev}} exactly like a
+// normal step would, feeding forward across passes.
+func (o *Orchestrator) spawnLoopBodyStep(p *Pipeline, k, iteration, bodyIdx int) error {
+	step := &p.Steps[k]
+	lc := step.Loop
+	body := &lc.Body[bodyIdx]
+
+	var prevSessID string
+	switch {
+	case bodyIdx > 0:
+		prevSessID = lc.Body[bodyIdx-1].SessionID
+	case iteration > 0:
+		prevSessID = lc.Body[len(lc.Body)-1].SessionID
+	case k > 0:
+		prev := p.Steps[k-1]
+		prevSessID = prev.SessionID
+		if prevSessID == "" && len(prev.PrevSessionIDs) > 0 {
+			prevSessID = prev.PrevSessionIDs[len(prev.PrevSessionIDs)-1]
+		}
+	}
+
+	prompt := strings.ReplaceAll(body.PromptTemplate, "{{task}}", p.Task)
+	if body.InputFromPrev != InputNone {
+		prevText := ""
+		if prevSessID != "" {
+			workdir := o.sessions.GetWorktreeDir(prevSessID)
+			text := o.sessions.GetLastAssistantText(prevSessID)
+			prevText = BuildPrev(workdir, text, body.InputFromPrev)
+		}
+		prompt = strings.ReplaceAll(prompt, "{{prev}}", prevText)
+	} else {
+		prompt = strings.ReplaceAll(prompt, "{{prev}}", "")
+	}
+	if body.Instructions != "" {
+		prompt = fmt.Sprintf(instructionsPreambleFmt, body.Instructions, prompt)
+	}
+
+	agentType := body.AgentType
+	if agentType == "" {
+		agentType = step.AgentType // fall back to the loop step's own agent type
+	}
+	branch := fmt.Sprintf("pipeline-%s-step-%d-iter%d-body%d", p.ID, k, iteration, bodyIdx)
+	ov := StepOverride{Model: body.Model, ReasoningEffort: body.ReasoningEffort, PermissionMode: body.PermissionMode}
+	sessID, err := o.sessions.CreateSession(agentType, p.CWD, prompt, branch, ov)
+	if err != nil {
+		return fmt.Errorf("loop step %d iter %d body %d: create session (agent=%s): %w",
+			k, iteration, bodyIdx, agentType, err)
+	}
+	incLiveAgents(sessID)
+	body.SessionID = sessID
+	body.AgentType = agentType
+	body.Started = time.Now().UTC().Format(time.RFC3339)
+	body.Phase = "running"
+	log.Printf("pipeline %s: loop step %d iter %d body %d: spawned session=%s branch=%s agent=%s (live=%d)",
+		p.ID, k, iteration, bodyIdx, sessID, branch, agentType, liveAgents())
+	return nil
+}
+
+// terminateLoopBodyStep cancels the live session behind a completed loop
+// body step, once its harvest has already been read for the next body
+// step's (or next iteration's, or the post-loop step's) prompt. Mirrors
+// terminateStepSession for top-level steps.
+func (o *Orchestrator) terminateLoopBodyStep(body *Step) {
+	if body.SessionID == "" {
+		return
+	}
+	if err := o.sessions.CancelSession(body.SessionID); err != nil {
+		log.Printf("terminate loop body session %s: %v", body.SessionID, err)
+	}
+	decLiveAgents(body.SessionID)
+}
+
+// pollLoopStep polls the currently-running body step of loop step k every 5
+// seconds until it settles (exits, or — for structured-chat backends —
+// TurnComplete), then calls advanceLoop.
+func (o *Orchestrator) pollLoopStep(pipelineID string, stepIndex int) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		p, err := Load(o.conduitRoot, pipelineID)
+		if err != nil {
+			log.Printf("pipeline %s: pollLoopStep: load error: %v", pipelineID, err)
+			return
+		}
+		if p.State == PipelineCancelled || p.State == PipelineComplete || p.State == PipelineFailed {
+			return
+		}
+		if p.CurrentStep != stepIndex || stepIndex >= len(p.Steps) {
+			return
+		}
+		step := &p.Steps[stepIndex]
+		if step.Kind != StepKindLoop || step.Loop == nil {
+			return
+		}
+		lc := step.Loop
+		if lc.BodyStep >= len(lc.Body) {
+			return
+		}
+		sessID := lc.Body[lc.BodyStep].SessionID
+		if sessID == "" {
+			continue
+		}
+
+		phase := o.sessions.GetPhase(sessID)
+		if strings.HasPrefix(phase, "exited") {
+			// The process is confirmed no longer live (unlike turn_complete
+			// below) — free its slot now; the later terminateLoopBodyStep
+			// reap (via advanceLoop) is a safe idempotent no-op.
+			decLiveAgents(sessID)
+			log.Printf("pipeline %s: loop step %d iter %d body %d session %s exited phase=%s",
+				pipelineID, stepIndex, lc.Iteration, lc.BodyStep, sessID, phase)
+			if advErr := o.advanceLoop(p, stepIndex, phase); advErr != nil {
+				log.Printf("pipeline %s: advanceLoop step %d: %v", pipelineID, stepIndex, advErr)
+			}
+			return
+		}
+		if o.sessions.TurnComplete(sessID) {
+			log.Printf("pipeline %s: loop step %d iter %d body %d session %s turn_complete",
+				pipelineID, stepIndex, lc.Iteration, lc.BodyStep, sessID)
+			if advErr := o.advanceLoop(p, stepIndex, "turn_complete"); advErr != nil {
+				log.Printf("pipeline %s: advanceLoop step %d: %v", pipelineID, stepIndex, advErr)
+			}
+			return
+		}
+	}
+}
+
+// advanceLoop is called when the currently-running body step of loop step k
+// has settled with the given phase. It either advances within the current
+// pass, starts a new pass, or — once `until` matches OR max_iterations is
+// reached (§4.2: reaching the cap is SUCCESS, not failure — the loop is
+// best-effort) — adopts the last body step's session as the loop step's own
+// SessionID/Phase and delegates to afterStepSuccess, exactly as a normal
+// step would (so gate/{{prev}}/reaping downstream all behave identically
+// whether or not the preceding step happened to be a loop).
+func (o *Orchestrator) advanceLoop(p *Pipeline, k int, phase string) error {
+	step := &p.Steps[k]
+	lc := step.Loop
+	body := &lc.Body[lc.BodyStep]
+	body.Phase = phase
+	body.Ended = time.Now().UTC().Format(time.RFC3339)
+
+	if exitCodeFromPhase(phase) != 0 {
+		p.Gate = nil
+		p.State = PipelineFailed
+		if err := p.Save(o.conduitRoot); err != nil {
+			log.Printf("pipeline %s: save after loop fail: %v", p.ID, err)
+		}
+		log.Printf("pipeline %s: FAILED at loop step %d iter %d body %d (phase=%s)",
+			p.ID, k, lc.Iteration, lc.BodyStep, phase)
+		o.terminateLoopBodyStep(body)
+		return nil
+	}
+
+	if lc.BodyStep+1 < len(lc.Body) {
+		// More body steps remain in this pass.
+		finishedIdx := lc.BodyStep
+		lc.BodyStep++
+		if err := o.spawnLoopBodyStep(p, k, lc.Iteration, lc.BodyStep); err != nil {
+			p.State = PipelineFailed
+			_ = p.Save(o.conduitRoot)
+			o.terminateLoopBodyStep(&lc.Body[finishedIdx])
+			return fmt.Errorf("pipeline %s: loop step %d iter %d body %d: %w",
+				p.ID, k, lc.Iteration, lc.BodyStep, err)
+		}
+		if err := p.Save(o.conduitRoot); err != nil {
+			log.Printf("pipeline %s: save after loop body advance: %v", p.ID, err)
+		}
+		o.terminateLoopBodyStep(&lc.Body[finishedIdx])
+		go o.pollLoopStep(p.ID, k)
+		return nil
+	}
+
+	// Last body step of the pass — evaluate `until`. lastBody is a value
+	// copy: lc.Body[lc.BodyStep] may be overwritten in place below if
+	// another pass starts (single-step-body loops re-spawn into the same
+	// slice index), so its SessionID/Phase must be captured before that.
+	lastBody := *body
+	prevOutput := o.sessions.GetLastAssistantText(lastBody.SessionID)
+	matched, err := evalCondition(lc.Until, prevOutput, lastBody.Phase)
+	if err != nil {
+		p.Gate = nil
+		p.State = PipelineFailed
+		if saveErr := p.Save(o.conduitRoot); saveErr != nil {
+			log.Printf("pipeline %s: save after loop until-eval-error: %v", p.ID, saveErr)
+		}
+		log.Printf("pipeline %s: FAILED at loop step %d: eval until: %v", p.ID, k, err)
+		o.terminateLoopBodyStep(&lastBody)
+		return nil
+	}
+
+	lc.Iteration++
+	stop := matched || lc.Iteration >= lc.MaxIterations
+
+	if !stop {
+		lc.BodyStep = 0
+		if err := o.spawnLoopBodyStep(p, k, lc.Iteration, 0); err != nil {
+			p.State = PipelineFailed
+			_ = p.Save(o.conduitRoot)
+			return fmt.Errorf("pipeline %s: loop step %d iter %d: %w", p.ID, k, lc.Iteration, err)
+		}
+		if err := p.Save(o.conduitRoot); err != nil {
+			log.Printf("pipeline %s: save after loop iterate: %v", p.ID, err)
+		}
+		// Reap the PREVIOUS pass's last body session now that the new
+		// pass's spawn has already read its output for {{prev}} — this is
+		// the "reaps body sessions between iterations" invariant (§4.2).
+		o.terminateLoopBodyStep(&lastBody)
+		go o.pollLoopStep(p.ID, k)
+		return nil
+	}
+
+	log.Printf("pipeline %s: loop step %d done after %d iteration(s), matched=%v", p.ID, k, lc.Iteration, matched)
+	// Adopt the final pass's last body session as this step's own — reaped
+	// later via the normal terminateStepSession path (afterStepSuccess),
+	// exactly like any other step's session. NOT reaped here.
+	step.SessionID = lastBody.SessionID
+	step.Phase = lastBody.Phase
+	step.Ended = time.Now().UTC().Format(time.RFC3339)
+	return o.afterStepSuccess(p, k)
 }

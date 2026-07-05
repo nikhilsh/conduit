@@ -85,6 +85,11 @@ type Step struct {
 	// StepConfig (embedded) carries the optional per-block model/reasoning-
 	// effort/permission-mode/instructions. See StepConfig for field docs.
 	StepConfig
+	// ControlFlow (embedded) carries the optional kind/branch/loop
+	// discriminator (docs/PLAN-HARNESS-BUILDER.md §4.1/§4.2). See
+	// ControlFlow for field docs. Also embedded in TemplateStep — the same
+	// lockstep guard as StepConfig.
+	ControlFlow
 	SessionID string `json:"session_id,omitempty"`
 	Phase     string `json:"phase,omitempty"`
 	Started   string `json:"started,omitempty"`
@@ -99,6 +104,14 @@ type Step struct {
 	// Fanout, when non-nil, declares this step as a fanout step. Its presence
 	// is the discriminator — no separate agent_type sentinel.
 	Fanout *FanoutConfig `json:"fanout,omitempty"`
+	// SplicedFrom is provenance metadata set when this step was produced by
+	// resolving a branch's condition (Orchestrator.spliceBranchAt): which
+	// branch step and arm ("then"/"else") produced it. Empty for a step that
+	// was never spliced. Persisted so a reader of pipeline.json can see which
+	// arm actually ran — pipeline.json only ever holds the POST-splice
+	// flattened form (see spliceBranchAt's doc comment for the recovery
+	// invariant this implies).
+	SplicedFrom string `json:"spliced_from,omitempty"`
 }
 
 // IsFanout returns true when this step is a fanout step.
