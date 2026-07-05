@@ -41,9 +41,13 @@ struct ConduitPipelineBuilderViewModelTests {
         let vm = ConduitUI.PipelineBuilderViewModel(steps: legacySteps)
         let vmRequest = vm.createRequest(title: "Title", task: "Task", cwd: "/tmp", base: "main")
 
-        let legacyData = try JSONEncoder().encode(legacyRequest)
-        let vmData = try JSONEncoder().encode(vmRequest)
-        #expect(legacyData == vmData)
+        // Compare structurally (decoded JSON), not raw `Data` -- JSONEncoder
+        // does not guarantee stable key ordering across separate encode()
+        // calls, so a raw byte comparison here is flaky even when the wire
+        // content is identical.
+        let legacyObj = try jsonObject(legacyRequest) as NSDictionary
+        let vmObj = try jsonObject(vmRequest) as NSDictionary
+        #expect(legacyObj == vmObj)
     }
 
     @Test func templateSaveRequestMatchesPhase1FormEncoding() throws {
@@ -58,7 +62,10 @@ struct ConduitPipelineBuilderViewModelTests {
         let vm = ConduitUI.PipelineBuilderViewModel(steps: [step])
         let vmRequest = vm.templateSaveRequest(title: "T", task: "Do it")
 
-        #expect(try JSONEncoder().encode(legacyRequest) == JSONEncoder().encode(vmRequest))
+        // Same rationale as above -- structural comparison, not raw Data.
+        let legacyObj = try jsonObject(legacyRequest) as NSDictionary
+        let vmObj = try jsonObject(vmRequest) as NSDictionary
+        #expect(legacyObj == vmObj)
     }
 
     @Test func moveStepsReordersArray() {

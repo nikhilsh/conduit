@@ -255,11 +255,6 @@ private fun logBlockConfigTelemetry(steps: List<PipelineStepDraft>) {
 /**
  * Pipeline builder screen. Collects a title, task, cwd, base branch, and
  * a list of steps, then POSTs to /api/pipeline and navigates to PipelineMonitorScreen.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-/**
- * Pipeline builder screen. Collects a title, task, cwd, base branch, and
- * a list of steps, then POSTs to /api/pipeline and navigates to PipelineMonitorScreen.
  *
  * PLAN-HARNESS-BUILDER Phase 2 (docs/PLAN-HARNESS-BUILDER.md §3): the
  * Shortcuts-style visual builder. Phone renders a stacked block-card list +
