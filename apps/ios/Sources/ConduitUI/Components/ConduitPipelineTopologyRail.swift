@@ -20,6 +20,17 @@ extension ConduitUI {
         let gateAfter: Bool
         /// 0 = no fanout; otherwise the declared run count.
         let fanoutCount: Int
+        /// "" (plain agent step, back-compatible) | "branch" | "loop"
+        /// (PLAN-HARNESS-BUILDER Phase 3).
+        var kind: String = ""
+        /// Then/Else sub-stack counts (kind == "branch" only).
+        var thenCount: Int = 0
+        var elseCount: Int = 0
+        /// Loop body step count + max_iterations (kind == "loop" only).
+        var bodyCount: Int = 0
+        var maxIterations: Int = 0
+
+        var isControlFlow: Bool { kind == "branch" || kind == "loop" }
     }
 
     struct PipelineTopologyRail: View {
@@ -38,13 +49,28 @@ extension ConduitUI {
         private func row(_ item: PipelineTopologyItem, index: Int, isLast: Bool) -> some View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
-                    AgentAvatar(assistant: item.agentType, size: 20)
-                    Text("\(index + 1). \(item.role.capitalized)")
+                    if item.isControlFlow {
+                        Image(systemName: item.kind == "loop" ? "repeat" : "arrow.triangle.branch")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(neon.accent)
+                            .frame(width: 20, height: 20)
+                    } else {
+                        AgentAvatar(assistant: item.agentType, size: 20)
+                    }
+                    Text("\(index + 1). \(item.isControlFlow ? (item.kind == "loop" ? "Loop" : "If/Else") : item.role.capitalized)")
                         .font(neon.mono(11).weight(.semibold))
                         .foregroundStyle(neon.text)
                         .lineLimit(1)
                     if item.fanoutCount > 0 {
                         Text("\(item.fanoutCount)x")
+                            .font(neon.mono(9).weight(.bold))
+                            .foregroundStyle(neon.accent)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(neon.accent.opacity(0.15)))
+                    }
+                    if item.kind == "loop" {
+                        Text("max \(item.maxIterations)x")
                             .font(neon.mono(9).weight(.bold))
                             .foregroundStyle(neon.accent)
                             .padding(.horizontal, 5)
@@ -62,6 +88,35 @@ extension ConduitUI {
                     HStack(spacing: 6) {
                         Rectangle().fill(neon.border.opacity(0.6)).frame(width: 1, height: 12)
                         Text("\(item.fanoutCount) parallel runs")
+                            .font(neon.mono(9))
+                            .foregroundStyle(neon.textFaint)
+                    }
+                    .padding(.leading, 9)
+                }
+
+                // Branch: two indented lanes (Then / Else). Loop: one
+                // indented lane (Body). Compact/read-only, mirrors the
+                // fanout cluster shape above.
+                if item.kind == "branch" {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Rectangle().fill(neon.border.opacity(0.6)).frame(width: 1, height: 12)
+                            Text("then: \(item.thenCount) step\(item.thenCount == 1 ? "" : "s")")
+                                .font(neon.mono(9))
+                                .foregroundStyle(neon.textFaint)
+                        }
+                        HStack(spacing: 6) {
+                            Rectangle().fill(neon.border.opacity(0.6)).frame(width: 1, height: 12)
+                            Text("else: \(item.elseCount) step\(item.elseCount == 1 ? "" : "s")")
+                                .font(neon.mono(9))
+                                .foregroundStyle(neon.textFaint)
+                        }
+                    }
+                    .padding(.leading, 9)
+                } else if item.kind == "loop" {
+                    HStack(spacing: 6) {
+                        Rectangle().fill(neon.border.opacity(0.6)).frame(width: 1, height: 12)
+                        Text("body: \(item.bodyCount) step\(item.bodyCount == 1 ? "" : "s")")
                             .font(neon.mono(9))
                             .foregroundStyle(neon.textFaint)
                     }

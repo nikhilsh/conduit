@@ -40,6 +40,17 @@ extension ConduitUI {
         let winner: Int?
     }
 
+    /// Live state for a `kind == "loop"` step -- broker
+    /// `pipeline.LoopConfig` (docs/PLAN-HARNESS-BUILDER.md §4.2). Only the
+    /// fields the Monitor needs to render "iteration k/N" are decoded here
+    /// (not `body`/`until`, which are create-time config the Monitor never
+    /// re-renders).
+    struct PipelineLoopStatus: Decodable {
+        let max_iterations: Int
+        /// Number of completed passes so far.
+        let iteration: Int?
+    }
+
     struct PipelineStepStatus: Identifiable, Decodable {
         var id: Int { index }
         let index: Int
@@ -58,6 +69,17 @@ extension ConduitUI {
         let prev_session_ids: [String]?
         /// Fanout configuration + runtime state. Present only for fanout steps.
         let fanout: FanoutStatus?
+        /// "" (plain agent step) | "branch" | "loop" (PLAN-HARNESS-BUILDER
+        /// Phase 3). A "branch" step is transient -- the orchestrator
+        /// splices it away once its condition is resolved, so this is
+        /// really only ever observed as "loop" or absent/"" in practice.
+        let kind: String?
+        /// Provenance set when this step was produced by resolving a
+        /// branch's condition (e.g. "step 2 branch (then)"). Absent for a
+        /// step that was never spliced.
+        let spliced_from: String?
+        /// Live loop state. Present only when kind == "loop".
+        let loop: PipelineLoopStatus?
 
         var isRunning: Bool {
             guard let p = phase else { return false }
@@ -75,6 +97,8 @@ extension ConduitUI {
         }
 
         var isFanout: Bool { fanout != nil }
+        var isLoop: Bool { kind == "loop" }
+        var wasSpliced: Bool { !(spliced_from?.isEmpty ?? true) }
     }
 
     /// Gate metadata returned by the broker when a pipeline is in the
@@ -321,6 +345,17 @@ extension ConduitUI {
                                     .padding(.vertical, 2)
                                     .background(Capsule().fill(neon.accent.opacity(0.14)))
                             }
+                            // Loop iteration badge (PLAN-HARNESS-BUILDER Phase 3,
+                            // §4.2): "iteration k/N" -- k = current pass
+                            // (1-indexed: iteration+1 while a pass is in flight).
+                            if step.isLoop, let lp = step.loop {
+                                Text("iteration \((lp.iteration ?? 0) + 1)/\(lp.max_iterations)")
+                                    .font(neon.mono(10).weight(.bold))
+                                    .foregroundStyle(neon.accent)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(neon.accent.opacity(0.14)))
+                            }
                             // Retry chip
                             if let retries = step.retries, retries > 0 {
                                 Text("retry \(retries)")
@@ -335,6 +370,19 @@ extension ConduitUI {
                         Text(step.agent_type)
                             .font(neon.mono(10))
                             .foregroundStyle(neon.textFaint)
+                        // Spliced-from-branch provenance annotation
+                        // (PLAN-HARNESS-BUILDER Phase 3, §4.1): set when the
+                        // orchestrator resolved a branch's condition and
+                        // spliced this step in from the chosen arm.
+                        if step.wasSpliced, let from = step.spliced_from {
+                            HStack(spacing: 3) {
+                                Image(systemName: "arrow.triangle.branch")
+                                    .font(.system(size: 8, weight: .semibold))
+                                Text("from \(from)")
+                                    .font(neon.mono(9))
+                            }
+                            .foregroundStyle(neon.textFaint)
+                        }
                     }
 
                     Spacer(minLength: 6)
@@ -439,7 +487,16 @@ extension ConduitUI {
         }
 
         private func stepDisplayState(step: PipelineStepStatus, pipeline: PipelineStatus) -> StepDisplayState {
-            if step.session_id == nil && step.fanout?.runs == nil { return .queued }
+            if step.session_id == nil && step.fanout?.runs == nil {
+                // A loop step's own SessionID is only adopted once the loop
+                // is DONE (orchestrator.advanceLoop) -- while iterating it
+                // stays nil, so without this check an in-progress loop would
+                // misleadingly show "queued" (PLAN-HARNESS-BUILDER Phase 3).
+                if step.isLoop && step.index == pipeline.current_step && !pipeline.isTerminal {
+                    return .running
+                }
+                return .queued
+            }
             if step.isDone { return .done }
             if step.isFailed { return .failed }
             if pipeline.isAwaitingPick && step.index == pipeline.current_step {

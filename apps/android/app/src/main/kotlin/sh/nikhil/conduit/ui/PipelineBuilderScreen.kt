@@ -29,7 +29,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PanTool
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -106,7 +109,56 @@ data class PipelineStepDraft(
     val fanoutModels: List<String> = emptyList(),
     val fanoutReasoningEfforts: List<String> = emptyList(),
     val fanoutPermissionModes: List<String> = emptyList(),
+
+    // Control flow (PLAN-HARNESS-BUILDER Phase 3, gated on
+    // store.pipelineBranch / store.pipelineLoop). "" = plain agent step
+    // (everything above), back-compatible with Phase 1/2.
+    val kind: String = "", // "" | "branch" | "loop"
+    // Branch condition (used when kind == "branch")
+    val branchConditionSource: String = "prev_output", // "prev_output" | "exit_status"
+    val branchConditionPredicate: String = "contains", // prev_output: contains|not_contains|matches; exit_status: succeeded|failed
+    val branchConditionValue: String = "",
+    // Then/Else sub-stacks -- PipelineSubStepDraft (agent-only: no kind, no
+    // fanout, no nested branch/loop). This is the depth-2 + no-fanout-
+    // inside guard ENFORCED BY THE TYPE SYSTEM (docs/PLAN-HARNESS-BUILDER.md
+    // §4.1/§4.5): there is no control to hide because the option doesn't
+    // exist on this type.
+    val branchThen: List<PipelineSubStepDraft> = listOf(PipelineSubStepDraft()),
+    val branchElse: List<PipelineSubStepDraft> = emptyList(),
+    // Loop config (used when kind == "loop")
+    val loopBody: List<PipelineSubStepDraft> = listOf(PipelineSubStepDraft()),
+    val loopUntilSource: String = "prev_output",
+    val loopUntilPredicate: String = "contains",
+    val loopUntilValue: String = "",
+    val loopMaxIterations: Int = 3, // 1-5, default 3 (owner decision §8.5)
+) {
+    val isControlFlow: Boolean get() = kind == "branch" || kind == "loop"
+}
+
+/**
+ * A step nested inside a branch's Then/Else arm or a loop's body.
+ * Deliberately a SEPARATE, smaller type from `PipelineStepDraft` -- it has
+ * no `kind`/`branch`/`loop`/`fanout` fields, which is the depth-2 +
+ * no-fanout-inside bound from PLAN-HARNESS-BUILDER §4.1/§4.5 enforced by
+ * construction: there is no control to hide because a sub-step cannot
+ * represent another branch/loop/fanout in the first place. Mirror of iOS
+ * `ConduitUI.PipelineSubStep`.
+ */
+data class PipelineSubStepDraft(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val agentType: String = "claude",
+    val role: String = "engineer",
+    val promptTemplate: String = "",
+    val inputFromPrev: String = "none",
+    val gateAfter: Boolean = false,
+    val model: String = "",
+    val reasoningEffort: String = "",
+    val permissionMode: String = "",
+    val instructions: String = "",
 )
+
+/** Which sub-stack a [PipelineSubStepDraft] belongs to. */
+enum class PipelineSubStepArm { THEN, ELSE_ARM, BODY }
 
 /** A saved pipeline template returned by GET /api/pipeline-templates. */
 data class PipelineTemplateDraft(
@@ -122,22 +174,7 @@ internal fun parsePipelineTemplate(obj: JSONObject): PipelineTemplateDraft {
     val steps = buildList {
         if (stepsArr != null) {
             for (i in 0 until stepsArr.length()) {
-                val s = stepsArr.getJSONObject(i)
-                add(
-                    PipelineStepDraft(
-                        agentType = s.optString("agent_type", "claude"),
-                        role = s.optString("role", "engineer"),
-                        promptTemplate = s.optString("prompt_template", ""),
-                        inputFromPrev = s.optString("input_from_prev", "none"),
-                        gateAfter = s.optBoolean("gate_after", false),
-                        // Per-block config (PLAN-HARNESS-BUILDER Phase 1).
-                        // Absent on an older saved template -> "" (adapter default).
-                        model = s.optString("model", ""),
-                        reasoningEffort = s.optString("reasoning_effort", ""),
-                        permissionMode = s.optString("permission_mode", ""),
-                        instructions = s.optString("instructions", ""),
-                    ),
-                )
+                add(parseStepDraft(stepsArr.getJSONObject(i)))
             }
         }
     }
@@ -147,6 +184,74 @@ internal fun parsePipelineTemplate(obj: JSONObject): PipelineTemplateDraft {
         task = obj.optString("task", ""),
         steps = steps.ifEmpty { listOf(PipelineStepDraft()) },
     )
+}
+
+/** Parses one top-level step (agent step OR kind=="branch"/"loop"). */
+private fun parseStepDraft(s: JSONObject): PipelineStepDraft {
+    var step = PipelineStepDraft(
+        agentType = s.optString("agent_type", "claude"),
+        role = s.optString("role", "engineer"),
+        promptTemplate = s.optString("prompt_template", ""),
+        inputFromPrev = s.optString("input_from_prev", "none"),
+        gateAfter = s.optBoolean("gate_after", false),
+        // Per-block config (PLAN-HARNESS-BUILDER Phase 1).
+        // Absent on an older saved template -> "" (adapter default).
+        model = s.optString("model", ""),
+        reasoningEffort = s.optString("reasoning_effort", ""),
+        permissionMode = s.optString("permission_mode", ""),
+        instructions = s.optString("instructions", ""),
+    )
+    // Control flow (PLAN-HARNESS-BUILDER Phase 3). Absent on an older saved
+    // template -> kind stays "" (plain agent step).
+    when (s.optString("kind", "")) {
+        "branch" -> {
+            val b = s.optJSONObject("branch") ?: return step
+            val cond = b.optJSONObject("condition") ?: JSONObject()
+            step = step.copy(
+                kind = "branch",
+                branchConditionSource = cond.optString("source", "prev_output"),
+                branchConditionPredicate = cond.optString("predicate", "contains"),
+                branchConditionValue = cond.optString("value", ""),
+                branchThen = parseSubStepArray(b.optJSONArray("then")),
+                branchElse = parseSubStepArray(b.optJSONArray("else")),
+            )
+        }
+        "loop" -> {
+            val l = s.optJSONObject("loop") ?: return step
+            val until = l.optJSONObject("until") ?: JSONObject()
+            step = step.copy(
+                kind = "loop",
+                loopBody = parseSubStepArray(l.optJSONArray("body")).ifEmpty { listOf(PipelineSubStepDraft()) },
+                loopUntilSource = until.optString("source", "prev_output"),
+                loopUntilPredicate = until.optString("predicate", "contains"),
+                loopUntilValue = until.optString("value", ""),
+                loopMaxIterations = l.optInt("max_iterations", 3),
+            )
+        }
+    }
+    return step
+}
+
+private fun parseSubStepArray(arr: org.json.JSONArray?): List<PipelineSubStepDraft> {
+    if (arr == null) return emptyList()
+    return buildList {
+        for (i in 0 until arr.length()) {
+            val s = arr.optJSONObject(i) ?: continue
+            add(
+                PipelineSubStepDraft(
+                    agentType = s.optString("agent_type", "claude"),
+                    role = s.optString("role", "engineer"),
+                    promptTemplate = s.optString("prompt_template", ""),
+                    inputFromPrev = s.optString("input_from_prev", "none"),
+                    gateAfter = s.optBoolean("gate_after", false),
+                    model = s.optString("model", ""),
+                    reasoningEffort = s.optString("reasoning_effort", ""),
+                    permissionMode = s.optString("permission_mode", ""),
+                    instructions = s.optString("instructions", ""),
+                ),
+            )
+        }
+    }
 }
 
 /**
@@ -172,13 +277,19 @@ internal fun liveAgentOptions(descriptors: Map<String, AgentDescriptor>): List<S
 }
 
 /**
- * Per PLAN-HARNESS-BUILDER §8.3 (owner decision, overriding the plan's
- * "disabled with caption" text): the model override is a silent no-op for
- * gemini (ACP picks its model at `session/new`, `backend_acpwire.go:611-613`),
- * so the model row is HIDDEN entirely for gemini rather than shown disabled.
+ * PLAN-HARNESS-BUILDER Phase 3 (§4.3/§4.5): the model row shows whenever the
+ * agent's descriptor reports `supports.model_override == true` AND its model
+ * catalog is non-empty -- replacing the Phase-1 hardcoded gemini exclusion
+ * (owner decision §8.3) now that broker PR #900 wires
+ * `SpawnOverride.Model` through ACP `session/set_model` for gemini too. An
+ * agent whose descriptor is missing (old broker, no `agents` map) or reports
+ * `model_override == false` (opencode today) still hides the row -- a
+ * visible control must always be honored.
  */
-internal fun modelRowHidden(agentType: String, catalog: List<SessionStore.AgentModel>?): Boolean =
-    agentType.lowercase() == "gemini" || catalog.isNullOrEmpty()
+internal fun modelRowHidden(catalog: List<SessionStore.AgentModel>?, descriptor: AgentDescriptor): Boolean {
+    if (catalog.isNullOrEmpty()) return true
+    return !descriptor.supportsModelOverride
+}
 private val ROLE_PRESETS = listOf("researcher", "architect", "engineer", "custom")
 private val INPUT_OPTIONS = listOf("none", "output", "memory", "memory+output")
 
@@ -226,6 +337,73 @@ internal fun stepDraftToJson(step: PipelineStepDraft): JSONObject = JSONObject()
     if (step.reasoningEffort.isNotEmpty()) put("reasoning_effort", step.reasoningEffort)
     if (step.permissionMode.isNotEmpty()) put("permission_mode", step.permissionMode)
     if (step.instructions.isNotEmpty()) put("instructions", step.instructions)
+
+    // Control flow (PLAN-HARNESS-BUILDER Phase 3); omitted when the step is
+    // a plain agent step so the request stays byte-identical to Phase 1/2
+    // for every non-control-flow block.
+    when (step.kind) {
+        "branch" -> {
+            put("kind", "branch")
+            put(
+                "branch",
+                JSONObject().apply {
+                    put(
+                        "condition",
+                        conditionToJson(
+                            step.branchConditionSource,
+                            step.branchConditionPredicate,
+                            step.branchConditionValue,
+                        ),
+                    )
+                    if (step.branchThen.isNotEmpty()) {
+                        put("then", JSONArray().apply { step.branchThen.forEach { put(subStepDraftToJson(it)) } })
+                    }
+                    if (step.branchElse.isNotEmpty()) {
+                        put("else", JSONArray().apply { step.branchElse.forEach { put(subStepDraftToJson(it)) } })
+                    }
+                },
+            )
+        }
+        "loop" -> {
+            put("kind", "loop")
+            put(
+                "loop",
+                JSONObject().apply {
+                    put("body", JSONArray().apply { step.loopBody.forEach { put(subStepDraftToJson(it)) } })
+                    put(
+                        "until",
+                        conditionToJson(step.loopUntilSource, step.loopUntilPredicate, step.loopUntilValue),
+                    )
+                    put("max_iterations", step.loopMaxIterations)
+                },
+            )
+        }
+    }
+}
+
+/** Recursively-encoded Then/Else/body sub-step -- mirrors [PipelineSubStepDraft]. */
+internal fun subStepDraftToJson(step: PipelineSubStepDraft): JSONObject = JSONObject().apply {
+    put("agent_type", step.agentType)
+    put("role", step.role)
+    put("prompt_template", step.promptTemplate)
+    put("input_from_prev", step.inputFromPrev)
+    put("gate_after", step.gateAfter)
+    if (step.model.isNotEmpty()) put("model", step.model)
+    if (step.reasoningEffort.isNotEmpty()) put("reasoning_effort", step.reasoningEffort)
+    if (step.permissionMode.isNotEmpty()) put("permission_mode", step.permissionMode)
+    if (step.instructions.isNotEmpty()) put("instructions", step.instructions)
+}
+
+/**
+ * Encodes a `pipeline.Condition` (source/predicate/value) --
+ * `broker/internal/pipeline/controlflow.go`. `value` is unused for
+ * exit_status predicates (broker: Value string json:"value,omitempty"),
+ * so it is only emitted for prev_output.
+ */
+internal fun conditionToJson(source: String, predicate: String, value: String): JSONObject = JSONObject().apply {
+    put("source", source)
+    put("predicate", predicate)
+    if (source == "prev_output" && value.isNotEmpty()) put("value", value)
 }
 
 /**
@@ -275,6 +453,8 @@ fun PipelineBuilderScreen(
     val pipelineTemplates by store.pipelineTemplates.collectAsState()
     val pipelineFanout by store.pipelineFanout.collectAsState()
     val pipelineBlockConfig by store.pipelineBlockConfig.collectAsState()
+    val pipelineBranch by store.pipelineBranch.collectAsState()
+    val pipelineLoop by store.pipelineLoop.collectAsState()
     val agentDescriptors by store.agentDescriptors.collectAsState()
     val modelCatalogMap by store.modelCatalog.collectAsState()
     val agentOptions = remember(agentDescriptors) { liveAgentOptions(agentDescriptors) }
@@ -294,6 +474,12 @@ fun PipelineBuilderScreen(
     val viewModel = remember { PipelineBuilderViewModel() }
     // Phone only: which step's config dialog is showing (null = none).
     var configSheetStepId by remember { mutableStateOf<String?>(null) }
+    // Sub-step (Then/Else/body) full-config editor -- always a dialog on
+    // BOTH phone and tablet (unlike the top-level block, which is a dialog
+    // on phone / inline inspector on tablet). Nested indefinitely deep
+    // two-pane inspectors aren't worth the plumbing for a depth-2-bounded
+    // sub-stack, so this one level always dialogs.
+    var subStepEditTarget by remember { mutableStateOf<SubStepEditTarget?>(null) }
 
     var isCreating by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -509,7 +695,14 @@ fun PipelineBuilderScreen(
                     )
                     onCreated(id, title.trim())
                 } else {
-                    errorMessage = json.optString("error", "Failed to create pipeline")
+                    // PLAN-HARNESS-BUILDER Phase 3: a branch/loop validation
+                    // failure (depth > 2, bad condition, max_iterations > 5)
+                    // comes back as a 400 with a structured
+                    // {"error":{"message":...}} body -- surface that message
+                    // instead of the raw JSON blob so a rejected harness
+                    // fails gracefully with a reason.
+                    val serverMessage = json.optJSONObject("error")?.optString("message", "")?.takeIf { it.isNotEmpty() }
+                    errorMessage = serverMessage ?: "Failed to create pipeline"
                     Telemetry.diagnostic(
                         "pipeline create failed: no id",
                         tags = mapOf("surface" to "android"),
@@ -600,6 +793,8 @@ fun PipelineBuilderScreen(
                 showFanout = pipelineFanout,
                 showBlockConfig = pipelineBlockConfig,
                 showTemplates = pipelineTemplates,
+                showBranch = pipelineBranch,
+                showLoop = pipelineLoop,
                 agentOptions = agentOptions,
                 agentDescriptors = agentDescriptors,
                 modelCatalogMap = modelCatalogMap,
@@ -608,6 +803,7 @@ fun PipelineBuilderScreen(
                 isSavingTemplate = isSavingTemplate,
                 onStart = ::postPipeline,
                 onSaveTemplate = ::saveAsTemplate,
+                onOpenSubStepEditor = { subStepEditTarget = it },
             )
 
             if (isTabletForm) {
@@ -619,6 +815,64 @@ fun PipelineBuilderScreen(
                     onOpenConfig = { configSheetStepId = it },
                     onCloseConfig = { configSheetStepId = null },
                 )
+            }
+        }
+    }
+
+    // Sub-step (Then/Else/body) full-config editor dialog -- always
+    // modal (both phone + tablet), see subStepEditTarget's doc comment.
+    subStepEditTarget?.let { target ->
+        val stepIdx = viewModel.steps.indexOfFirst { it.id == target.stepId }
+        if (stepIdx >= 0) {
+            val subStep = when (target.arm) {
+                PipelineSubStepArm.THEN -> viewModel.steps[stepIdx].branchThen
+                PipelineSubStepArm.ELSE_ARM -> viewModel.steps[stepIdx].branchElse
+                PipelineSubStepArm.BODY -> viewModel.steps[stepIdx].loopBody
+            }.firstOrNull { it.id == target.subStepId }
+            if (subStep != null) {
+                Dialog(
+                    onDismissRequest = { subStepEditTarget = null },
+                    properties = DialogProperties(usePlatformDefaultWidth = false),
+                ) {
+                    Box(modifier = Modifier.fillMaxSize().background(neon.bg)) {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "Step",
+                                    fontFamily = neon.sans,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = neon.text,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = { subStepEditTarget = null }) {
+                                    Text("Done", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, color = neon.accent)
+                                }
+                            }
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                                verticalArrangement = Arrangement.spacedBy(14.dp),
+                            ) {
+                                SubStepConfigEditor(
+                                    sub = subStep,
+                                    neon = neon,
+                                    showBlockConfig = pipelineBlockConfig,
+                                    agentOptions = agentOptions,
+                                    agentDescriptors = agentDescriptors,
+                                    modelCatalogMap = modelCatalogMap,
+                                    onUpdate = { viewModel.updateSubStep(target.stepId, target.arm, it) },
+                                )
+                                Spacer(Modifier.height(24.dp))
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -780,6 +1034,8 @@ private data class PipelineBuilderCommonProps(
     val showFanout: Boolean,
     val showBlockConfig: Boolean,
     val showTemplates: Boolean,
+    val showBranch: Boolean,
+    val showLoop: Boolean,
     val agentOptions: List<String>,
     val agentDescriptors: Map<String, AgentDescriptor>,
     val modelCatalogMap: Map<String, List<SessionStore.AgentModel>>,
@@ -788,7 +1044,11 @@ private data class PipelineBuilderCommonProps(
     val isSavingTemplate: Boolean,
     val onStart: () -> Unit,
     val onSaveTemplate: () -> Unit,
+    val onOpenSubStepEditor: (SubStepEditTarget) -> Unit,
 )
+
+/** Identifies one sub-step's full-config editor dialog. */
+internal data class SubStepEditTarget(val stepId: String, val arm: PipelineSubStepArm, val subStepId: String)
 
 @Composable
 private fun PipelineMetadataFields(props: PipelineBuilderCommonProps) {
@@ -824,32 +1084,68 @@ private fun PipelineMetadataFields(props: PipelineBuilderCommonProps) {
     }
 }
 
+/**
+ * Add-block affordance. A plain button when neither control-flow flag is
+ * on (byte-identical UX to Phase 2); a dropdown offering Agent step /
+ * If-Else / Loop once the broker advertises either (PLAN-HARNESS-BUILDER
+ * Phase 3).
+ */
 @Composable
-private fun AddStepRow(neon: NeonTheme, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, neon.border, RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            Icons.Default.Add,
-            contentDescription = "Add step",
-            tint = neon.accent,
-            modifier = Modifier.size(18.dp),
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(
-            "Add step",
-            fontFamily = neon.sans,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 14.sp,
-            color = neon.accent,
-        )
+private fun AddStepRow(
+    neon: NeonTheme,
+    onClick: () -> Unit,
+    showBranch: Boolean = false,
+    showLoop: Boolean = false,
+    onAddBranch: () -> Unit = {},
+    onAddLoop: () -> Unit = {},
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .border(1.dp, neon.border, RoundedCornerShape(12.dp))
+                .clickable(onClick = { if (showBranch || showLoop) expanded = true else onClick() })
+                .padding(vertical = 12.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = "Add step",
+                tint = neon.accent,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "Add step",
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+                color = neon.accent,
+            )
+        }
+        if (showBranch || showLoop) {
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                DropdownMenuItem(
+                    text = { Text("Agent step", fontFamily = neon.sans) },
+                    onClick = { onClick(); expanded = false },
+                )
+                if (showBranch) {
+                    DropdownMenuItem(
+                        text = { Text("If/Else", fontFamily = neon.sans) },
+                        onClick = { onAddBranch(); expanded = false },
+                    )
+                }
+                if (showLoop) {
+                    DropdownMenuItem(
+                        text = { Text("Loop", fontFamily = neon.sans) },
+                        onClick = { onAddLoop(); expanded = false },
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -964,7 +1260,16 @@ private fun PipelineBuilderPhoneBody(
             )
         }
 
-        item { AddStepRow(neon = neon, onClick = { vm.addStep() }) }
+        item {
+            AddStepRow(
+                neon = neon,
+                onClick = { vm.addStep() },
+                showBranch = props.showBranch,
+                showLoop = props.showLoop,
+                onAddBranch = { vm.addControlFlowStep("branch") },
+                onAddLoop = { vm.addControlFlowStep("loop") },
+            )
+        }
 
         if (props.showTemplates) {
             item {
@@ -1043,6 +1348,12 @@ private fun PipelineBuilderPhoneBody(
                                 agentDescriptors = props.agentDescriptors,
                                 modelCatalogMap = props.modelCatalogMap,
                                 onUpdate = { vm.updateStep(step.id, it) },
+                                onAddSubStep = { arm -> vm.addSubStep(step.id, arm) },
+                                onRemoveSubStep = { arm, id -> vm.removeSubStep(step.id, arm, id) },
+                                onMoveSubStep = { arm, id, dir -> vm.moveSubStep(step.id, arm, id, dir) },
+                                onOpenSubStepEditor = { arm, id ->
+                                    props.onOpenSubStepEditor(SubStepEditTarget(step.id, arm, id))
+                                },
                             )
                             Spacer(Modifier.height(24.dp))
                         }
@@ -1100,7 +1411,14 @@ private fun PipelineBuilderTabletBody(props: PipelineBuilderCommonProps) {
                 canDelete = vm.canDeleteStep,
             )
 
-            AddStepRow(neon = neon, onClick = { vm.addStep() })
+            AddStepRow(
+                neon = neon,
+                onClick = { vm.addStep() },
+                showBranch = props.showBranch,
+                showLoop = props.showLoop,
+                onAddBranch = { vm.addControlFlowStep("branch") },
+                onAddLoop = { vm.addControlFlowStep("loop") },
+            )
 
             if (props.showTemplates) {
                 SaveTemplateButton(
@@ -1153,6 +1471,12 @@ private fun PipelineBuilderTabletBody(props: PipelineBuilderCommonProps) {
                         agentDescriptors = props.agentDescriptors,
                         modelCatalogMap = props.modelCatalogMap,
                         onUpdate = { vm.updateStep(step.id, it) },
+                        onAddSubStep = { arm -> vm.addSubStep(step.id, arm) },
+                        onRemoveSubStep = { arm, id -> vm.removeSubStep(step.id, arm, id) },
+                        onMoveSubStep = { arm, id, dir -> vm.moveSubStep(step.id, arm, id, dir) },
+                        onOpenSubStepEditor = { arm, id ->
+                            props.onOpenSubStepEditor(SubStepEditTarget(step.id, arm, id))
+                        },
                     )
                 }
             } else {
@@ -1268,6 +1592,18 @@ private fun BlockCard(
     onTap: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    if (step.isControlFlow) {
+        ControlFlowBlockCard(
+            step = step,
+            index = index,
+            isSelected = isSelected,
+            neon = neon,
+            canDelete = canDelete,
+            onTap = onTap,
+            onDelete = onDelete,
+        )
+        return
+    }
     ConduitCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -1348,6 +1684,106 @@ private fun BlockCard(
 }
 
 /**
+ * Compact summary card for an If/Else or Loop block -- condition + sub-
+ * stack counts only. The full Then/Else/body editor lives in the config
+ * dialog/inspector (`ControlFlowConfigEditor`), reached by tapping this
+ * card -- same precedent as the fanout toggle today.
+ */
+@Composable
+private fun ControlFlowBlockCard(
+    step: PipelineStepDraft,
+    index: Int,
+    isSelected: Boolean,
+    neon: NeonTheme,
+    canDelete: Boolean,
+    onTap: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    ConduitCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onTap)
+            .then(
+                if (isSelected) {
+                    Modifier.border(1.5.dp, neon.accent, RoundedCornerShape(ConduitTheme.cardCornerRadiusDp.dp))
+                } else {
+                    Modifier
+                },
+            ),
+        pad = 12.dp,
+    ) {
+        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Icon(
+                if (step.kind == "loop") Icons.Filled.Repeat else Icons.AutoMirrored.Filled.CallSplit,
+                contentDescription = if (step.kind == "loop") "Loop" else "If/Else",
+                tint = neon.accent,
+                modifier = Modifier.size(20.dp),
+            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "${index + 1}. ${if (step.kind == "loop") "Loop" else "If/Else"}",
+                        fontFamily = neon.sans,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = neon.text,
+                        maxLines = 1,
+                    )
+                    if (step.kind == "loop") {
+                        ConduitChip(label = "max ${step.loopMaxIterations}x")
+                    }
+                }
+                Text(
+                    conditionSummary(step),
+                    fontFamily = neon.sans,
+                    fontSize = 11.sp,
+                    color = neon.textDim,
+                    maxLines = 2,
+                )
+                Text(
+                    if (step.kind == "branch") {
+                        "${step.branchThen.size} then / ${step.branchElse.size} else"
+                    } else {
+                        "${step.loopBody.size} step${if (step.loopBody.size == 1) "" else "s"} in body"
+                    },
+                    fontFamily = neon.mono,
+                    fontSize = 10.sp,
+                    color = neon.textFaint,
+                )
+            }
+            if (canDelete) {
+                IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Delete step",
+                        tint = neon.red,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Compact one-line human-readable condition summary shown on the block card. */
+private fun conditionSummary(step: PipelineStepDraft): String {
+    val isLoop = step.kind == "loop"
+    val source = if (isLoop) step.loopUntilSource else step.branchConditionSource
+    val predicate = if (isLoop) step.loopUntilPredicate else step.branchConditionPredicate
+    val value = if (isLoop) step.loopUntilValue else step.branchConditionValue
+    val verb = if (isLoop) "until" else "if"
+    if (source == "exit_status") return "$verb previous step $predicate"
+    return "$verb output ${predicateLabel(predicate)} \"$value\""
+}
+
+private fun predicateLabel(p: String): String = when (p) {
+    "contains" -> "contains"
+    "not_contains" -> "does not contain"
+    "matches" -> "matches"
+    else -> p
+}
+
+/**
  * Per-step config editor (agent / per-block config / role / prompt / input
  * / gate / fanout) -- shared by the phone dialog and tablet inspector.
  * Extracted from what was previously the top half of `StepCard`'s body.
@@ -1362,7 +1798,23 @@ private fun StepConfigEditor(
     agentDescriptors: Map<String, AgentDescriptor>,
     modelCatalogMap: Map<String, List<SessionStore.AgentModel>>,
     onUpdate: (PipelineStepDraft) -> Unit,
+    onAddSubStep: (PipelineSubStepArm) -> Unit = {},
+    onRemoveSubStep: (PipelineSubStepArm, String) -> Unit = { _, _ -> },
+    onMoveSubStep: (PipelineSubStepArm, String, Int) -> Unit = { _, _, _ -> },
+    onOpenSubStepEditor: (PipelineSubStepArm, String) -> Unit = { _, _ -> },
 ) {
+    if (step.isControlFlow) {
+        ControlFlowConfigEditor(
+            step = step,
+            neon = neon,
+            onUpdate = onUpdate,
+            onAddSubStep = onAddSubStep,
+            onRemoveSubStep = onRemoveSubStep,
+            onMoveSubStep = onMoveSubStep,
+            onOpenSubStepEditor = onOpenSubStepEditor,
+        )
+        return
+    }
     // Agent type dropdown
     var agentExpanded by remember(step.id) { mutableStateOf(false) }
     Box {
@@ -1494,6 +1946,474 @@ private fun StepConfigEditor(
     }
 }
 
+// MARK: Control-flow config editor (If/Else + Loop, PLAN-HARNESS-BUILDER Phase 3)
+//
+// Mirrors the fanout precedent: the indented per-run/sub-step editor lives
+// inside the config dialog/inspector, not inline in the compact block card.
+
+@Composable
+private fun ControlFlowConfigEditor(
+    step: PipelineStepDraft,
+    neon: NeonTheme,
+    onUpdate: (PipelineStepDraft) -> Unit,
+    onAddSubStep: (PipelineSubStepArm) -> Unit,
+    onRemoveSubStep: (PipelineSubStepArm, String) -> Unit,
+    onMoveSubStep: (PipelineSubStepArm, String, Int) -> Unit,
+    onOpenSubStepEditor: (PipelineSubStepArm, String) -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(
+            if (step.kind == "loop") Icons.Filled.Repeat else Icons.AutoMirrored.Filled.CallSplit,
+            contentDescription = null,
+            tint = neon.accent,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            if (step.kind == "loop") "Loop" else "If/Else",
+            fontFamily = neon.sans,
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp,
+            color = neon.text,
+        )
+    }
+    Spacer(Modifier.height(4.dp))
+
+    if (step.kind == "branch") {
+        ConditionEditor(
+            title = "Condition",
+            source = step.branchConditionSource,
+            predicate = step.branchConditionPredicate,
+            value = step.branchConditionValue,
+            neon = neon,
+            onChange = { src, pred, v ->
+                onUpdate(step.copy(branchConditionSource = src, branchConditionPredicate = pred, branchConditionValue = v))
+            },
+        )
+        Spacer(Modifier.height(10.dp))
+        SubStackEditor(
+            title = "Then",
+            arm = PipelineSubStepArm.THEN,
+            subSteps = step.branchThen,
+            neon = neon,
+            onAdd = { onAddSubStep(PipelineSubStepArm.THEN) },
+            onRemove = { onRemoveSubStep(PipelineSubStepArm.THEN, it) },
+            onMove = { id, dir -> onMoveSubStep(PipelineSubStepArm.THEN, id, dir) },
+            onOpen = { onOpenSubStepEditor(PipelineSubStepArm.THEN, it) },
+        )
+        Spacer(Modifier.height(10.dp))
+        SubStackEditor(
+            title = "Else (optional)",
+            arm = PipelineSubStepArm.ELSE_ARM,
+            subSteps = step.branchElse,
+            neon = neon,
+            onAdd = { onAddSubStep(PipelineSubStepArm.ELSE_ARM) },
+            onRemove = { onRemoveSubStep(PipelineSubStepArm.ELSE_ARM, it) },
+            onMove = { id, dir -> onMoveSubStep(PipelineSubStepArm.ELSE_ARM, id, dir) },
+            onOpen = { onOpenSubStepEditor(PipelineSubStepArm.ELSE_ARM, it) },
+        )
+    } else {
+        ConditionEditor(
+            title = "Until",
+            source = step.loopUntilSource,
+            predicate = step.loopUntilPredicate,
+            value = step.loopUntilValue,
+            neon = neon,
+            onChange = { src, pred, v ->
+                onUpdate(step.copy(loopUntilSource = src, loopUntilPredicate = pred, loopUntilValue = v))
+            },
+        )
+        Spacer(Modifier.height(10.dp))
+        MaxIterationsStepper(
+            value = step.loopMaxIterations,
+            neon = neon,
+            onChange = { onUpdate(step.copy(loopMaxIterations = it)) },
+        )
+        Spacer(Modifier.height(10.dp))
+        SubStackEditor(
+            title = "Body",
+            arm = PipelineSubStepArm.BODY,
+            subSteps = step.loopBody,
+            neon = neon,
+            onAdd = { onAddSubStep(PipelineSubStepArm.BODY) },
+            onRemove = { onRemoveSubStep(PipelineSubStepArm.BODY, it) },
+            onMove = { id, dir -> onMoveSubStep(PipelineSubStepArm.BODY, id, dir) },
+            onOpen = { onOpenSubStepEditor(PipelineSubStepArm.BODY, it) },
+        )
+    }
+}
+
+/**
+ * Condition source picker (prev_output / exit_status), then either a
+ * predicate + value editor (prev_output) or a succeeded/failed toggle
+ * (exit_status) -- mirrors `pipeline.Condition`
+ * (broker/internal/pipeline/controlflow.go).
+ */
+@Composable
+private fun ConditionEditor(
+    title: String,
+    source: String,
+    predicate: String,
+    value: String,
+    neon: NeonTheme,
+    onChange: (source: String, predicate: String, value: String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title.uppercase(), fontFamily = neon.mono, fontWeight = FontWeight.SemiBold, fontSize = 10.sp, color = neon.textFaint)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("prev_output" to "Prev output", "exit_status" to "Exit status").forEach { (v, label) ->
+                val selected = source == v
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(if (selected) neon.accent else neon.surface2)
+                        .border(1.dp, if (selected) neon.accent else neon.border, RoundedCornerShape(50))
+                        .clickable {
+                            // Snap the predicate to a valid one for the new
+                            // source (broker validateCondition rejects a
+                            // mismatched pair).
+                            val newPredicate = if (v == "exit_status") {
+                                if (predicate == "succeeded" || predicate == "failed") predicate else "succeeded"
+                            } else {
+                                if (predicate in listOf("contains", "not_contains", "matches")) predicate else "contains"
+                            }
+                            onChange(v, newPredicate, value)
+                        }
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                ) {
+                    Text(
+                        label,
+                        fontFamily = neon.sans,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        fontSize = 11.sp,
+                        color = if (selected) neon.accentText else neon.textDim,
+                    )
+                }
+            }
+        }
+        if (source == "exit_status") {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("succeeded" to "Succeeded", "failed" to "Failed").forEach { (v, label) ->
+                    val selected = predicate == v
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(if (selected) neon.accent else neon.surface2)
+                            .border(1.dp, if (selected) neon.accent else neon.border, RoundedCornerShape(50))
+                            .clickable { onChange(source, v, value) }
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                    ) {
+                        Text(
+                            label,
+                            fontFamily = neon.sans,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            fontSize = 11.sp,
+                            color = if (selected) neon.accentText else neon.textDim,
+                        )
+                    }
+                }
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(
+                    "contains" to "Contains",
+                    "not_contains" to "Not contains",
+                    "matches" to "Matches (regex)",
+                ).forEach { (v, label) ->
+                    val selected = predicate == v
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(if (selected) neon.accent else neon.surface2)
+                            .border(1.dp, if (selected) neon.accent else neon.border, RoundedCornerShape(50))
+                            .clickable { onChange(source, v, value) }
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                    ) {
+                        Text(
+                            label,
+                            fontFamily = neon.sans,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            fontSize = 11.sp,
+                            color = if (selected) neon.accentText else neon.textDim,
+                        )
+                    }
+                }
+            }
+            OutlinedTextField(
+                value = value,
+                onValueChange = { onChange(source, predicate, it) },
+                label = { Text("Value to match") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/** max_iterations stepper, 1-5 (broker hard cap, owner decision §8.5), default 3. */
+@Composable
+private fun MaxIterationsStepper(value: Int, neon: NeonTheme, onChange: (Int) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "MAX ITERATIONS",
+            fontFamily = neon.mono,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 10.sp,
+            color = neon.textFaint,
+            modifier = Modifier.weight(1f),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(if (value > 1) neon.accent.copy(alpha = 0.15f) else neon.surface2)
+                    .clickable(enabled = value > 1) { onChange(value - 1) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("-", fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = if (value > 1) neon.accent else neon.textFaint)
+            }
+            Text("$value", fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = neon.text)
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(if (value < 5) neon.accent.copy(alpha = 0.15f) else neon.surface2)
+                    .clickable(enabled = value < 5) { onChange(value + 1) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("+", fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = if (value < 5) neon.accent else neon.textFaint)
+            }
+        }
+    }
+}
+
+/**
+ * A Then/Else/body sub-stack: an indented list of compact sub-step rows
+ * (tap to open the full agent-config dialog) + an add-step affordance.
+ * Reorder is up/down (not drag) -- consistent with the depth-2 bound (no
+ * complex nested drag-reorder needed for a bounded sub-stack).
+ */
+@Composable
+private fun SubStackEditor(
+    title: String,
+    arm: PipelineSubStepArm,
+    subSteps: List<PipelineSubStepDraft>,
+    neon: NeonTheme,
+    onAdd: () -> Unit,
+    onRemove: (String) -> Unit,
+    onMove: (String, Int) -> Unit,
+    onOpen: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title.uppercase(), fontFamily = neon.mono, fontWeight = FontWeight.SemiBold, fontSize = 10.sp, color = neon.textFaint)
+        Column(
+            modifier = Modifier.padding(start = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            subSteps.forEachIndexed { i, sub ->
+                SubStepRow(
+                    sub = sub,
+                    index = i,
+                    count = subSteps.size,
+                    neon = neon,
+                    onTap = { onOpen(sub.id) },
+                    onDelete = { onRemove(sub.id) },
+                    onMoveUp = { onMove(sub.id, -1) },
+                    onMoveDown = { onMove(sub.id, 1) },
+                )
+            }
+        }
+        Row(
+            modifier = Modifier
+                .padding(start = 10.dp)
+                .clickable(onClick = onAdd),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(Icons.Default.Add, contentDescription = "Add step", tint = neon.accent, modifier = Modifier.size(13.dp))
+            Text("Add step", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = neon.accent)
+        }
+    }
+}
+
+@Composable
+private fun SubStepRow(
+    sub: PipelineSubStepDraft,
+    index: Int,
+    count: Int,
+    neon: NeonTheme,
+    onTap: () -> Unit,
+    onDelete: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(neon.surface2.copy(alpha = 0.6f))
+            .clickable(onClick = onTap)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        AgentAvatar(assistant = sub.agentType, size = 22.dp)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                "${index + 1}. ${sub.role.replaceFirstChar { it.uppercase() }}",
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+                color = neon.text,
+                maxLines = 1,
+            )
+        }
+        IconButton(onClick = onMoveUp, modifier = Modifier.size(22.dp), enabled = index > 0) {
+            Icon(
+                Icons.Default.KeyboardArrowUp,
+                contentDescription = "Move up",
+                tint = if (index > 0) neon.textDim else neon.textFaint,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        IconButton(onClick = onMoveDown, modifier = Modifier.size(22.dp), enabled = index < count - 1) {
+            Icon(
+                Icons.Default.KeyboardArrowDown,
+                contentDescription = "Move down",
+                tint = if (index < count - 1) neon.textDim else neon.textFaint,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        IconButton(onClick = onDelete, modifier = Modifier.size(22.dp)) {
+            Icon(Icons.Default.Delete, contentDescription = "Delete step", tint = neon.red, modifier = Modifier.size(14.dp))
+        }
+    }
+}
+
+/**
+ * Agent-only config editor for a Then/Else/body sub-step -- no fanout, no
+ * kind, no nested control flow (depth-2 bound by construction,
+ * `PipelineSubStepDraft` has none of those fields).
+ */
+@Composable
+private fun SubStepConfigEditor(
+    sub: PipelineSubStepDraft,
+    neon: NeonTheme,
+    showBlockConfig: Boolean,
+    agentOptions: List<String>,
+    agentDescriptors: Map<String, AgentDescriptor>,
+    modelCatalogMap: Map<String, List<SessionStore.AgentModel>>,
+    onUpdate: (PipelineSubStepDraft) -> Unit,
+) {
+    var agentExpanded by remember(sub.id) { mutableStateOf(false) }
+    Box {
+        OutlinedTextField(
+            value = sub.agentType,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Agent type") },
+            modifier = Modifier.fillMaxWidth().clickable { agentExpanded = true },
+            enabled = false,
+        )
+        DropdownMenu(expanded = agentExpanded, onDismissRequest = { agentExpanded = false }) {
+            agentOptions.forEach { agent ->
+                DropdownMenuItem(
+                    text = { Text(agent, fontFamily = neon.mono) },
+                    onClick = {
+                        onUpdate(sub.copy(agentType = agent))
+                        agentExpanded = false
+                    },
+                )
+            }
+        }
+    }
+
+    if (showBlockConfig) {
+        BlockConfigSection(
+            agentType = sub.agentType,
+            model = sub.model,
+            reasoningEffort = sub.reasoningEffort,
+            permissionMode = sub.permissionMode,
+            instructions = sub.instructions,
+            neon = neon,
+            descriptor = descriptorFor(sub.agentType, agentDescriptors),
+            catalog = modelCatalogMap[sub.agentType],
+            onModelChange = { onUpdate(sub.copy(model = it, reasoningEffort = "")) },
+            onEffortChange = { onUpdate(sub.copy(reasoningEffort = it)) },
+            onModeChange = { onUpdate(sub.copy(permissionMode = it)) },
+            onInstructionsChange = { onUpdate(sub.copy(instructions = it)) },
+        )
+    }
+
+    var roleExpanded by remember(sub.id) { mutableStateOf(false) }
+    Box {
+        OutlinedTextField(
+            value = sub.role,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Role preset") },
+            modifier = Modifier.fillMaxWidth().clickable { roleExpanded = true },
+            enabled = false,
+        )
+        DropdownMenu(expanded = roleExpanded, onDismissRequest = { roleExpanded = false }) {
+            ROLE_PRESETS.forEach { role ->
+                DropdownMenuItem(
+                    text = { Text(role, fontFamily = neon.sans) },
+                    onClick = {
+                        val newPrompt = if (role != "custom") promptForRole(role) else sub.promptTemplate
+                        onUpdate(sub.copy(role = role, promptTemplate = newPrompt))
+                        roleExpanded = false
+                    },
+                )
+            }
+        }
+    }
+
+    OutlinedTextField(
+        value = sub.promptTemplate,
+        onValueChange = { onUpdate(sub.copy(promptTemplate = it)) },
+        label = { Text("Prompt template") },
+        minLines = 2,
+        modifier = Modifier.fillMaxWidth(),
+    )
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Input from previous step", fontFamily = neon.mono, fontSize = 11.sp, color = neon.textDim)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            INPUT_OPTIONS.forEach { option ->
+                val selected = sub.inputFromPrev == option
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(if (selected) neon.accent else neon.surface2)
+                        .border(1.dp, if (selected) neon.accent else neon.border, RoundedCornerShape(50))
+                        .clickable { onUpdate(sub.copy(inputFromPrev = option)) }
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                ) {
+                    Text(
+                        option,
+                        fontFamily = neon.mono,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        fontSize = 11.sp,
+                        color = if (selected) neon.accentText else neon.textDim,
+                    )
+                }
+            }
+        }
+    }
+
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "Gate after (require approval)",
+            fontFamily = neon.sans,
+            fontSize = 13.sp,
+            color = neon.text,
+            modifier = Modifier.weight(1f),
+        )
+        Switch(checked = sub.gateAfter, onCheckedChange = { onUpdate(sub.copy(gateAfter = it)) })
+    }
+}
+
 @Composable
 private fun BlockConfigSection(
     agentType: String,
@@ -1509,7 +2429,7 @@ private fun BlockConfigSection(
     onModeChange: (String) -> Unit,
     onInstructionsChange: (String) -> Unit,
 ) {
-    val showModel = !modelRowHidden(agentType, catalog)
+    val showModel = !modelRowHidden(catalog, descriptor)
     val efforts = catalogEntryFor(model, catalog)?.efforts ?: emptyList()
     val showEffort = efforts.isNotEmpty()
     val showMode = descriptor.supportsPlanMode
@@ -1884,7 +2804,7 @@ private fun RunConfigRow(
     catalog: List<SessionStore.AgentModel>?,
     onUpdate: (PipelineStepDraft) -> Unit,
 ) {
-    val showModel = !modelRowHidden(runAgent, catalog)
+    val showModel = !modelRowHidden(catalog, descriptor)
     val model = step.fanoutModels.getOrElse(runIdx) { "" }
     val efforts = catalogEntryFor(model, catalog)?.efforts ?: emptyList()
     val showEffort = efforts.isNotEmpty()

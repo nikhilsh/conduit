@@ -39,12 +39,90 @@ extension ConduitUI {
             selectedStepID = s.id
         }
 
+        /// Adds a control-flow block (PLAN-HARNESS-BUILDER Phase 3). `kind`
+        /// is `"branch"` or `"loop"` -- both PipelineStep default their
+        /// sub-stacks with one starter PipelineSubStep, so a fresh block is
+        /// immediately submittable (a loop body must have >= 1 step; a
+        /// branch's arms are optional but starting with one is a friendlier
+        /// default than an empty Then).
+        func addControlFlowStep(kind: String) {
+            var s = PipelineStep()
+            s.kind = kind
+            steps.append(s)
+            selectedStepID = s.id
+        }
+
         func removeStep(id: PipelineStep.ID) {
             guard steps.count > 1 else { return }
             let wasSelected = selectedStepID == id
             steps.removeAll { $0.id == id }
             if wasSelected {
                 selectedStepID = steps.first?.id
+            }
+        }
+
+        // MARK: Sub-stack editing (Then / Else / Loop body)
+
+        private func subStepArray(_ arm: PipelineSubStepArm, in step: PipelineStep) -> [PipelineSubStep] {
+            switch arm {
+            case .then: return step.branchThen
+            case .elseArm: return step.branchElse
+            case .body: return step.loopBody
+            }
+        }
+
+        private func setSubStepArray(_ arm: PipelineSubStepArm, _ value: [PipelineSubStep], in index: Int) {
+            switch arm {
+            case .then: steps[index].branchThen = value
+            case .elseArm: steps[index].branchElse = value
+            case .body: steps[index].loopBody = value
+            }
+        }
+
+        func addSubStep(stepID: PipelineStep.ID, arm: PipelineSubStepArm) {
+            guard let idx = index(for: stepID) else { return }
+            var arr = subStepArray(arm, in: steps[idx])
+            arr.append(PipelineSubStep())
+            setSubStepArray(arm, arr, in: idx)
+        }
+
+        /// Removes a sub-step. A loop body must keep at least one step
+        /// (broker validation: `len(s.Loop.Body) == 0` is rejected); Then/
+        /// Else may go to zero (both are optional arrays on the wire).
+        func removeSubStep(stepID: PipelineStep.ID, arm: PipelineSubStepArm, subStepID: PipelineSubStep.ID) {
+            guard let idx = index(for: stepID) else { return }
+            var arr = subStepArray(arm, in: steps[idx])
+            if arm == .body && arr.count <= 1 { return }
+            arr.removeAll { $0.id == subStepID }
+            setSubStepArray(arm, arr, in: idx)
+        }
+
+        /// Swaps `subStepID` with its neighbor `direction` positions away
+        /// (-1 = up, +1 = down). A no-op past either end -- deliberately a
+        /// simple adjacent swap (not `move(fromOffsets:toOffset:)`'s
+        /// pre-removal-index convention) since the UI drives this from plain
+        /// up/down buttons on a nested (non-`List`) row, not `.onMove`.
+        func moveSubStep(stepID: PipelineStep.ID, arm: PipelineSubStepArm, subStepID: PipelineSubStep.ID, direction: Int) {
+            guard let idx = index(for: stepID) else { return }
+            var arr = subStepArray(arm, in: steps[idx])
+            guard let i = arr.firstIndex(where: { $0.id == subStepID }) else { return }
+            let j = i + direction
+            guard arr.indices.contains(j) else { return }
+            arr.swapAt(i, j)
+            setSubStepArray(arm, arr, in: idx)
+        }
+
+        func subStepBinding(stepID: PipelineStep.ID, arm: PipelineSubStepArm, subStepID: PipelineSubStep.ID) -> PipelineSubStep {
+            guard let idx = index(for: stepID) else { return PipelineSubStep() }
+            return subStepArray(arm, in: steps[idx]).first(where: { $0.id == subStepID }) ?? PipelineSubStep()
+        }
+
+        func updateSubStep(stepID: PipelineStep.ID, arm: PipelineSubStepArm, subStep: PipelineSubStep) {
+            guard let idx = index(for: stepID) else { return }
+            var arr = subStepArray(arm, in: steps[idx])
+            if let i = arr.firstIndex(where: { $0.id == subStep.id }) {
+                arr[i] = subStep
+                setSubStepArray(arm, arr, in: idx)
             }
         }
 
@@ -63,7 +141,7 @@ extension ConduitUI {
 
         func applyTemplate(_ tmpl: PipelineTemplate) {
             steps = tmpl.steps.map { s in
-                PipelineStep(
+                var step = PipelineStep(
                     agentType: s.agent_type,
                     role: s.role,
                     promptTemplate: s.prompt_template,
@@ -74,9 +152,44 @@ extension ConduitUI {
                     permissionMode: s.permission_mode ?? "",
                     instructions: s.instructions ?? ""
                 )
+                switch s.kind {
+                case "branch":
+                    guard let b = s.branch else { break }
+                    step.kind = "branch"
+                    step.branchConditionSource = b.condition.source
+                    step.branchConditionPredicate = b.condition.predicate
+                    step.branchConditionValue = b.condition.value ?? ""
+                    step.branchThen = (b.then ?? []).map(Self.subStep(from:))
+                    step.branchElse = (b.elseArm ?? []).map(Self.subStep(from:))
+                case "loop":
+                    guard let l = s.loop else { break }
+                    step.kind = "loop"
+                    step.loopBody = l.body.map(Self.subStep(from:))
+                    step.loopUntilSource = l.until.source
+                    step.loopUntilPredicate = l.until.predicate
+                    step.loopUntilValue = l.until.value ?? ""
+                    step.loopMaxIterations = l.max_iterations
+                default:
+                    break
+                }
+                return step
             }
             if steps.isEmpty { steps = [PipelineStep()] }
             selectedStepID = steps.first?.id
+        }
+
+        private static func subStep(from t: PipelineTemplateSubStep) -> PipelineSubStep {
+            PipelineSubStep(
+                agentType: t.agent_type,
+                role: t.role,
+                promptTemplate: t.prompt_template,
+                inputFromPrev: t.input_from_prev,
+                gateAfter: t.gate_after,
+                model: t.model ?? "",
+                reasoningEffort: t.reasoning_effort ?? "",
+                permissionMode: t.permission_mode ?? "",
+                instructions: t.instructions ?? ""
+            )
         }
 
         /// /api/pipeline create-request body -- same shape/encoder as
@@ -111,7 +224,12 @@ extension ConduitUI {
                     agentType: s.agentType,
                     role: s.role,
                     gateAfter: s.gateAfter,
-                    fanoutCount: s.fanoutEnabled ? s.fanoutCount : 0
+                    fanoutCount: s.fanoutEnabled ? s.fanoutCount : 0,
+                    kind: s.kind,
+                    thenCount: s.branchThen.count,
+                    elseCount: s.branchElse.count,
+                    bodyCount: s.loopBody.count,
+                    maxIterations: s.loopMaxIterations
                 )
             }
         }

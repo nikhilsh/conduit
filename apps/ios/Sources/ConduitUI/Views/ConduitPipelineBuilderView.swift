@@ -38,6 +38,79 @@ extension ConduitUI {
         var fanoutModels: [String] = []
         var fanoutReasoningEfforts: [String] = []
         var fanoutPermissionModes: [String] = []
+
+        // MARK: Control flow (PLAN-HARNESS-BUILDER Phase 3, gated on
+        // store.pipelineBranch / store.pipelineLoop). "" = plain agent step
+        // (everything above), back-compatible with Phase 1/2.
+        var kind: String = "" // "" | "branch" | "loop"
+        // Branch condition (used when kind == "branch")
+        var branchConditionSource: String = "prev_output" // "prev_output" | "exit_status"
+        var branchConditionPredicate: String = "contains" // prev_output: contains|not_contains|matches; exit_status: succeeded|failed
+        var branchConditionValue: String = ""
+        // Then/Else sub-stacks -- PipelineSubStep (agent-only: no kind, no
+        // fanout, no nested branch/loop). This is the depth-2 + no-fanout-
+        // inside guard ENFORCED BY THE TYPE SYSTEM, not a runtime check --
+        // there is no control to hide because the option doesn't exist on
+        // this type (docs/PLAN-HARNESS-BUILDER.md §4.1/§4.5).
+        var branchThen: [PipelineSubStep] = [PipelineSubStep()]
+        var branchElse: [PipelineSubStep] = []
+
+        // Loop config (used when kind == "loop")
+        var loopBody: [PipelineSubStep] = [PipelineSubStep()]
+        var loopUntilSource: String = "prev_output"
+        var loopUntilPredicate: String = "contains"
+        var loopUntilValue: String = ""
+        var loopMaxIterations: Int = 3 // 1-5, default 3 (owner decision §8.5)
+
+        var isControlFlow: Bool { kind == "branch" || kind == "loop" }
+    }
+
+    /// A step nested inside a branch's Then/Else arm or a loop's body.
+    /// Deliberately a SEPARATE, smaller type from `PipelineStep` -- it has no
+    /// `kind`/`branch`/`loop`/`fanout` fields, which is the depth-2 +
+    /// no-fanout-inside bound from PLAN-HARNESS-BUILDER §4.1/§4.5 enforced
+    /// by construction: there is no control to hide because a sub-step
+    /// cannot represent another branch/loop/fanout in the first place.
+    struct PipelineSubStep: Identifiable {
+        let id = UUID()
+        var agentType: String = "claude"
+        var role: String = "engineer"
+        var promptTemplate: String = ""
+        var inputFromPrev: String = "none"
+        var gateAfter: Bool = false
+        var model: String = ""
+        var reasoningEffort: String = ""
+        var permissionMode: String = ""
+        var instructions: String = ""
+    }
+
+    /// Which sub-stack a `PipelineSubStep` belongs to -- used to address
+    /// add/remove/move operations without three near-identical call sites.
+    /// Equatable: `removeSubStep`'s loop-body-never-empty guard compares
+    /// `arm == .body`.
+    enum PipelineSubStepArm: Equatable {
+        case then, elseArm, body
+    }
+
+    /// PLAN-HARNESS-BUILDER Phase 3 (§4.3/§4.5) pure decision, extracted so
+    /// it is directly unit-testable (the View's `modelRowHidden` wraps this
+    /// with live `store` state): the model row shows whenever the agent's
+    /// descriptor reports `supports.model_override == true` AND its model
+    /// catalog is non-empty -- replacing the Phase-1 hardcoded gemini
+    /// exclusion (owner decision §8.3) now that broker PR #900 wires
+    /// `SpawnOverride.Model` through ACP `session/set_model` for gemini too.
+    static func pipelineModelRowHidden(modelOverride: Bool, catalogEmpty: Bool) -> Bool {
+        if catalogEmpty { return true }
+        return !modelOverride
+    }
+
+    /// Identifies one sub-step's full-config editor sheet: which parent
+    /// block, which arm, which sub-step.
+    struct SubStepEditTarget: Identifiable {
+        let stepID: PipelineStep.ID
+        let arm: PipelineSubStepArm
+        let subStepID: PipelineSubStep.ID
+        var id: String { "\(stepID)-\(arm)-\(subStepID)" }
     }
 
     struct CreatedPipeline: Identifiable {
@@ -68,6 +141,81 @@ extension ConduitUI {
         let reasoning_effort: String?
         let permission_mode: String?
         let instructions: String?
+        // Control flow (PLAN-HARNESS-BUILDER Phase 3). Optional so a
+        // template saved before this shipped decodes fine with these absent.
+        // Defaulted to nil (not just optional) so the synthesized memberwise
+        // init stays source-compatible with every pre-Phase-3 call site
+        // (Decodable's synthesized init(from:) is unaffected either way --
+        // this default only matters for the memberwise init Swift also
+        // generates for a struct with no custom init).
+        let kind: String?
+        let branch: PipelineTemplateBranch?
+        let loop: PipelineTemplateLoop?
+
+        init(
+            agent_type: String,
+            role: String,
+            prompt_template: String,
+            input_from_prev: String,
+            gate_after: Bool,
+            model: String? = nil,
+            reasoning_effort: String? = nil,
+            permission_mode: String? = nil,
+            instructions: String? = nil,
+            kind: String? = nil,
+            branch: PipelineTemplateBranch? = nil,
+            loop: PipelineTemplateLoop? = nil
+        ) {
+            self.agent_type = agent_type
+            self.role = role
+            self.prompt_template = prompt_template
+            self.input_from_prev = input_from_prev
+            self.gate_after = gate_after
+            self.model = model
+            self.reasoning_effort = reasoning_effort
+            self.permission_mode = permission_mode
+            self.instructions = instructions
+            self.kind = kind
+            self.branch = branch
+            self.loop = loop
+        }
+    }
+
+    struct PipelineTemplateCondition: Decodable {
+        let source: String
+        let predicate: String
+        let value: String?
+    }
+
+    /// A decoded Then/Else/body step -- agent-only fields, mirrors
+    /// `PipelineSubStep` (no kind/branch/loop/fanout: depth-2 bound).
+    struct PipelineTemplateSubStep: Decodable {
+        let agent_type: String
+        let role: String
+        let prompt_template: String
+        let input_from_prev: String
+        let gate_after: Bool
+        let model: String?
+        let reasoning_effort: String?
+        let permission_mode: String?
+        let instructions: String?
+    }
+
+    struct PipelineTemplateBranch: Decodable {
+        let condition: PipelineTemplateCondition
+        let then: [PipelineTemplateSubStep]?
+        let elseArm: [PipelineTemplateSubStep]?
+
+        enum CodingKeys: String, CodingKey {
+            case condition, then
+            case elseArm = "else"
+        }
+    }
+
+    struct PipelineTemplateLoop: Decodable {
+        let body: [PipelineTemplateSubStep]
+        let until: PipelineTemplateCondition
+        let max_iterations: Int
     }
 
     // MARK: - Request wire types (PLAN-HARNESS-BUILDER Phase 1)
@@ -89,6 +237,56 @@ extension ConduitUI {
         var permission_modes: [String]?
     }
 
+    /// A recursively-encoded Then/Else/body step -- agent-only fields (no
+    /// kind/branch/loop/fanout), mirroring `PipelineSubStep`.
+    struct PipelineRequestSubStep: Encodable, Equatable {
+        var agent_type: String
+        var role: String
+        var prompt_template: String
+        var input_from_prev: String
+        var gate_after: Bool
+        var model: String?
+        var reasoning_effort: String?
+        var permission_mode: String?
+        var instructions: String?
+
+        init(_ s: PipelineSubStep) {
+            agent_type = s.agentType
+            role = s.role
+            prompt_template = s.promptTemplate
+            input_from_prev = s.inputFromPrev
+            gate_after = s.gateAfter
+            model = s.model.isEmpty ? nil : s.model
+            reasoning_effort = s.reasoningEffort.isEmpty ? nil : s.reasoningEffort
+            permission_mode = s.permissionMode.isEmpty ? nil : s.permissionMode
+            instructions = s.instructions.isEmpty ? nil : s.instructions
+        }
+    }
+
+    struct PipelineConditionRequest: Encodable, Equatable {
+        var source: String
+        var predicate: String
+        // Unused for exit_status (broker: `Value string \`json:"value,omitempty"\``).
+        var value: String?
+    }
+
+    struct PipelineBranchRequest: Encodable, Equatable {
+        var condition: PipelineConditionRequest
+        var then: [PipelineRequestSubStep]?
+        var elseArm: [PipelineRequestSubStep]?
+
+        enum CodingKeys: String, CodingKey {
+            case condition, then
+            case elseArm = "else"
+        }
+    }
+
+    struct PipelineLoopRequest: Encodable, Equatable {
+        var body: [PipelineRequestSubStep]
+        var until: PipelineConditionRequest
+        var max_iterations: Int
+    }
+
     struct PipelineRequestStep: Encodable, Equatable {
         var agent_type: String
         var role: String
@@ -102,6 +300,12 @@ extension ConduitUI {
         var reasoning_effort: String?
         var permission_mode: String?
         var instructions: String?
+        // Control flow (PLAN-HARNESS-BUILDER Phase 3); omitted when the step
+        // is a plain agent step so the request stays byte-identical to
+        // Phase 1/2 for every non-control-flow block.
+        var kind: String?
+        var branch: PipelineBranchRequest?
+        var loop: PipelineLoopRequest?
 
         init(_ s: PipelineStep) {
             agent_type = s.agentType
@@ -120,6 +324,41 @@ extension ConduitUI {
             reasoning_effort = s.reasoningEffort.isEmpty ? nil : s.reasoningEffort
             permission_mode = s.permissionMode.isEmpty ? nil : s.permissionMode
             instructions = s.instructions.isEmpty ? nil : s.instructions
+
+            switch s.kind {
+            case "branch":
+                kind = "branch"
+                branch = PipelineBranchRequest(
+                    condition: PipelineConditionRequest(
+                        source: s.branchConditionSource,
+                        predicate: s.branchConditionPredicate,
+                        value: s.branchConditionSource == "prev_output"
+                            ? (s.branchConditionValue.isEmpty ? nil : s.branchConditionValue)
+                            : nil
+                    ),
+                    then: s.branchThen.isEmpty ? nil : s.branchThen.map { PipelineRequestSubStep($0) },
+                    elseArm: s.branchElse.isEmpty ? nil : s.branchElse.map { PipelineRequestSubStep($0) }
+                )
+                loop = nil
+            case "loop":
+                kind = "loop"
+                loop = PipelineLoopRequest(
+                    body: s.loopBody.map { PipelineRequestSubStep($0) },
+                    until: PipelineConditionRequest(
+                        source: s.loopUntilSource,
+                        predicate: s.loopUntilPredicate,
+                        value: s.loopUntilSource == "prev_output"
+                            ? (s.loopUntilValue.isEmpty ? nil : s.loopUntilValue)
+                            : nil
+                    ),
+                    max_iterations: s.loopMaxIterations
+                )
+                branch = nil
+            default:
+                kind = nil
+                branch = nil
+                loop = nil
+            }
         }
     }
 
@@ -155,6 +394,12 @@ extension ConduitUI {
         @State private var viewModel = PipelineBuilderViewModel()
         // Phone only: which step's config sheet is presented (nil = none).
         @State private var configSheetStepID: UUID? = nil
+        // Sub-step (Then/Else/body) full-config editor -- a stacked sheet on
+        // BOTH phone and tablet (unlike the top-level block, which is a
+        // sheet on phone / inline inspector on tablet). Nested indefinitely
+        // deep two-pane inspectors aren't worth the plumbing for a depth-2-
+        // bounded sub-stack, so this one level always modals.
+        @State private var subStepEditTarget: SubStepEditTarget? = nil
 
         @State private var isSubmitting = false
         @State private var errorAlert: String? = nil
@@ -200,13 +445,20 @@ extension ConduitUI {
             return store.modelCatalog[agentType] ?? []
         }
 
-        /// Per PLAN-HARNESS-BUILDER 8.3 (owner decision, overriding the
-        /// plan's "disabled with caption" text): the model override is a
-        /// silent no-op for gemini (ACP picks its model at `session/new`,
-        /// `backend_acpwire.go:611-613`), so the model row is HIDDEN
-        /// entirely for gemini rather than shown disabled.
+        /// PLAN-HARNESS-BUILDER Phase 3 (§4.3/§4.5): the model row shows
+        /// whenever the agent's descriptor reports `supports.model_override
+        /// == true` AND its model catalog is non-empty -- replacing the
+        /// Phase-1 hardcoded gemini exclusion (owner decision §8.3) now that
+        /// broker PR #900 wires `SpawnOverride.Model` through ACP
+        /// `session/set_model` for gemini too. An agent whose descriptor is
+        /// missing (old broker, no `agents` map) or reports
+        /// `model_override == false` (opencode today) still hides the row --
+        /// a visible control must always be honored.
         private func modelRowHidden(agentType: String, catalog: [ConduitUI.AgentModel]) -> Bool {
-            agentType.lowercased() == "gemini" || catalog.isEmpty
+            ConduitUI.pipelineModelRowHidden(
+                modelOverride: store.agentDescriptors[agentType.lowercased()]?.supports.modelOverride ?? false,
+                catalogEmpty: catalog.isEmpty
+            )
         }
 
         private func effortOptions(model: String, catalog: [ConduitUI.AgentModel]) -> [String] {
@@ -280,6 +532,9 @@ extension ConduitUI {
                 }
                 .sheet(isPresented: $showTemplatePicker) {
                     templatePickerSheet
+                }
+                .sheet(item: $subStepEditTarget) { target in
+                    subStepEditorSheet(target)
                 }
                 .alert("Delete template?", isPresented: Binding(
                     get: { templateDeleteConfirm != nil },
@@ -690,24 +945,69 @@ extension ConduitUI {
             .neonCardSurface(neon, fill: neon.surface2.opacity(0.5), cornerRadius: 12)
         }
 
+        /// Add-block affordance: a plain button when neither control-flow
+        /// flag is on (byte-identical UX to Phase 2), a Menu offering
+        /// Agent step / If-Else / Loop once the broker advertises either.
+        @ViewBuilder
         private var addStepRow: some View {
-            Button {
-                viewModel.addStep()
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .bold))
-                    Text("Add step")
-                        .font(neon.sans(12).weight(.semibold))
+            if store.pipelineBranch || store.pipelineLoop {
+                Menu {
+                    Button {
+                        viewModel.addStep()
+                    } label: {
+                        Label("Agent step", systemImage: "person.fill")
+                    }
+                    if store.pipelineBranch {
+                        Button {
+                            viewModel.addControlFlowStep(kind: "branch")
+                        } label: {
+                            Label("If/Else", systemImage: "arrow.triangle.branch")
+                        }
+                    }
+                    if store.pipelineLoop {
+                        Button {
+                            viewModel.addControlFlowStep(kind: "loop")
+                        } label: {
+                            Label("Loop", systemImage: "repeat")
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 12, weight: .bold))
+                        Text("Add step")
+                            .font(neon.sans(12).weight(.semibold))
+                    }
+                    .foregroundStyle(neon.accent)
                 }
-                .foregroundStyle(neon.accent)
+            } else {
+                Button {
+                    viewModel.addStep()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 12, weight: .bold))
+                        Text("Add step")
+                            .font(neon.sans(12).weight(.semibold))
+                    }
+                    .foregroundStyle(neon.accent)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
 
         // MARK: Block card (compact -- tap opens config)
 
+        @ViewBuilder
         private func blockCard(step: PipelineStep, index: Int, isSelected: Bool = false) -> some View {
+            if step.isControlFlow {
+                controlFlowBlockCard(step: step, index: index, isSelected: isSelected)
+            } else {
+                agentBlockCard(step: step, index: index, isSelected: isSelected)
+            }
+        }
+
+        private func agentBlockCard(step: PipelineStep, index: Int, isSelected: Bool) -> some View {
             ConduitUI.Card(
                 padding: 12,
                 tint: isSelected ? neon.accent : nil
@@ -754,6 +1054,63 @@ extension ConduitUI {
             .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
 
+        /// Compact summary card for an If/Else or Loop block -- condition +
+        /// sub-stack counts only. The full Then/Else/body editor lives in
+        /// the config sheet/inspector (`controlFlowConfigEditor`), reached
+        /// by tapping this card, same precedent as the fanout toggle today.
+        private func controlFlowBlockCard(step: PipelineStep, index: Int, isSelected: Bool) -> some View {
+            ConduitUI.Card(
+                padding: 12,
+                tint: isSelected ? neon.accent : nil
+            ) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: step.kind == "loop" ? "repeat" : "arrow.triangle.branch")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(neon.accent)
+                        .frame(width: 32, height: 32)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 6) {
+                            Text("\(index + 1). \(step.kind == "loop" ? "Loop" : "If/Else")")
+                                .font(neon.sans(13).weight(.semibold))
+                                .foregroundStyle(neon.text)
+                                .lineLimit(1)
+                            if step.kind == "loop" {
+                                Text("max \(step.loopMaxIterations)x")
+                                    .font(neon.mono(9).weight(.bold))
+                                    .foregroundStyle(neon.accent)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1)
+                                    .background(Capsule().fill(neon.accent.opacity(0.15)))
+                            }
+                        }
+
+                        Text(conditionSummary(step: step))
+                            .font(neon.sans(11))
+                            .foregroundStyle(neon.textDim)
+                            .lineLimit(2)
+
+                        if step.kind == "branch" {
+                            Text("\(step.branchThen.count) then / \(step.branchElse.count) else")
+                                .font(neon.mono(10))
+                                .foregroundStyle(neon.textFaint)
+                        } else {
+                            Text("\(step.loopBody.count) step\(step.loopBody.count == 1 ? "" : "s") in body")
+                                .font(neon.mono(10))
+                                .foregroundStyle(neon.textFaint)
+                        }
+                    }
+
+                    Spacer(minLength: 4)
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(neon.textFaint)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+
         /// Inline parameter chips: `agent - model - effort - mode`, only
         /// the ones whose value is set/non-default (agent always shows;
         /// model/effort/mode only when the block overrides the adapter
@@ -777,6 +1134,15 @@ extension ConduitUI {
 
         @ViewBuilder
         private func stepConfigEditor(step: Binding<PipelineStep>, index: Int) -> some View {
+            if step.wrappedValue.isControlFlow {
+                controlFlowConfigEditor(step: step)
+            } else {
+                agentStepConfigEditor(step: step, index: index)
+            }
+        }
+
+        @ViewBuilder
+        private func agentStepConfigEditor(step: Binding<PipelineStep>, index: Int) -> some View {
             VStack(alignment: .leading, spacing: 14) {
                 // Agent type picker
                 VStack(alignment: .leading, spacing: 4) {
@@ -868,6 +1234,531 @@ extension ConduitUI {
                 // Fan out toggle (gated on pipeline_fanout capability)
                 if store.pipelineFanout {
                     fanoutSection(step: step)
+                }
+            }
+        }
+
+        // MARK: Control-flow config editor (If/Else + Loop, PLAN-HARNESS-BUILDER Phase 3)
+        //
+        // Mirrors the fanout precedent (§3.1: the indented per-run editor
+        // lives inside the config sheet, not inline in the compact block
+        // card) -- the Then/Else/body sub-stacks with add/remove/reorder
+        // render here, inside the same sheet (phone) / inspector (tablet)
+        // used for every other block's config.
+
+        @ViewBuilder
+        private func controlFlowConfigEditor(step: Binding<PipelineStep>) -> some View {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 8) {
+                    Image(systemName: step.wrappedValue.kind == "loop" ? "repeat" : "arrow.triangle.branch")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(neon.accent)
+                    Text(step.wrappedValue.kind == "loop" ? "Loop" : "If/Else")
+                        .font(neon.sans(14).weight(.bold))
+                        .foregroundStyle(neon.text)
+                }
+
+                if step.wrappedValue.kind == "branch" {
+                    conditionEditor(
+                        title: "Condition",
+                        source: step.branchConditionSource,
+                        predicate: step.branchConditionPredicate,
+                        value: step.branchConditionValue
+                    )
+
+                    subStackEditor(
+                        title: "Then",
+                        stepID: step.wrappedValue.id,
+                        arm: .then,
+                        subSteps: step.wrappedValue.branchThen
+                    )
+                    subStackEditor(
+                        title: "Else (optional)",
+                        stepID: step.wrappedValue.id,
+                        arm: .elseArm,
+                        subSteps: step.wrappedValue.branchElse
+                    )
+                } else {
+                    conditionEditor(
+                        title: "Until",
+                        source: step.loopUntilSource,
+                        predicate: step.loopUntilPredicate,
+                        value: step.loopUntilValue
+                    )
+
+                    maxIterationsStepper(step: step)
+
+                    subStackEditor(
+                        title: "Body",
+                        stepID: step.wrappedValue.id,
+                        arm: .body,
+                        subSteps: step.wrappedValue.loopBody
+                    )
+                }
+            }
+        }
+
+        /// Condition source picker (prev_output / exit_status), then either
+        /// a predicate + value editor (prev_output) or a succeeded/failed
+        /// toggle (exit_status) -- mirrors `pipeline.Condition`
+        /// (broker/internal/pipeline/controlflow.go).
+        @ViewBuilder
+        private func conditionEditor(
+            title: String,
+            source: Binding<String>,
+            predicate: Binding<String>,
+            value: Binding<String>
+        ) -> some View {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title.uppercased())
+                    .font(neon.mono(10).weight(.semibold))
+                    .foregroundStyle(neon.textFaint)
+
+                Picker(title, selection: source) {
+                    Text("Prev output").tag("prev_output")
+                    Text("Exit status").tag("exit_status")
+                }
+                .pickerStyle(.segmented)
+                .tint(neon.accent)
+                .onChange(of: source.wrappedValue) { _, newSource in
+                    // Snap the predicate to a valid one for the new source
+                    // (broker validateCondition rejects a mismatched pair).
+                    if newSource == "exit_status" {
+                        if predicate.wrappedValue != "succeeded" && predicate.wrappedValue != "failed" {
+                            predicate.wrappedValue = "succeeded"
+                        }
+                    } else if predicate.wrappedValue != "contains"
+                        && predicate.wrappedValue != "not_contains"
+                        && predicate.wrappedValue != "matches" {
+                        predicate.wrappedValue = "contains"
+                    }
+                }
+
+                if source.wrappedValue == "exit_status" {
+                    Picker("Predicate", selection: predicate) {
+                        Text("Succeeded").tag("succeeded")
+                        Text("Failed").tag("failed")
+                    }
+                    .pickerStyle(.segmented)
+                    .tint(neon.accent)
+                } else {
+                    Picker("Predicate", selection: predicate) {
+                        Text("Contains").tag("contains")
+                        Text("Not contains").tag("not_contains")
+                        Text("Matches (regex)").tag("matches")
+                    }
+                    .pickerStyle(.segmented)
+                    .tint(neon.accent)
+
+                    TextField("Value to match...", text: value)
+                        .font(neon.mono(13))
+                        .foregroundStyle(neon.text)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(neon.surface2)
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(neon.border, lineWidth: 1))
+                        )
+                        .tint(neon.accent)
+                }
+            }
+        }
+
+        /// max_iterations stepper, 1-5 (broker hard cap, owner decision
+        /// §8.5), default 3.
+        private func maxIterationsStepper(step: Binding<PipelineStep>) -> some View {
+            HStack {
+                Text("Max iterations")
+                    .font(neon.mono(11).weight(.semibold))
+                    .foregroundStyle(neon.textFaint)
+                    .textCase(.uppercase)
+                Spacer(minLength: 8)
+                HStack(spacing: 12) {
+                    Button {
+                        if step.wrappedValue.loopMaxIterations > 1 {
+                            step.wrappedValue.loopMaxIterations -= 1
+                        }
+                    } label: {
+                        Image(systemName: "minus.circle.fill")
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(step.wrappedValue.loopMaxIterations > 1 ? neon.accent : neon.textFaint)
+                    }
+                    .buttonStyle(.plain)
+                    Text("\(step.wrappedValue.loopMaxIterations)")
+                        .font(neon.mono(15).weight(.bold))
+                        .foregroundStyle(neon.text)
+                        .frame(minWidth: 20, alignment: .center)
+                    Button {
+                        if step.wrappedValue.loopMaxIterations < 5 {
+                            step.wrappedValue.loopMaxIterations += 1
+                        }
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(step.wrappedValue.loopMaxIterations < 5 ? neon.accent : neon.textFaint)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+
+        /// A Then/Else/body sub-stack: an indented list of compact sub-step
+        /// rows (tap to open the full agent-config editor) + an add-step
+        /// affordance. Reorder is up/down (not drag) -- these rows live in a
+        /// plain VStack, not a `List`, since they're nested inside a config
+        /// sheet/inspector that is itself scrollable content.
+        @ViewBuilder
+        private func subStackEditor(
+            title: String,
+            stepID: PipelineStep.ID,
+            arm: PipelineSubStepArm,
+            subSteps: [PipelineSubStep]
+        ) -> some View {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title.uppercased())
+                    .font(neon.mono(10).weight(.semibold))
+                    .foregroundStyle(neon.textFaint)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(subSteps.enumerated()), id: \.element.id) { i, sub in
+                        subStepRow(sub: sub, index: i, count: subSteps.count, stepID: stepID, arm: arm)
+                    }
+                }
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(neon.border.opacity(0.5)).frame(width: 1)
+                }
+
+                Button {
+                    viewModel.addSubStep(stepID: stepID, arm: arm)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 11, weight: .bold))
+                        Text("Add step")
+                            .font(neon.sans(11).weight(.semibold))
+                    }
+                    .foregroundStyle(neon.accent)
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 10)
+            }
+        }
+
+        private func subStepRow(
+            sub: PipelineSubStep,
+            index: Int,
+            count: Int,
+            stepID: PipelineStep.ID,
+            arm: PipelineSubStepArm
+        ) -> some View {
+            HStack(spacing: 8) {
+                AgentAvatar(assistant: sub.agentType, size: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(index + 1). \(sub.role.capitalized)")
+                        .font(neon.sans(12).weight(.semibold))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(1)
+                    let detail = [
+                        sub.model.isEmpty ? nil : modelLabel(sub.model, in: modelCatalog(for: sub.agentType)),
+                        sub.instructions.isEmpty ? nil : sub.instructions,
+                    ].compactMap { $0 }.joined(separator: " \u{00B7} ")
+                    if !detail.isEmpty {
+                        Text(detail)
+                            .font(neon.sans(10))
+                            .foregroundStyle(neon.textFaint)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 4)
+                Button {
+                    viewModel.moveSubStep(stepID: stepID, arm: arm, subStepID: sub.id, direction: -1)
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 9, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .disabled(index == 0)
+                .opacity(index == 0 ? 0.3 : 1)
+                Button {
+                    viewModel.moveSubStep(stepID: stepID, arm: arm, subStepID: sub.id, direction: 1)
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .disabled(index == count - 1)
+                .opacity(index == count - 1 ? 0.3 : 1)
+                Button {
+                    viewModel.removeSubStep(stepID: stepID, arm: arm, subStepID: sub.id)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(neon.red)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(neon.surface2.opacity(0.6))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .onTapGesture {
+                subStepEditTarget = SubStepEditTarget(stepID: stepID, arm: arm, subStepID: sub.id)
+            }
+        }
+
+        /// Compact one-line human-readable condition summary shown on the
+        /// block card (e.g. "if output contains \"APPROVED\"").
+        private func conditionSummary(step: PipelineStep) -> String {
+            let isLoop = step.kind == "loop"
+            let source = isLoop ? step.loopUntilSource : step.branchConditionSource
+            let predicate = isLoop ? step.loopUntilPredicate : step.branchConditionPredicate
+            let value = isLoop ? step.loopUntilValue : step.branchConditionValue
+            let verb = isLoop ? "until" : "if"
+            if source == "exit_status" {
+                return "\(verb) previous step \(predicate)"
+            }
+            return "\(verb) output \(predicateLabel(predicate)) \"\(value)\""
+        }
+
+        private func predicateLabel(_ p: String) -> String {
+            switch p {
+            case "contains": return "contains"
+            case "not_contains": return "does not contain"
+            case "matches": return "matches"
+            default: return p
+            }
+        }
+
+        // MARK: Sub-step editor sheet (Then/Else/body -- always modal, both phone + tablet)
+
+        private func subStepEditorSheet(_ target: SubStepEditTarget) -> some View {
+            NavigationStack {
+                ZStack {
+                    GlassAppBackground()
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            subStepConfigEditor(sub: subStepBinding(target))
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 18)
+                    }
+                }
+                .navigationTitle("Step")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { subStepEditTarget = nil }
+                            .foregroundStyle(neon.accent)
+                    }
+                }
+            }
+        }
+
+        private func subStepBinding(_ target: SubStepEditTarget) -> Binding<PipelineSubStep> {
+            Binding(
+                get: {
+                    viewModel.subStepBinding(stepID: target.stepID, arm: target.arm, subStepID: target.subStepID)
+                },
+                set: { newValue in
+                    viewModel.updateSubStep(stepID: target.stepID, arm: target.arm, subStep: newValue)
+                }
+            )
+        }
+
+        /// Agent-only config editor for a Then/Else/body sub-step -- no
+        /// fanout, no kind, no nested control flow (depth-2 bound by
+        /// construction, PipelineSubStep has none of those fields).
+        @ViewBuilder
+        private func subStepConfigEditor(sub: Binding<PipelineSubStep>) -> some View {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Agent")
+                        .font(neon.mono(10).weight(.semibold))
+                        .foregroundStyle(neon.textFaint)
+                        .textCase(.uppercase)
+                    Picker("Agent", selection: sub.agentType) {
+                        ForEach(agentOptions, id: \.self) { opt in
+                            Text(opt).tag(opt)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .tint(neon.accent)
+                }
+
+                if store.pipelineBlockConfig {
+                    subStepBlockConfigSection(sub: sub)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Role")
+                        .font(neon.mono(10).weight(.semibold))
+                        .foregroundStyle(neon.textFaint)
+                        .textCase(.uppercase)
+                    Picker("Role", selection: sub.role) {
+                        ForEach(roleOptions, id: \.self) { opt in
+                            Text(opt).tag(opt)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .tint(neon.accent)
+                    .onChange(of: sub.wrappedValue.role) { _, newRole in
+                        if newRole != "custom" {
+                            sub.wrappedValue.promptTemplate = rolePromptTemplate(newRole)
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Prompt template")
+                        .font(neon.mono(10).weight(.semibold))
+                        .foregroundStyle(neon.textFaint)
+                        .textCase(.uppercase)
+                    TextField("Custom prompt...", text: sub.promptTemplate, axis: .vertical)
+                        .font(neon.sans(13))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(2...5)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(neon.surface2)
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(neon.border, lineWidth: 1))
+                        )
+                        .tint(neon.accent)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Input from prev")
+                        .font(neon.mono(10).weight(.semibold))
+                        .foregroundStyle(neon.textFaint)
+                        .textCase(.uppercase)
+                    Picker("Input from prev", selection: sub.inputFromPrev) {
+                        ForEach(inputFromPrevOptions, id: \.self) { opt in
+                            Text(opt).tag(opt)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .tint(neon.accent)
+                }
+
+                HStack {
+                    Text("Gate after this step")
+                        .font(neon.sans(13))
+                        .foregroundStyle(neon.text)
+                    Spacer(minLength: 8)
+                    Toggle("", isOn: sub.gateAfter)
+                        .tint(neon.accent)
+                }
+            }
+        }
+
+        @ViewBuilder
+        private func subStepBlockConfigSection(sub: Binding<PipelineSubStep>) -> some View {
+            let agentType = sub.wrappedValue.agentType
+            let catalog = modelCatalog(for: agentType)
+            let showModel = !modelRowHidden(agentType: agentType, catalog: catalog)
+            let efforts = effortOptions(model: sub.wrappedValue.model, catalog: catalog)
+            let showEffort = !efforts.isEmpty
+            let showMode = supportsPlanMode(agentType: agentType)
+
+            VStack(alignment: .leading, spacing: 10) {
+                if showModel {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Model")
+                            .font(neon.mono(10).weight(.semibold))
+                            .foregroundStyle(neon.textFaint)
+                            .textCase(.uppercase)
+                        Menu {
+                            Picker("Model", selection: sub.model) {
+                                Text("Default").tag("")
+                                ForEach(catalog, id: \.id) { m in
+                                    Text(m.displayName.isEmpty ? m.id : m.displayName).tag(m.id)
+                                }
+                            }
+                        } label: {
+                            HStack {
+                                Text(modelLabel(sub.wrappedValue.model, in: catalog))
+                                    .foregroundStyle(neon.text)
+                                Spacer()
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(neon.textFaint)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(neon.surface2)
+                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(neon.border, lineWidth: 1))
+                            )
+                        }
+                        .tint(neon.accent)
+                        .onChange(of: sub.wrappedValue.model) { _, _ in
+                            let newEfforts = effortOptions(model: sub.wrappedValue.model, catalog: catalog)
+                            if !newEfforts.contains(sub.wrappedValue.reasoningEffort) {
+                                sub.wrappedValue.reasoningEffort = ""
+                            }
+                        }
+                    }
+                }
+
+                if showEffort {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Reasoning effort")
+                            .font(neon.mono(10).weight(.semibold))
+                            .foregroundStyle(neon.textFaint)
+                            .textCase(.uppercase)
+                        Picker("Reasoning effort", selection: sub.reasoningEffort) {
+                            Text("Default").tag("")
+                            ForEach(efforts, id: \.self) { level in
+                                Text(ConduitUI.ForkOptions.effortLabel(level)).tag(level)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .tint(neon.accent)
+                    }
+                }
+
+                if showMode {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Permission mode")
+                            .font(neon.mono(10).weight(.semibold))
+                            .foregroundStyle(neon.textFaint)
+                            .textCase(.uppercase)
+                        Picker("Permission mode", selection: sub.permissionMode) {
+                            ForEach(ConduitUI.ForkOptions.permissionModes, id: \.self) { mode in
+                                Text(ConduitUI.ForkOptions.permissionModeLabel(mode)).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .tint(neon.accent)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Instructions for this block")
+                        .font(neon.mono(10).weight(.semibold))
+                        .foregroundStyle(neon.textFaint)
+                        .textCase(.uppercase)
+                    TextField("Optional standing guidance...", text: sub.instructions, axis: .vertical)
+                        .font(neon.sans(13))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(2...5)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(neon.surface2)
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(neon.border, lineWidth: 1))
+                        )
+                        .tint(neon.accent)
                 }
             }
         }
@@ -1498,13 +2389,24 @@ extension ConduitUI {
                         )
                         navigateToMonitor = true
                     } else {
-                        let detail = "HTTP \(http.statusCode)"
+                        // PLAN-HARNESS-BUILDER Phase 3: a branch/loop
+                        // validation failure (depth > 2, bad condition,
+                        // max_iterations > 5) comes back as a 400 with a
+                        // structured {"error":{"message":...}} body -- surface
+                        // that message instead of a bare status code so a
+                        // rejected harness fails gracefully with a reason.
+                        struct ErrorEnvelope: Decodable {
+                            struct Detail: Decodable { let message: String? }
+                            let error: Detail?
+                        }
+                        let serverMessage = (try? JSONDecoder().decode(ErrorEnvelope.self, from: data))?.error?.message
+                        let detail = serverMessage.map { "\($0)" } ?? "HTTP \(http.statusCode)"
                         Telemetry.capture(
                             error: NSError(domain: "ios.pipeline", code: 1,
                                 userInfo: [NSLocalizedDescriptionKey: "pipeline create failed"]),
                             message: "pipeline create failed",
                             tags: ["surface": "ios", "phase": "pipeline"],
-                            extras: ["status": "\(http.statusCode)", "title": trimTitle]
+                            extras: ["status": "\(http.statusCode)", "title": trimTitle, "detail": detail]
                         )
                         errorAlert = detail
                     }

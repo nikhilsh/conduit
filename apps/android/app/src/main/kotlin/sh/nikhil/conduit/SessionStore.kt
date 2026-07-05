@@ -4859,6 +4859,26 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _pipelinesEnabled = MutableStateFlow(false)
     val pipelinesEnabled: StateFlow<Boolean> = _pipelinesEnabled.asStateFlow()
 
+    /**
+     * Whether the broker supports If/Else branch blocks
+     * (`GET /api/capabilities` -> `"pipeline_branch": true`,
+     * PLAN-HARNESS-BUILDER Phase 3). False on old brokers; the If/Else
+     * builder control hides when false. Mirror of iOS
+     * `SessionStore.pipelineBranch`.
+     */
+    private val _pipelineBranch = MutableStateFlow(false)
+    val pipelineBranch: StateFlow<Boolean> = _pipelineBranch.asStateFlow()
+
+    /**
+     * Whether the broker supports bounded Loop-until blocks
+     * (`GET /api/capabilities` -> `"pipeline_loop": true`,
+     * PLAN-HARNESS-BUILDER Phase 3). False on old brokers; the Loop
+     * builder control hides when false. Mirror of iOS
+     * `SessionStore.pipelineLoop`.
+     */
+    private val _pipelineLoop = MutableStateFlow(false)
+    val pipelineLoop: StateFlow<Boolean> = _pipelineLoop.asStateFlow()
+
     /** Broker advertises transactional mid-session agent switching. */
     private val _switchAgentSupported = MutableStateFlow(false)
     val switchAgentSupported: StateFlow<Boolean> = _switchAgentSupported.asStateFlow()
@@ -4961,6 +4981,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
             JSONObject(raw).optBoolean("pipeline", false)
         }.getOrDefault(false)
         _pipelinesEnabled.value = pipelinesEnabled
+        // pipeline_branch / pipeline_loop: If/Else + Loop blocks
+        // (PLAN-HARNESS-BUILDER Phase 3); default false on old brokers.
+        _pipelineBranch.value = runCatching {
+            JSONObject(raw).optBoolean("pipeline_branch", false)
+        }.getOrDefault(false)
+        _pipelineLoop.value = runCatching {
+            JSONObject(raw).optBoolean("pipeline_loop", false)
+        }.getOrDefault(false)
     }
 
     /**
