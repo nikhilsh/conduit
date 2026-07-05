@@ -60,8 +60,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import sh.nikhil.conduit.AgentDescriptor
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
+import sh.nikhil.conduit.descriptorFor
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -72,11 +74,21 @@ data class PipelineStepDraft(
     val promptTemplate: String = "",
     val inputFromPrev: String = "none",
     val gateAfter: Boolean = false,
+    // Per-block config (PLAN-HARNESS-BUILDER Phase 1, gated on
+    // store.pipelineBlockConfig). "" = adapter default / inherit.
+    val model: String = "",
+    val reasoningEffort: String = "",
+    val permissionMode: String = "",
+    val instructions: String = "",
     // Fanout config (present only when fanoutEnabled == true)
     val fanoutEnabled: Boolean = false,
     val fanoutCount: Int = 2,
     // Per-run agent types (index-aligned); empty = use step agent for all runs
     val fanoutAgentTypes: List<String> = emptyList(),
+    // Per-run config overrides (index-aligned; "" = inherit from the step).
+    val fanoutModels: List<String> = emptyList(),
+    val fanoutReasoningEfforts: List<String> = emptyList(),
+    val fanoutPermissionModes: List<String> = emptyList(),
 )
 
 /** A saved pipeline template returned by GET /api/pipeline-templates. */
@@ -88,7 +100,7 @@ data class PipelineTemplateDraft(
 )
 
 /** Parse a pipeline template from a JSON object. */
-private fun parsePipelineTemplate(obj: JSONObject): PipelineTemplateDraft {
+internal fun parsePipelineTemplate(obj: JSONObject): PipelineTemplateDraft {
     val stepsArr = obj.optJSONArray("steps")
     val steps = buildList {
         if (stepsArr != null) {
@@ -101,6 +113,12 @@ private fun parsePipelineTemplate(obj: JSONObject): PipelineTemplateDraft {
                         promptTemplate = s.optString("prompt_template", ""),
                         inputFromPrev = s.optString("input_from_prev", "none"),
                         gateAfter = s.optBoolean("gate_after", false),
+                        // Per-block config (PLAN-HARNESS-BUILDER Phase 1).
+                        // Absent on an older saved template -> "" (adapter default).
+                        model = s.optString("model", ""),
+                        reasoningEffort = s.optString("reasoning_effort", ""),
+                        permissionMode = s.optString("permission_mode", ""),
+                        instructions = s.optString("instructions", ""),
                     ),
                 )
             }
@@ -114,7 +132,36 @@ private fun parsePipelineTemplate(obj: JSONObject): PipelineTemplateDraft {
     )
 }
 
-private val AGENT_TYPES = listOf("claude", "codex", "opencode")
+/**
+ * Fallback assistant list used before the first successful capabilities
+ * fetch (old broker, or fetch still pending). The live list comes from
+ * `store.agentDescriptors` (broker `agents` map, WS-3.1) -- the same store
+ * data the fork / new-session pickers consume. "shell" is excluded there --
+ * it is a raw terminal, not an agent.
+ */
+private val STATIC_AGENT_TYPES = listOf("claude", "codex", "opencode")
+
+/**
+ * Live assistant list from the broker's capabilities descriptors -- reuses
+ * [agentListFor] (`AgentPickerSheet.kt`), the SAME ordering the new-session /
+ * fork pickers use (claude, codex first, then extras alphabetically), with
+ * "shell" excluded (a raw terminal, not an agent). Falls back to
+ * [STATIC_AGENT_TYPES] before the first successful capabilities fetch (old
+ * broker, or fetch still pending) so the picker never renders empty.
+ */
+internal fun liveAgentOptions(descriptors: Map<String, AgentDescriptor>): List<String> {
+    if (descriptors.isEmpty()) return STATIC_AGENT_TYPES
+    return agentListFor(descriptors).filter { it.lowercase() != "shell" }
+}
+
+/**
+ * Per PLAN-HARNESS-BUILDER §8.3 (owner decision, overriding the plan's
+ * "disabled with caption" text): the model override is a silent no-op for
+ * gemini (ACP picks its model at `session/new`, `backend_acpwire.go:611-613`),
+ * so the model row is HIDDEN entirely for gemini rather than shown disabled.
+ */
+internal fun modelRowHidden(agentType: String, catalog: List<SessionStore.AgentModel>?): Boolean =
+    agentType.lowercase() == "gemini" || catalog.isNullOrEmpty()
 private val ROLE_PRESETS = listOf("researcher", "architect", "engineer", "custom")
 private val INPUT_OPTIONS = listOf("none", "output", "memory", "memory+output")
 
@@ -124,6 +171,68 @@ private fun promptForRole(role: String): String = when (role) {
     "architect" -> "Design the architecture for the requested change, considering existing patterns."
     "engineer" -> "Implement the requested change following the existing code patterns."
     else -> ""
+}
+
+/**
+ * Encode one step draft to the `/api/pipeline` / `/api/pipeline-templates`
+ * step JSON shape, including the PLAN-HARNESS-BUILDER Phase 1 per-block
+ * config fields (omitted when empty so an old broker's decode is
+ * unaffected) and the fanout per-run parallel arrays.
+ */
+internal fun stepDraftToJson(step: PipelineStepDraft): JSONObject = JSONObject().apply {
+    put("agent_type", step.agentType)
+    put("role", step.role)
+    put("prompt_template", step.promptTemplate)
+    put("input_from_prev", step.inputFromPrev)
+    put("gate_after", step.gateAfter)
+    if (step.fanoutEnabled) {
+        put("fanout", JSONObject().apply {
+            put("count", step.fanoutCount)
+            if (step.fanoutAgentTypes.isNotEmpty()) {
+                put("agent_types", JSONArray(step.fanoutAgentTypes))
+            }
+            // Per-run config overrides; "" = inherit from the step. No
+            // per-run instructions -- runs share the block's instructions
+            // (owner decision §8.1).
+            if (step.fanoutModels.isNotEmpty()) {
+                put("models", JSONArray(step.fanoutModels))
+            }
+            if (step.fanoutReasoningEfforts.isNotEmpty()) {
+                put("reasoning_efforts", JSONArray(step.fanoutReasoningEfforts))
+            }
+            if (step.fanoutPermissionModes.isNotEmpty()) {
+                put("permission_modes", JSONArray(step.fanoutPermissionModes))
+            }
+        })
+    }
+    if (step.model.isNotEmpty()) put("model", step.model)
+    if (step.reasoningEffort.isNotEmpty()) put("reasoning_effort", step.reasoningEffort)
+    if (step.permissionMode.isNotEmpty()) put("permission_mode", step.permissionMode)
+    if (step.instructions.isNotEmpty()) put("instructions", step.instructions)
+}
+
+/**
+ * Breadcrumb for any step carrying non-default per-block config, at
+ * create/save time. Presence only -- never the instruction text itself
+ * (Telemetry standing order: no user content in telemetry).
+ */
+private fun logBlockConfigTelemetry(steps: List<PipelineStepDraft>) {
+    steps.forEachIndexed { i, s ->
+        val hasConfig = s.model.isNotEmpty() || s.reasoningEffort.isNotEmpty() ||
+            s.permissionMode.isNotEmpty() || s.instructions.isNotEmpty()
+        if (!hasConfig) return@forEachIndexed
+        Telemetry.breadcrumb(
+            "pipeline",
+            "block_config_set",
+            mapOf(
+                "step" to i.toString(),
+                "model" to if (s.model.isNotEmpty()) "set" else "",
+                "effort" to if (s.reasoningEffort.isNotEmpty()) "set" else "",
+                "mode" to s.permissionMode,
+                "instructions" to if (s.instructions.isNotEmpty()) "set" else "",
+            ),
+        )
+    }
 }
 
 /**
@@ -142,6 +251,10 @@ fun PipelineBuilderScreen(
     val sessions by store.sessions.collectAsState()
     val pipelineTemplates by store.pipelineTemplates.collectAsState()
     val pipelineFanout by store.pipelineFanout.collectAsState()
+    val pipelineBlockConfig by store.pipelineBlockConfig.collectAsState()
+    val agentDescriptors by store.agentDescriptors.collectAsState()
+    val modelCatalogMap by store.modelCatalog.collectAsState()
+    val agentOptions = remember(agentDescriptors) { liveAgentOptions(agentDescriptors) }
     val scope = rememberCoroutineScope()
 
     Telemetry.breadcrumb("pipeline", "builder_opened", emptyMap())
@@ -282,24 +395,9 @@ fun PipelineBuilderScreen(
             mapOf("title" to title.trim(), "steps" to steps.size.toString()),
         )
         scope.launch {
+            logBlockConfigTelemetry(steps)
             val stepsJson = JSONArray().apply {
-                steps.forEach { step ->
-                    put(JSONObject().apply {
-                        put("agent_type", step.agentType)
-                        put("role", step.role)
-                        put("prompt_template", step.promptTemplate)
-                        put("input_from_prev", step.inputFromPrev)
-                        put("gate_after", step.gateAfter)
-                        if (step.fanoutEnabled) {
-                            put("fanout", JSONObject().apply {
-                                put("count", step.fanoutCount)
-                                if (step.fanoutAgentTypes.isNotEmpty()) {
-                                    put("agent_types", JSONArray(step.fanoutAgentTypes))
-                                }
-                            })
-                        }
-                    })
-                }
+                steps.forEach { step -> put(stepDraftToJson(step)) }
             }
             val body = JSONObject().apply {
                 put("title", title.trim())
@@ -355,24 +453,9 @@ fun PipelineBuilderScreen(
             mapOf("step_count" to steps.size.toString()),
         )
         scope.launch {
+            logBlockConfigTelemetry(steps)
             val stepsJson = JSONArray().apply {
-                steps.forEach { step ->
-                    put(JSONObject().apply {
-                        put("agent_type", step.agentType)
-                        put("role", step.role)
-                        put("prompt_template", step.promptTemplate)
-                        put("input_from_prev", step.inputFromPrev)
-                        put("gate_after", step.gateAfter)
-                        if (step.fanoutEnabled) {
-                            put("fanout", JSONObject().apply {
-                                put("count", step.fanoutCount)
-                                if (step.fanoutAgentTypes.isNotEmpty()) {
-                                    put("agent_types", JSONArray(step.fanoutAgentTypes))
-                                }
-                            })
-                        }
-                    })
-                }
+                steps.forEach { step -> put(stepDraftToJson(step)) }
             }
             val body = JSONObject().apply {
                 put("title", title.trim())
@@ -545,6 +628,10 @@ fun PipelineBuilderScreen(
                     neon = neon,
                     canDelete = steps.size > 1,
                     showFanout = pipelineFanout,
+                    showBlockConfig = pipelineBlockConfig,
+                    agentOptions = agentOptions,
+                    agentDescriptors = agentDescriptors,
+                    modelCatalogMap = modelCatalogMap,
                     onUpdate = { updated -> steps[index] = updated },
                     onDelete = { steps.removeAt(index) },
                 )
@@ -787,6 +874,10 @@ private fun StepCard(
     neon: NeonTheme,
     canDelete: Boolean,
     showFanout: Boolean = false,
+    showBlockConfig: Boolean = false,
+    agentOptions: List<String> = STATIC_AGENT_TYPES,
+    agentDescriptors: Map<String, AgentDescriptor> = emptyMap(),
+    modelCatalogMap: Map<String, List<SessionStore.AgentModel>> = emptyMap(),
     onUpdate: (PipelineStepDraft) -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -841,7 +932,7 @@ private fun StepCard(
                     expanded = agentExpanded,
                     onDismissRequest = { agentExpanded = false },
                 ) {
-                    AGENT_TYPES.forEach { agent ->
+                    agentOptions.forEach { agent ->
                         DropdownMenuItem(
                             text = { Text(agent, fontFamily = neon.mono) },
                             onClick = {
@@ -851,6 +942,26 @@ private fun StepCard(
                         )
                     }
                 }
+            }
+
+            // Per-block config (model / effort / permission mode /
+            // instructions), gated on pipeline_block_config so an old
+            // broker never sees controls it would silently drop.
+            if (showBlockConfig) {
+                BlockConfigSection(
+                    agentType = step.agentType,
+                    model = step.model,
+                    reasoningEffort = step.reasoningEffort,
+                    permissionMode = step.permissionMode,
+                    instructions = step.instructions,
+                    neon = neon,
+                    descriptor = descriptorFor(step.agentType, agentDescriptors),
+                    catalog = modelCatalogMap[step.agentType],
+                    onModelChange = { onUpdate(step.copy(model = it, reasoningEffort = "")) },
+                    onEffortChange = { onUpdate(step.copy(reasoningEffort = it)) },
+                    onModeChange = { onUpdate(step.copy(permissionMode = it)) },
+                    onInstructionsChange = { onUpdate(step.copy(instructions = it)) },
+                )
             }
 
             // Role preset dropdown
@@ -945,9 +1056,167 @@ private fun StepCard(
 
             // Fanout section (gated on pipeline_fanout capability)
             if (showFanout) {
-                FanoutStepSection(step = step, neon = neon, onUpdate = onUpdate)
+                FanoutStepSection(
+                    step = step,
+                    neon = neon,
+                    showBlockConfig = showBlockConfig,
+                    agentOptions = agentOptions,
+                    agentDescriptors = agentDescriptors,
+                    modelCatalogMap = modelCatalogMap,
+                    onUpdate = onUpdate,
+                )
             }
         }
+    }
+}
+
+/**
+ * Per-block model / reasoning-effort / permission-mode / instructions
+ * controls (PLAN-HARNESS-BUILDER Phase 1). Mirrors iOS
+ * `blockConfigSection`. Model options come from the assistant's
+ * broker-discovered catalog (same store data the fork / new-session pickers
+ * consume); the effort and permission-mode rows hide when the resolved
+ * model/agent doesn't offer them.
+ */
+@Composable
+private fun BlockConfigSection(
+    agentType: String,
+    model: String,
+    reasoningEffort: String,
+    permissionMode: String,
+    instructions: String,
+    neon: NeonTheme,
+    descriptor: AgentDescriptor,
+    catalog: List<SessionStore.AgentModel>?,
+    onModelChange: (String) -> Unit,
+    onEffortChange: (String) -> Unit,
+    onModeChange: (String) -> Unit,
+    onInstructionsChange: (String) -> Unit,
+) {
+    val showModel = !modelRowHidden(agentType, catalog)
+    val efforts = catalogEntryFor(model, catalog)?.efforts ?: emptyList()
+    val showEffort = efforts.isNotEmpty()
+    val showMode = descriptor.supportsPlanMode
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (showModel) {
+            var modelExpanded by remember { mutableStateOf(false) }
+            Box {
+                OutlinedTextField(
+                    value = forkModelLabel(model, catalog),
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Model") },
+                    modifier = Modifier.fillMaxWidth().clickable { modelExpanded = true },
+                    enabled = false,
+                )
+                DropdownMenu(
+                    expanded = modelExpanded,
+                    onDismissRequest = { modelExpanded = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Default", fontFamily = neon.sans) },
+                        onClick = {
+                            onModelChange("")
+                            modelExpanded = false
+                        },
+                    )
+                    catalog?.forEach { m ->
+                        if (m.id.isEmpty()) return@forEach
+                        DropdownMenuItem(
+                            text = { Text(m.displayName.ifEmpty { m.id }, fontFamily = neon.mono) },
+                            onClick = {
+                                onModelChange(m.id)
+                                modelExpanded = false
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
+        if (showEffort) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "REASONING EFFORT",
+                    fontFamily = neon.mono,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 10.sp,
+                    color = neon.textFaint,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    (listOf("") + efforts).forEach { level ->
+                        val selected = reasoningEffort == level
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(if (selected) neon.accent else neon.surface2)
+                                .border(
+                                    1.dp,
+                                    if (selected) neon.accent else neon.border,
+                                    RoundedCornerShape(50),
+                                )
+                                .clickable { onEffortChange(level) }
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                        ) {
+                            Text(
+                                if (level.isEmpty()) "Default" else effortLabel(level),
+                                fontFamily = neon.mono,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 11.sp,
+                                color = if (selected) neon.accentText else neon.textDim,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showMode) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "PERMISSION MODE",
+                    fontFamily = neon.mono,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 10.sp,
+                    color = neon.textFaint,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("" to "Auto", "plan" to "Plan").forEach { (value, label) ->
+                        val selected = permissionMode == value
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(if (selected) neon.accent else neon.surface2)
+                                .border(
+                                    1.dp,
+                                    if (selected) neon.accent else neon.border,
+                                    RoundedCornerShape(50),
+                                )
+                                .clickable { onModeChange(value) }
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                        ) {
+                            Text(
+                                label,
+                                fontFamily = neon.mono,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 11.sp,
+                                color = if (selected) neon.accentText else neon.textDim,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        OutlinedTextField(
+            value = instructions,
+            onValueChange = onInstructionsChange,
+            label = { Text("Instructions for this block") },
+            placeholder = { Text("Optional standing guidance for this block...") },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
@@ -955,6 +1224,10 @@ private fun StepCard(
 private fun FanoutStepSection(
     step: PipelineStepDraft,
     neon: NeonTheme,
+    showBlockConfig: Boolean = false,
+    agentOptions: List<String> = STATIC_AGENT_TYPES,
+    agentDescriptors: Map<String, AgentDescriptor> = emptyMap(),
+    modelCatalogMap: Map<String, List<SessionStore.AgentModel>> = emptyMap(),
     onUpdate: (PipelineStepDraft) -> Unit,
 ) {
     Column(
@@ -1026,8 +1299,15 @@ private fun FanoutStepSection(
                             )
                             .clickable(enabled = step.fanoutCount > 1) {
                                 val newCount = step.fanoutCount - 1
-                                val trimmed = step.fanoutAgentTypes.take(newCount)
-                                onUpdate(step.copy(fanoutCount = newCount, fanoutAgentTypes = trimmed))
+                                onUpdate(
+                                    step.copy(
+                                        fanoutCount = newCount,
+                                        fanoutAgentTypes = step.fanoutAgentTypes.take(newCount),
+                                        fanoutModels = step.fanoutModels.take(newCount),
+                                        fanoutReasoningEfforts = step.fanoutReasoningEfforts.take(newCount),
+                                        fanoutPermissionModes = step.fanoutPermissionModes.take(newCount),
+                                    ),
+                                )
                             },
                         contentAlignment = Alignment.Center,
                     ) {
@@ -1139,7 +1419,7 @@ private fun FanoutStepSection(
                                 expanded = agentExpanded,
                                 onDismissRequest = { agentExpanded = false },
                             ) {
-                                AGENT_TYPES.forEach { agent ->
+                                agentOptions.forEach { agent ->
                                     DropdownMenuItem(
                                         text = { Text(agent, fontFamily = neon.mono) },
                                         onClick = {
@@ -1152,6 +1432,159 @@ private fun FanoutStepSection(
                                     )
                                 }
                             }
+                        }
+                    }
+                    if (showBlockConfig) {
+                        RunConfigRow(
+                            step = step,
+                            runIdx = runIdx,
+                            runAgent = currentAgent,
+                            neon = neon,
+                            descriptor = descriptorFor(currentAgent, agentDescriptors),
+                            catalog = modelCatalogMap[currentAgent],
+                            onUpdate = onUpdate,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Per-run model / reasoning-effort / permission-mode pickers
+ * (PLAN-HARNESS-BUILDER §2.1/§2.5), index-aligned with the run and resolved
+ * against the RUN's agent (which may differ from the step's agent) -- NOT
+ * instructions, which per owner decision (§8.1) are shared from the block
+ * and have no per-run UI.
+ */
+@Composable
+private fun RunConfigRow(
+    step: PipelineStepDraft,
+    runIdx: Int,
+    runAgent: String,
+    neon: NeonTheme,
+    descriptor: AgentDescriptor,
+    catalog: List<SessionStore.AgentModel>?,
+    onUpdate: (PipelineStepDraft) -> Unit,
+) {
+    val showModel = !modelRowHidden(runAgent, catalog)
+    val model = step.fanoutModels.getOrElse(runIdx) { "" }
+    val efforts = catalogEntryFor(model, catalog)?.efforts ?: emptyList()
+    val showEffort = efforts.isNotEmpty()
+    val showMode = descriptor.supportsPlanMode
+    if (!showModel && !showEffort && !showMode) return
+
+    val effort = step.fanoutReasoningEfforts.getOrElse(runIdx) { "" }
+    val mode = step.fanoutPermissionModes.getOrElse(runIdx) { "" }
+
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Spacer(Modifier.width(44.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (showModel) {
+                var expanded by remember(runIdx) { mutableStateOf(false) }
+                Box {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(neon.surface2)
+                            .border(1.dp, neon.border, RoundedCornerShape(8.dp))
+                            .clickable { expanded = true }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "Model: " + forkModelLabel(model, catalog),
+                            fontFamily = neon.mono,
+                            fontSize = 11.sp,
+                            color = neon.textDim,
+                        )
+                    }
+                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Default", fontFamily = neon.sans) },
+                            onClick = {
+                                val arr = step.fanoutModels.toMutableList()
+                                while (arr.size <= runIdx) arr.add("")
+                                arr[runIdx] = ""
+                                onUpdate(step.copy(fanoutModels = arr))
+                                expanded = false
+                            },
+                        )
+                        catalog?.forEach { m ->
+                            if (m.id.isEmpty()) return@forEach
+                            DropdownMenuItem(
+                                text = { Text(m.displayName.ifEmpty { m.id }, fontFamily = neon.mono) },
+                                onClick = {
+                                    val arr = step.fanoutModels.toMutableList()
+                                    while (arr.size <= runIdx) arr.add("")
+                                    arr[runIdx] = m.id
+                                    onUpdate(step.copy(fanoutModels = arr))
+                                    expanded = false
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            if (showEffort) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    (listOf("") + efforts).forEach { level ->
+                        val selected = effort == level
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(if (selected) neon.accent else neon.surface2)
+                                .border(
+                                    1.dp,
+                                    if (selected) neon.accent else neon.border,
+                                    RoundedCornerShape(50),
+                                )
+                                .clickable {
+                                    val arr = step.fanoutReasoningEfforts.toMutableList()
+                                    while (arr.size <= runIdx) arr.add("")
+                                    arr[runIdx] = level
+                                    onUpdate(step.copy(fanoutReasoningEfforts = arr))
+                                }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                if (level.isEmpty()) "Default" else effortLabel(level),
+                                fontFamily = neon.mono,
+                                fontSize = 10.sp,
+                                color = if (selected) neon.accentText else neon.textDim,
+                            )
+                        }
+                    }
+                }
+            }
+            if (showMode) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("" to "Auto", "plan" to "Plan").forEach { (value, label) ->
+                        val selected = mode == value
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(if (selected) neon.accent else neon.surface2)
+                                .border(
+                                    1.dp,
+                                    if (selected) neon.accent else neon.border,
+                                    RoundedCornerShape(50),
+                                )
+                                .clickable {
+                                    val arr = step.fanoutPermissionModes.toMutableList()
+                                    while (arr.size <= runIdx) arr.add("")
+                                    arr[runIdx] = value
+                                    onUpdate(step.copy(fanoutPermissionModes = arr))
+                                }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                label,
+                                fontFamily = neon.mono,
+                                fontSize = 10.sp,
+                                color = if (selected) neon.accentText else neon.textDim,
+                            )
                         }
                     }
                 }

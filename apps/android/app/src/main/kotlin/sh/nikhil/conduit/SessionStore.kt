@@ -4811,6 +4811,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _pipelineFanout = MutableStateFlow(false)
     val pipelineFanout: StateFlow<Boolean> = _pipelineFanout.asStateFlow()
 
+    /**
+     * Whether the broker supports per-block model/effort/permission-mode/
+     * instructions overrides (`GET /api/capabilities` ->
+     * `"pipeline_block_config": true`, PLAN-HARNESS-BUILDER Phase 1).
+     * False on old brokers; the per-step config controls in the builder
+     * hide when false so the request stays byte-identical to today.
+     */
+    private val _pipelineBlockConfig = MutableStateFlow(false)
+    val pipelineBlockConfig: StateFlow<Boolean> = _pipelineBlockConfig.asStateFlow()
+
     /** Broker advertises transactional mid-session agent switching. */
     private val _switchAgentSupported = MutableStateFlow(false)
     val switchAgentSupported: StateFlow<Boolean> = _switchAgentSupported.asStateFlow()
@@ -4902,6 +4912,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
             JSONObject(raw).optBoolean("pipeline_fanout", false)
         }.getOrDefault(false)
         _pipelineFanout.value = pipelineFanout
+        // pipeline_block_config: per-block model/effort/mode/instructions
+        // overrides (PLAN-HARNESS-BUILDER Phase 1); default false on old brokers.
+        val pipelineBlockConfig = runCatching {
+            JSONObject(raw).optBoolean("pipeline_block_config", false)
+        }.getOrDefault(false)
+        _pipelineBlockConfig.value = pipelineBlockConfig
     }
 
     /**
