@@ -23,6 +23,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
@@ -1598,6 +1599,13 @@ private fun ConversationEventRow(
         SubagentCard(ev)
         return
     }
+    if (ev.role.lowercase() == "user") {
+        val peer = PeerMessage.parse(ev.content)
+        if (peer != null) {
+            PeerMessageCard(peer)
+            return
+        }
+    }
     // chat-shell-v2 arm (§2). Arm B "Signature" gives each assistant turn a
     // cyan→green spine lane; arm A "Breathe" keeps today's flat layout.
     val appearance = sh.nikhil.conduit.LocalAppearanceStore.current
@@ -2274,6 +2282,75 @@ private fun SubagentCard(ev: ConversationItem) {
             maxLines = if (expanded) Int.MAX_VALUE else 1,
             overflow = TextOverflow.Ellipsis,
         )
+    }
+}
+
+/**
+ * Renders a peer-session message (broker `SendPeerChat` /
+ * `framePeerMessage`) as a distinct inbound card instead of the "YOU"
+ * user bubble -- the raw framed envelope was showing up as a giant user
+ * message with no indication it came from another agent session, not the
+ * human. Header is tappable to jump to the sender session when it's one
+ * this device already knows about (via `LocalSessionStore.sessions`);
+ * otherwise the tap is a no-op (no session id, or an id we can't resolve).
+ */
+@Composable
+private fun PeerMessageCard(peer: PeerMessage.Parsed) {
+    val neon = LocalNeonTheme.current
+    val store = LocalSessionStore.current
+    val sessions = store?.sessions?.collectAsState()?.value ?: emptyList()
+    val knownSession = peer.fromSessionId?.let { id -> sessions.firstOrNull { it.id == id } }
+    val shape = RoundedCornerShape(14.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface, glowTint = neon.blue)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(
+                    if (knownSession != null) {
+                        Modifier.clickable { store?.switchTo(knownSession.id) }
+                    } else {
+                        Modifier
+                    },
+                ),
+        ) {
+            Icon(
+                Icons.AutoMirrored.Outlined.Chat,
+                contentDescription = null,
+                tint = neon.blue,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            NeonLabel("PEER MESSAGE", neon.textDim, neon)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                PeerMessage.displayLabel(peer),
+                style = MaterialTheme.typography.labelMedium,
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                color = neon.blue,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.weight(1f))
+            if (knownSession != null) {
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = neon.textFaint,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+        if (peer.body.isNotBlank()) {
+            MarkdownBlock(text = peer.body, role = ConversationRole.System)
+        }
     }
 }
 

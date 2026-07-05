@@ -1833,6 +1833,8 @@ private struct ConduitEventRow: View, Equatable {
             ConduitPlanCard(event: event)
         } else if event.kind == "subagent" {
             ConduitSubagentCard(event: event)
+        } else if event.role.lowercased() == "user", let peer = ConduitPeerMessage.parse(event.content) {
+            ConduitPeerMessageCard(event: event, peer: peer)
         } else if event.role.lowercased() == "tool" {
             ConduitToolCard(event: event, sessionID: sessionID, collapseDefault: appearance.collapseTurns)
         } else {
@@ -5078,6 +5080,70 @@ private struct ConduitSubagentCard: View {
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14, glowTint: neon.purple)
+    }
+}
+
+/// Renders a peer-session message (broker `SendPeerChat` /
+/// `framePeerMessage`) as a distinct inbound card instead of the "YOU"
+/// user bubble -- the raw framed envelope was showing up as a giant user
+/// message with no indication it came from another agent session, not the
+/// human. Header is tappable to jump to the sender session when it's one
+/// this device already knows about (via `SessionStore.sessions`); otherwise
+/// the tap is a no-op (no session id, or an id we can't resolve).
+private struct ConduitPeerMessageCard: View {
+    let event: ConversationItem
+    let peer: ConduitPeerMessage.Parsed
+    @Environment(\.neonTheme) private var neon
+    @Environment(SessionStore.self) private var store
+
+    private var knownSession: ProjectSession? {
+        guard let id = peer.fromSessionID else { return nil }
+        return store.sessions.first(where: { $0.id == id })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            header
+            if !peer.body.isEmpty {
+                ConduitMarkdownBlock(text: peer.body, role: .system)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14, glowTint: neon.blue)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "bubble.left.and.bubble.right.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(neon.blue)
+            Text("PEER MESSAGE")
+                .font(neon.mono(10).weight(.bold))
+                .tracking(0.7)
+                .foregroundStyle(neon.textDim)
+            Text(ConduitPeerMessage.displayLabel(peer))
+                .font(neon.sans(13).weight(.semibold))
+                .foregroundStyle(neon.blue)
+                .lineLimit(1)
+            Spacer()
+            if knownSession != nil {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(neon.textFaint)
+            }
+            if !event.ts.isEmpty {
+                Text(ConversationTimestamp.relative(event.ts))
+                    .font(neon.mono(10))
+                    .foregroundStyle(neon.textFaint)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard let session = knownSession else { return }
+            store.switchTo(sessionID: session.id)
+        }
     }
 }
 
