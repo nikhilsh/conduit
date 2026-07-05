@@ -955,7 +955,19 @@ final class SessionStore {
     }
 
     var sessions: [ProjectSession] = []
-    var selectedSessionID: String?
+    /// The lazy half of the stale-conversation gate (FIX 2): opening a
+    /// session that the fan-out skipped as not-visible fires exactly the
+    /// refresh it deferred, so the transcript catches up the moment someone
+    /// can actually see it -- before first render if the merge is fast,
+    /// otherwise a beat later over the stale content already on screen.
+    var selectedSessionID: String? {
+        didSet {
+            guard let sid = selectedSessionID, sid != oldValue,
+                  staleConversations.remove(sid) != nil else { return }
+            Telemetry.breadcrumb("perf", "refresh_stale_on_open", data: ["session": sid])
+            refreshConversationOffMain(sessionID: sid)
+        }
+    }
     /// Sessions whose WS worker has been parked via pause_session(). Cleared
     /// on foreground so nudgeNetworkChange() reconnects them automatically.
     private var pausedSessionIDs: Set<String> = []
@@ -1049,9 +1061,19 @@ final class SessionStore {
     private var pendingChatsDirty = false
     private var pendingChatsPersistScheduled = false
 
-    // FIX 1: track sessions already logged for "already hydrated" skip to
-    // avoid spamming the Sentry ring buffer with per-frame breadcrumbs.
-    private var conversationHydratedLogged = Set<String>()
+    // FIX 2 (App Hang 17-17.8s, v0.0.214): the fan-out in `refreshSessions()`
+    // used to re-pull EVERY session's conversation on EVERY status delta once
+    // that session's log was merely non-nil-but-empty (which most sessions
+    // with no chat content stay forever) -- N off-main FFI pulls + N MainActor
+    // dictionary-assign applies, every delta, stacked into the hang. Now only
+    // the selected (visible) session + genuinely-never-pulled sessions refresh
+    // eagerly; everyone else is recorded here and refreshed lazily the moment
+    // it's opened (see `selectedSessionID`'s `didSet`).
+    private(set) var staleConversations: Set<String> = []
+    /// At most one debounced eager refresh of the selected session in flight
+    /// (coalesces bursty status deltas to ~1 merge / 300ms). Same idiom as
+    /// `terminalPersistScheduled` above.
+    private var eagerSelectedRefreshScheduled = false
 
     /// Per-session xterm.js serialized render state, captured by
     /// `WKTerminalView.dismantleUIView` (tab switch / background) and
@@ -3830,6 +3852,7 @@ final class SessionStore {
         hasMoreHistoryBySession[sessionID] = nil
         oldestLoadedTsBySession[sessionID] = nil
         isLoadingOlderBySession[sessionID] = nil
+        staleConversations.remove(sessionID)
     }
 
     func archive(sessionID: String) {
@@ -5223,21 +5246,7 @@ final class SessionStore {
                     sessionLifecycle[s.id] = .exited(Self.exitCode(fromPhase: phase) ?? 0)
                 }
             }
-            for s in self.sessions {
-                // FIX 1: skip the O(N) FFI deep-copy for sessions that are
-                // already hydrated. Only cold-join (empty log) needs a fresh
-                // pull; new content arrives via ingestChat which calls
-                // refreshConversationOffMain directly for the affected session.
-                guard conversationLog[s.id]?.isEmpty ?? true else {
-                    if conversationHydratedLogged.insert(s.id).inserted {
-                        Telemetry.breadcrumb("perf",
-                            "conversation refresh skipped -- already hydrated",
-                            data: ["session": s.id])
-                    }
-                    continue
-                }
-                refreshConversationOffMain(sessionID: s.id)
-            }
+            refreshStaleAwareConversations(for: self.sessions)
             return
         }
         guard let client else { return }
@@ -5293,20 +5302,64 @@ final class SessionStore {
         // Fan out the per-session conversation pulls OFF the main thread:
         // doing N blocking FFI clones on the @MainActor every status delta
         // was the App Hang source. Results apply back on the main actor.
-        // FIX 1: gate on empty conversationLog -- skip sessions already
-        // hydrated so only cold-join sessions pay the FFI cost per status
-        // frame. ingestChat calls refreshConversationOffMain directly for
-        // the session that received new content (condition b).
-        for s in self.sessions {
-            guard conversationLog[s.id]?.isEmpty ?? true else {
-                if conversationHydratedLogged.insert(s.id).inserted {
-                    Telemetry.breadcrumb("perf",
-                        "conversation refresh skipped -- already hydrated",
-                        data: ["session": s.id])
-                }
+        refreshStaleAwareConversations(for: self.sessions)
+    }
+
+    /// FIX 2 (App Hang 17-17.8s, v0.0.214, interim -- see
+    /// docs/PLAN-PER-SESSION-OBSERVABILITY.md for the real per-session-node
+    /// refactor): gate the fan-out so a status delta pays the MainActor merge
+    /// cost for only the sessions someone can currently SEE, not every
+    /// session in the list.
+    ///
+    /// - Cold-join (`conversationLog[id] == nil`, never pulled once) still
+    ///   refreshes eagerly -- cheap (first pull) and needed so search / the
+    ///   Live Activity bridge / previews have SOMETHING for a brand-new row.
+    /// - The selected session refreshes eagerly too (debounced -- see
+    ///   `scheduleEagerSelectedRefresh`), because it's the one screen the
+    ///   fan-out's "did anything change while I wasn't looking" pull actually
+    ///   matters for; the open chat's real content still arrives immediately
+    ///   via `ingestChat`'s own direct per-message refresh regardless.
+    /// - Everything else is recorded in `staleConversations` and picked up
+    ///   lazily the moment it's opened (`selectedSessionID`'s `didSet`).
+    ///
+    /// `internal` (not `private`) so ConduitTests can drive the gate
+    /// directly -- same rationale as `ingestChat`/`ingestPtyData` above.
+    func refreshStaleAwareConversations(for sessionList: [ProjectSession]) {
+        var skipped = 0
+        for s in sessionList {
+            guard conversationLog[s.id] != nil else {
+                refreshConversationOffMain(sessionID: s.id)
                 continue
             }
-            refreshConversationOffMain(sessionID: s.id)
+            guard s.id == selectedSessionID else {
+                staleConversations.insert(s.id)
+                skipped += 1
+                continue
+            }
+            scheduleEagerSelectedRefresh(s.id)
+        }
+        if skipped > 0 {
+            Telemetry.breadcrumb("perf", "refresh_skipped_stale", data: ["count": "\(skipped)"])
+        }
+    }
+
+    /// Trailing-edge debounce (same idiom as `scheduleTerminalPersist`):
+    /// coalesce repeated fan-out triggers for the selected session to at
+    /// most one merge per ~300ms so a burst of status deltas (many sessions
+    /// ticking at once) doesn't stack up redundant off-main pulls for the
+    /// one session that's already getting live updates via `ingestChat`.
+    private func scheduleEagerSelectedRefresh(_ sessionID: String) {
+        guard !eagerSelectedRefreshScheduled else { return }
+        eagerSelectedRefreshScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard let self else { return }
+            self.eagerSelectedRefreshScheduled = false
+            // Refresh whatever is selected NOW -- it may have changed during
+            // the debounce window.
+            if let sid = self.selectedSessionID {
+                self.refreshConversationOffMain(sessionID: sid)
+            }
         }
     }
 

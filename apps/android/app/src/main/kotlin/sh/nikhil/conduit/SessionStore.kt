@@ -1121,12 +1121,23 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val reconcileMisses = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     /**
-     * FIX 1: sessions already logged for "already hydrated" skip. ConcurrentHashMap
-     * key-set because [onStatus] -> [refreshSessions] runs on UniFFI worker threads.
-     * Prevents per-frame ring-buffer spam (one breadcrumb per session lifetime).
+     * FIX 2 (mirrors iOS App Hang 17-17.8s, v0.0.214): [refreshSessions]'s
+     * fan-out used to re-pull EVERY session's conversation on EVERY status
+     * delta once that session's log was merely non-null-but-empty (which
+     * most sessions with no chat content stay forever). Now only the
+     * selected (visible) session + genuinely-never-pulled sessions refresh
+     * eagerly; everyone else is recorded here and refreshed lazily the
+     * moment it's opened (see [setSelectedId]). ConcurrentHashMap key-set
+     * because [onStatus] -> [refreshSessions] runs on UniFFI worker threads.
      */
-    private val conversationHydratedLogged: MutableSet<String> =
+    private val staleConversations: MutableSet<String> =
         java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
+    /** At most one debounced eager refresh of the selected session in
+     * flight (coalesces bursty status deltas to ~1 merge / 300ms). Same
+     * idiom as [terminalPersistScheduled] above. */
+    private val eagerSelectedRefreshScheduled =
+        java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** SSH-bootstrap progress, observed by the SSH login sheet. */
     private val _sshBootstrap = MutableStateFlow<SshBootstrapState>(SshBootstrapState.Idle)
@@ -1633,7 +1644,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 runCatching { withContext(Dispatchers.IO) { c.sendChat(newId, seed, "local-fork-seed-$newId") } }
                 updateLifecycle { it + (newId to SessionLifecycle.Live) }
                 refreshSessions()
-                _selectedId.value = newId
+                setSelectedId(newId)
                 renameSession(newId, "Fork: ${displayName(original)}")
             } catch (t: Throwable) {
                 val detail = describe(t)
@@ -3263,7 +3274,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _archiveError.value = null
     }
 
-    fun select(sessionId: String?) { _selectedId.value = sessionId }
+    fun select(sessionId: String?) { setSelectedId(sessionId) }
 
     /**
      * Switch the active session — drives `AppRoot`'s selection-based
@@ -3282,7 +3293,23 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val known = _sessions.value.any { it.id == sessionID } ||
             _sessionLifecycle.value.containsKey(sessionID)
         if (!known) return
-        _selectedId.value = sessionID
+        setSelectedId(sessionID)
+    }
+
+    /**
+     * Central setter for [_selectedId] -- mirrors iOS `selectedSessionID`'s
+     * `didSet`. Every select/switch/clear path funnels through here so the
+     * lazy half of the stale-conversation gate (see [refreshSessions]) has
+     * one choke point: opening a session the fan-out skipped as invisible
+     * fires exactly the refresh it deferred.
+     */
+    private fun setSelectedId(sessionId: String?) {
+        val previous = _selectedId.value
+        _selectedId.value = sessionId
+        if (sessionId != null && sessionId != previous && staleConversations.remove(sessionId)) {
+            Telemetry.breadcrumb("perf", "refresh_stale_on_open", mapOf("session" to sessionId))
+            refreshConversation(sessionId)
+        }
     }
 
     /**
@@ -3474,7 +3501,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                         // A non-live, non-exited phase leaves `Creating` in
                         // place; the next status frame resolves it.
                     }
-                    _selectedId.value = sessionID
+                    setSelectedId(sessionID)
                 } else if (_sessionLifecycle.value[sessionID] is SessionLifecycle.Creating) {
                     // Never showed up — clear the placeholder so the list
                     // doesn't keep a stuck "attaching" row.
@@ -3551,7 +3578,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 _harness.value = HarnessState.Live
                 updateVisibleHarness()
                 refreshSessions()
-                _selectedId.value = id
+                setSelectedId(id)
                 // Seed the first turn (e.g. a voice-dictated prompt) through the
                 // same path as a normal composer send: optimistic local echo so
                 // the user sees their prompt + slash-command handling. The old
@@ -3668,7 +3695,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // Optimistic removal so the row disappears immediately.
         _sessions.value = _sessions.value.filterNot { it.id == sessionId }
         updateLifecycle { it - sessionId }
-        if (_selectedId.value == sessionId) _selectedId.value = null
+        if (_selectedId.value == sessionId) setSelectedId(null)
         // Free all in-memory chat/state data. Transcript is safe on broker disk;
         // History re-fetches via HTTP on first open.
         val convCount = _conversationLog.value[sessionId]?.size ?: 0
@@ -3739,7 +3766,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         removeSavedSession(sessionId)
         _sessions.value = _sessions.value.filterNot { it.id == sessionId }
         updateLifecycle { it - sessionId }
-        if (_selectedId.value == sessionId) _selectedId.value = null
+        if (_selectedId.value == sessionId) setSelectedId(null)
         // Free all in-memory chat/state data for this session.
         val convCount = _conversationLog.value[sessionId]?.size ?: 0
         val chatCount = _chatLog.value[sessionId]?.size ?: 0
@@ -3781,6 +3808,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _pinnedContexts.value = _pinnedContexts.value - sessionId
         _subagentRoster.value = _subagentRoster.value - sessionId
         _sessionBox.value = _sessionBox.value - sessionId
+        staleConversations.remove(sessionId)
     }
 
     /**
@@ -5637,22 +5665,59 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     updateLifecycle { it + (s.id to SessionLifecycle.Exited(code)) }
                 }
             }
-            // FIX 1: skip the O(N) FFI deep-copy for sessions that already
-            // have hydrated content. Only cold-join (empty log) needs the
-            // pull; new content arrives via onChatEvent which calls
-            // refreshConversation directly for the affected session.
-            val hasContent = _conversationLog.value[s.id].orEmpty().isNotEmpty()
-            if (hasContent) {
-                if (conversationHydratedLogged.add(s.id)) {
-                    Telemetry.breadcrumb(
-                        "perf",
-                        "conversation refresh skipped -- already hydrated",
-                        mapOf("session" to s.id),
-                    )
-                }
-            } else {
+        }
+        refreshStaleAwareConversations(_sessions.value)
+    }
+
+    /**
+     * FIX 2 (mirrors iOS App Hang 17-17.8s, v0.0.214, interim -- see
+     * docs/PLAN-PER-SESSION-OBSERVABILITY.md for the real per-session-node
+     * refactor): gate the fan-out so a status delta pays the merge cost for
+     * only the sessions someone can currently SEE, not every session in the
+     * list.
+     *
+     * - Cold-join (`conversationLog[id] == null`, never pulled once) still
+     *   refreshes eagerly -- cheap (first pull) and needed so search /
+     *   previews have SOMETHING for a brand-new row.
+     * - The selected session refreshes eagerly too (debounced -- see
+     *   [scheduleEagerSelectedRefresh]).
+     * - Everything else is recorded in [staleConversations] and picked up
+     *   lazily the moment it's opened (see [setSelectedId]).
+     */
+    private fun refreshStaleAwareConversations(sessionList: List<ProjectSession>) {
+        var skipped = 0
+        for (s in sessionList) {
+            if (_conversationLog.value[s.id] == null) {
                 refreshConversation(s.id)
+                continue
             }
+            if (s.id == _selectedId.value) {
+                scheduleEagerSelectedRefresh(s.id)
+            } else {
+                staleConversations.add(s.id)
+                skipped++
+            }
+        }
+        if (skipped > 0) {
+            Telemetry.breadcrumb("perf", "refresh_skipped_stale", mapOf("count" to skipped.toString()))
+        }
+    }
+
+    /**
+     * Trailing-edge debounce (same idiom as [scheduleTerminalPersist]):
+     * coalesce repeated fan-out triggers for the selected session to at
+     * most one merge per ~300ms so a burst of status deltas doesn't stack
+     * up redundant pulls for the one session that's already getting live
+     * updates via `onChatEvent`.
+     */
+    private fun scheduleEagerSelectedRefresh(sessionId: String) {
+        if (!eagerSelectedRefreshScheduled.compareAndSet(false, true)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(300)
+            eagerSelectedRefreshScheduled.set(false)
+            // Refresh whatever is selected NOW -- it may have changed during
+            // the debounce window.
+            _selectedId.value?.let { refreshConversation(it) }
         }
     }
 
