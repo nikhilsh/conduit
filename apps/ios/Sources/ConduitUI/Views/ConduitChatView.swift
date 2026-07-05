@@ -1090,7 +1090,8 @@ extension ConduitUI {
         /// `easeInOut`, which closely tracks it.
         private func keyboardAnimation(_ note: Notification) -> Animation {
             let info = note.userInfo
-            let duration = (info?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+            let rawDuration = (info?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+            let duration = KeyboardAnimationLogic.sanitizedDuration(rawDuration)
             let curveRaw = (info?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int)
                 ?? Int(UIView.AnimationCurve.easeInOut.rawValue)
             switch curveRaw {
@@ -2775,6 +2776,25 @@ extension NeonTheme {
         case .accent: return accent
         case .red:    return red
         }
+    }
+}
+
+// MARK: - Keyboard animation duration guard (testable)
+
+/// Pure-data guard extracted so unit tests can exercise it without a
+/// `Notification` / SwiftUI host. iOS can re-fire `keyboardWillShow` as a
+/// no-op (observed back-to-back in Sentry breadcrumbs during the foreground
+/// reconcile refresh) with `UIKeyboardAnimationDurationUserInfoKey == 0`.
+/// `.spring(response: 0, ...)` divides by `response` internally, so a 0 (or
+/// otherwise non-finite/negative) duration produced a NaN spring stiffness
+/// -> a NaN-origin CALayer bounds on the animated scroll view -> the fatal
+/// `CALayerInvalidGeometry` crash. Clamp to the same 0.25 fallback used
+/// elsewhere when the userInfo key is absent entirely.
+enum KeyboardAnimationLogic {
+    static let fallbackDuration: Double = 0.25
+
+    static func sanitizedDuration(_ raw: Double) -> Double {
+        (raw.isFinite && raw > 0) ? raw : fallbackDuration
     }
 }
 
