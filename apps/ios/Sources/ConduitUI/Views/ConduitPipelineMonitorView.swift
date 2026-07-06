@@ -319,6 +319,20 @@ extension ConduitUI {
         // Result card (#907): collapsed by default when the final output
         // is long; "Show more" reveals the rest.
         @State private var resultExpanded = false
+        // Result card collapse cache (#920 fix): PipelineResultViewModel
+        // .needsCollapse / .collapsed run a String.split over up to 16KB of
+        // output -- calling them from resultCard (SwiftUI `body`) reran that
+        // split on EVERY render pass. The Monitor polls every 5s and the
+        // observable store churns between polls, so `body` evaluates far
+        // more often than the output actually changes, producing a
+        // fully-blocked main-thread hang (Sentry: "App Hang Fully Blocked"
+        // 3.2-4.0s, release 0.0.218+246). Recomputed only in
+        // updateResultCache, keyed on the raw output string, so `body` /
+        // `resultCard` read stored values and do zero O(n)-in-content-size
+        // work per evaluation.
+        @State private var resultCacheOutput: String = ""
+        @State private var resultCacheNeedsCollapse: Bool = false
+        @State private var resultCacheCollapsedText: String = ""
         // Per-step output disclosure (#907): indices of steps whose inline
         // output preview is expanded. Tapping the row itself still opens
         // the transcript -- this is a separate, subtle affordance.
@@ -481,9 +495,11 @@ extension ConduitUI {
         /// .collapseLineThreshold` lines with a "Show more" expand when
         /// the output is long.
         private func resultCard(_ p: PipelineStatus, _ result: PipelineResult) -> some View {
-            let needsCollapse = PipelineResultViewModel.needsCollapse(result.output)
+            // Read the memoized cache (updated in updateResultCache, never
+            // here) -- see the #920 hang note on resultCacheOutput.
+            let needsCollapse = resultCacheNeedsCollapse
             let displayText = (needsCollapse && !resultExpanded)
-                ? PipelineResultViewModel.collapsed(result.output)
+                ? resultCacheCollapsedText
                 : result.output
             let branches = result.branches ?? []
 
@@ -1533,6 +1549,7 @@ extension ConduitUI {
                         // Parse the returned status and resume polling.
                         if let parsed = try? JSONDecoder().decode(PipelineStatus.self, from: data) {
                             pipeline = parsed
+                            updateResultCache(for: parsed)
                         }
                         startPolling()
                     } else {
@@ -1595,6 +1612,7 @@ extension ConduitUI {
                         lastState = parsed.state
                     }
                     pipeline = parsed
+                    updateResultCache(for: parsed)
                     errorBanner = nil
                 } else {
                     let msg = "Poll failed: HTTP \(http.statusCode)"
@@ -1618,6 +1636,20 @@ extension ConduitUI {
                     )
                 }
             }
+        }
+
+        /// Recomputes the Result card's collapse decision + collapsed
+        /// text once per distinct output value -- the only call site for
+        /// `PipelineResultViewModel.needsCollapse`/`.collapsed` (#920 hang
+        /// fix, see resultCacheOutput). Called after every place `pipeline`
+        /// is assigned from a freshly-decoded `PipelineStatus`, never from
+        /// `body`.
+        private func updateResultCache(for status: PipelineStatus) {
+            let output = status.result?.output ?? ""
+            guard output != resultCacheOutput else { return }
+            resultCacheOutput = output
+            resultCacheNeedsCollapse = PipelineResultViewModel.needsCollapse(output)
+            resultCacheCollapsedText = PipelineResultViewModel.collapsed(output)
         }
 
         // MARK: - Continue (gate)
