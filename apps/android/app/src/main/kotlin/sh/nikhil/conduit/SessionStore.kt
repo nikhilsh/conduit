@@ -4879,6 +4879,17 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _pipelineLoop = MutableStateFlow(false)
     val pipelineLoop: StateFlow<Boolean> = _pipelineLoop.asStateFlow()
 
+    /**
+     * Whether the broker populates a `result` field on
+     * `GET /api/pipeline/{id}` once a pipeline completes
+     * (`GET /api/capabilities` -> `"pipeline_result": true`, #906/#907).
+     * False on old brokers; the Monitor's Result card hides when false
+     * even if the pipeline is complete. Mirror of iOS
+     * `SessionStore.pipelineResult`.
+     */
+    private val _pipelineResult = MutableStateFlow(false)
+    val pipelineResult: StateFlow<Boolean> = _pipelineResult.asStateFlow()
+
     /** Broker advertises transactional mid-session agent switching. */
     private val _switchAgentSupported = MutableStateFlow(false)
     val switchAgentSupported: StateFlow<Boolean> = _switchAgentSupported.asStateFlow()
@@ -4988,6 +4999,10 @@ class SessionStore : ViewModel(), ConduitDelegate {
         }.getOrDefault(false)
         _pipelineLoop.value = runCatching {
             JSONObject(raw).optBoolean("pipeline_loop", false)
+        }.getOrDefault(false)
+        // pipeline_result: Monitor Result card on completion; default false on old brokers.
+        _pipelineResult.value = runCatching {
+            JSONObject(raw).optBoolean("pipeline_result", false)
         }.getOrDefault(false)
     }
 

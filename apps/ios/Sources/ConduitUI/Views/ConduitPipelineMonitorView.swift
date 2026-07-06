@@ -84,6 +84,16 @@ extension ConduitUI {
         let spliced_from: String?
         /// Live loop state. Present only when kind == "loop".
         let loop: PipelineLoopStatus?
+        /// This step's harvested last-assistant text (broker
+        /// `Step.Output`, #906). Empty/absent on older brokers or a step
+        /// that hasn't produced output yet. Drives the per-step output
+        /// disclosure in `stepRow` -- the transcript stays the deep-dive
+        /// path, this is just a preview. Defaulted so existing
+        /// memberwise-init call sites (tests) don't need updating. Must be
+        /// `var`, not `let`: a `let` with an initial value is silently
+        /// EXCLUDED from the compiler-synthesized `init(from:)` (Swift
+        /// decodes it as the default and never reads the JSON key at all).
+        var output: String? = nil
 
         var isRunning: Bool {
             guard let p = phase else { return false }
@@ -173,6 +183,30 @@ extension ConduitUI {
         }
     }
 
+    /// Pure view-model for the Result card's "collapse long output"
+    /// behavior (#907) -- kept off SwiftUI so it's directly unit-testable,
+    /// mirroring `PipelineStepDisplayViewModel`.
+    enum PipelineResultViewModel {
+        /// Lines beyond which the Result card's output collapses behind
+        /// "Show more".
+        static let collapseLineThreshold = 12
+
+        /// Whether `text` has enough lines to warrant the collapsed /
+        /// "Show more" treatment.
+        static func needsCollapse(_ text: String, threshold: Int = collapseLineThreshold) -> Bool {
+            text.split(separator: "\n", omittingEmptySubsequences: false).count > threshold
+        }
+
+        /// The first `threshold` lines of `text`, joined back with
+        /// newlines -- what renders while collapsed. Returns `text`
+        /// unchanged when it doesn't need collapsing.
+        static func collapsed(_ text: String, threshold: Int = collapseLineThreshold) -> String {
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+            guard lines.count > threshold else { return text }
+            return lines.prefix(threshold).joined(separator: "\n")
+        }
+    }
+
     /// Gate metadata returned by the broker when a pipeline is in the
     /// `awaiting_gate` state. Present only when the broker supports the
     /// `pipeline_gate_preview` capability.
@@ -198,6 +232,43 @@ extension ConduitUI {
         }
     }
 
+    /// End-of-run summary populated once a pipeline reaches `complete`
+    /// (broker `pipeline.PipelineResult`, #906/#907). Apps gate the
+    /// Monitor's Result card on BOTH `state == "complete"` AND this being
+    /// non-nil AND the `pipeline_result` capability -- an older broker, or
+    /// a pipeline completed before this feature shipped, has no result
+    /// even though state is complete.
+    struct PipelineResult: Decodable {
+        /// Final step's harvested last-assistant text.
+        let output: String
+        /// RFC3339 completion timestamp.
+        let finished: String
+        /// `git diff --stat` counts for the final step's worktree against
+        /// the pipeline's base branch. Best-effort: a git error leaves
+        /// these at zero rather than blocking completion.
+        let files_changed: Int
+        let insertions: Int
+        let deletions: Int
+        /// The `pipeline-<id>-step-*` branch names that actually backed
+        /// the steps that ran, in step order. Best-effort -- a step whose
+        /// exact backing branch can't be reconstructed is omitted.
+        let branches: [String]?
+
+        enum CodingKeys: String, CodingKey {
+            case output, finished, files_changed, insertions, deletions, branches
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            output       = try c.decodeIfPresent(String.self, forKey: .output) ?? ""
+            finished     = try c.decodeIfPresent(String.self, forKey: .finished) ?? ""
+            files_changed = try c.decodeIfPresent(Int.self, forKey: .files_changed) ?? 0
+            insertions   = try c.decodeIfPresent(Int.self, forKey: .insertions) ?? 0
+            deletions    = try c.decodeIfPresent(Int.self, forKey: .deletions) ?? 0
+            branches     = try c.decodeIfPresent([String].self, forKey: .branches)
+        }
+    }
+
     struct PipelineStatus: Decodable {
         let id: String
         let title: String
@@ -210,6 +281,13 @@ extension ConduitUI {
         /// Present only when state == "awaiting_gate" and broker supports
         /// `pipeline_gate_preview`.
         let gate: PipelineGate?
+        /// Present only when state == "complete" and broker supports
+        /// `pipeline_result`. Defaulted so existing memberwise-init call
+        /// sites (tests) don't need updating. Must be `var`, not `let`: a
+        /// `let` with an initial value is silently EXCLUDED from the
+        /// compiler-synthesized `init(from:)` (Swift decodes it as the
+        /// default and never reads the JSON key at all).
+        var result: PipelineResult? = nil
 
         var isTerminal: Bool {
             state == "complete" || state == "failed" || state == "cancelled"
@@ -217,6 +295,7 @@ extension ConduitUI {
 
         var isAwaitingGate: Bool { state == "awaiting_gate" }
         var isAwaitingPick: Bool { state == "awaiting_pick" }
+        var isComplete: Bool { state == "complete" }
     }
 
     // MARK: - Monitor view
@@ -225,6 +304,7 @@ extension ConduitUI {
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
+        @Environment(AppearanceStore.self) private var appearance
 
         let pipelineID: String
         let pipelineTitle: String
@@ -236,6 +316,13 @@ extension ConduitUI {
         @State private var showCancelAlert = false
         @State private var errorBanner: String? = nil
         @State private var selectedSessionID: String? = nil
+        // Result card (#907): collapsed by default when the final output
+        // is long; "Show more" reveals the rest.
+        @State private var resultExpanded = false
+        // Per-step output disclosure (#907): indices of steps whose inline
+        // output preview is expanded. Tapping the row itself still opens
+        // the transcript -- this is a separate, subtle affordance.
+        @State private var expandedStepOutputs: Set<Int> = []
         // Gate handoff edit state
         @State private var isEditingHandoff = false
         @State private var handoffDraft: String = ""
@@ -256,6 +343,9 @@ extension ConduitUI {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
                             stateHeader(p)
+                            if p.isComplete, let result = p.result, store.pipelineResult {
+                                resultCard(p, result)
+                            }
                             stepsList(p)
                             if p.isAwaitingPick && store.pipelineFanout {
                                 pickPanel(p)
@@ -382,6 +472,92 @@ extension ConduitUI {
                 .overlay(Capsule().stroke(color.opacity(0.35), lineWidth: 1))
         }
 
+        // MARK: Result card
+
+        /// Leads the Monitor when the pipeline is complete and the broker
+        /// supports `pipeline_result` (#906/#907): the final step's output
+        /// rendered as markdown, git-outcome chips, and the backing
+        /// branch(es). Collapsed to `PipelineResultViewModel
+        /// .collapseLineThreshold` lines with a "Show more" expand when
+        /// the output is long.
+        private func resultCard(_ p: PipelineStatus, _ result: PipelineResult) -> some View {
+            let needsCollapse = PipelineResultViewModel.needsCollapse(result.output)
+            let displayText = (needsCollapse && !resultExpanded)
+                ? PipelineResultViewModel.collapsed(result.output)
+                : result.output
+            let branches = result.branches ?? []
+
+            return VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(neon.green)
+                    Text("Result")
+                        .font(neon.mono(11).weight(.bold))
+                        .foregroundStyle(neon.textDim)
+                        .textCase(.uppercase)
+                }
+
+                if !result.output.isEmpty {
+                    ConduitStructuredMarkdownView(
+                        pieces: ConduitMarkdownStructure.parse(displayText),
+                        role: .assistant,
+                        basePointSize: appearance.bodyPointSize,
+                        fontFamily: appearance.fontFamily
+                    )
+
+                    if needsCollapse {
+                        Button {
+                            resultExpanded.toggle()
+                            Telemetry.breadcrumb("pipeline", "result output expand toggled",
+                                data: ["id": pipelineID, "expanded": resultExpanded ? "true" : "false"])
+                        } label: {
+                            Text(resultExpanded ? "Show less" : "Show more")
+                                .font(neon.mono(11).weight(.semibold))
+                                .foregroundStyle(neon.accent)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                // Git-outcome chips -- only non-zero counts render.
+                let hasGitOutcome = result.files_changed > 0 || result.insertions > 0 || result.deletions > 0
+                if hasGitOutcome {
+                    HStack(spacing: 6) {
+                        if result.files_changed > 0 {
+                            ConduitUI.Chip(label: "\(result.files_changed) files", tint: neon.textDim)
+                        }
+                        if result.insertions > 0 {
+                            ConduitUI.Chip(label: "+\(result.insertions)", tint: neon.green)
+                        }
+                        if result.deletions > 0 {
+                            ConduitUI.Chip(label: "-\(result.deletions)", tint: neon.red)
+                        }
+                    }
+                }
+
+                if !branches.isEmpty {
+                    Text(branches.joined(separator: ", "))
+                        .font(neon.mono(10))
+                        .foregroundStyle(neon.textFaint)
+                        .lineLimit(2)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .neonCardSurface(
+                neon,
+                fill: neon.green.opacity(neon.dark ? 0.06 : 0.04),
+                cornerRadius: 14,
+                border: neon.green.opacity(0.22)
+            )
+            .onAppear {
+                Telemetry.breadcrumb("pipeline", "result card shown",
+                    data: ["id": pipelineID, "output_len": "\(result.output.count)",
+                           "files_changed": "\(result.files_changed)"])
+            }
+        }
+
         // MARK: Steps list
 
         private func stepsList(_ p: PipelineStatus) -> some View {
@@ -474,12 +650,41 @@ extension ConduitUI {
                         .padding(.vertical, 3)
                         .background(Capsule().fill(stateColor.opacity(0.14)))
 
+                    // Output disclosure (#907): a subtle affordance,
+                    // separate from the row's tap-to-transcript gesture,
+                    // that expands an inline preview of this step's
+                    // harvested output. The transcript stays the
+                    // deep-dive path.
+                    if let output = step.output, !output.isEmpty {
+                        Button {
+                            toggleStepOutput(step.index)
+                        } label: {
+                            Image(systemName: expandedStepOutputs.contains(step.index) ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(neon.textFaint)
+                                .frame(width: 22, height: 22)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
                     // Chevron if session is available
                     if step.session_id != nil {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(neon.textFaint)
                     }
+                }
+
+                // Inline output preview (#907): shown only while this
+                // step's disclosure is expanded.
+                if let output = step.output, !output.isEmpty, expandedStepOutputs.contains(step.index) {
+                    Text(output)
+                        .font(neon.mono(11))
+                        .foregroundStyle(neon.textDim)
+                        .lineLimit(6)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 8)
                 }
 
                 // Fanout sub-run cluster (below main row)
@@ -572,6 +777,16 @@ extension ConduitUI {
             case .failed:        return ("failed", neon.red)
             case .awaitingGate:  return ("gate", neon.yellow)
             case .awaitingPick:  return ("pick", neon.accent)
+            }
+        }
+
+        private func toggleStepOutput(_ index: Int) {
+            if expandedStepOutputs.contains(index) {
+                expandedStepOutputs.remove(index)
+            } else {
+                expandedStepOutputs.insert(index)
+                Telemetry.breadcrumb("pipeline", "step output preview expanded",
+                    data: ["id": pipelineID, "step": "\(index)"])
             }
         }
 

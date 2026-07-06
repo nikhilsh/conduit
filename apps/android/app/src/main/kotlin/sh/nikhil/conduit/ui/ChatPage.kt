@@ -156,7 +156,10 @@ internal val LocalChatSnackbar = compositionLocalOf<SnackbarHostState?> { null }
  */
 internal val LocalOpenInTerminal = compositionLocalOf<(() -> Unit)?> { null }
 
-private sealed class ConversationRole {
+// Made non-private (was file-private) so PipelineMonitorScreen's
+// Result card (#907, pairs with #906) can reuse MarkdownBlock for the
+// final step output instead of forking a renderer.
+sealed class ConversationRole {
     data object User : ConversationRole()
     data object Assistant : ConversationRole()
     data object Tool : ConversationRole()
@@ -3590,7 +3593,7 @@ private fun ToolLedger(items: List<ConversationItem>) {
 }
 
 @Composable
-private fun MarkdownBlock(text: String, role: ConversationRole) {
+fun MarkdownBlock(text: String, role: ConversationRole) {
     val neon = LocalNeonTheme.current
     val appearance = sh.nikhil.conduit.LocalAppearanceStore.current
     val fontChoice by appearance.fontFamily.collectAsState()

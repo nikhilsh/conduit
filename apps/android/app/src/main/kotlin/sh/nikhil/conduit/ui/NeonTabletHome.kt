@@ -69,7 +69,7 @@ import sh.nikhil.conduit.latestActivityPreviewOf
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
+fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit, onOpenPipelines: () -> Unit = {}) {
     val neon = LocalNeonTheme.current
     val sessions by store.sessions.collectAsState()
     val lifecycle by store.sessionLifecycle.collectAsState()
@@ -83,6 +83,24 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
     // Change 4: display-only harness with grace-window suppression.
     val visibleHarness by store.visibleHarness.collectAsState()
     val connected = harness is HarnessState.Live || harness is HarnessState.Linked
+
+    // Pipeline affordance (#907, tablet-parity fix for the gap #905
+    // flagged): mirrors HomeScreen's phone-only banner -- refresh on
+    // appear / box switch only, gated on the broker's `pipeline`
+    // capability. Never a fabricated count; hidden when none qualify.
+    val pipelinesEnabled by store.pipelinesEnabled.collectAsState()
+    var pipelineSummaries by remember { mutableStateOf<List<PipelineSummary>>(emptyList()) }
+    LaunchedEffect(endpoint.displayHost, pipelinesEnabled) {
+        if (pipelinesEnabled && endpoint.isComplete) {
+            pipelineSummaries = store.refreshPipelines()
+        }
+    }
+    val activePipelines = remember(pipelineSummaries) {
+        pipelineSummaries.filter { PipelineListViewModel.isActiveForHomeAffordance(it.state) }
+    }
+    val recentTerminalPipelines = remember(pipelineSummaries) {
+        pipelineSummaries.filter { PipelineListViewModel.isRecentTerminal(it) }
+    }
 
     // Rename dialog state (hoisted above the grid so the AlertDialog floats
     // over the full NeonTabletHome surface, not buried inside a grid cell).
@@ -157,6 +175,17 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
             }
         }
         Spacer(Modifier.size(16.dp))
+
+        // Same slot as phone Home: above "Active sessions", below the header.
+        if (activePipelines.isNotEmpty() || recentTerminalPipelines.isNotEmpty()) {
+            ActivePipelinesBannerCard(
+                neon = neon,
+                active = activePipelines,
+                recentTerminal = recentTerminalPipelines,
+                onOpen = onOpenPipelines,
+            )
+            Spacer(Modifier.size(16.dp))
+        }
 
         val creatingItems = visible.filterIsInstance<VisibleSession.Creating>()
         if (sessions.isEmpty() && creatingItems.isEmpty()) {
