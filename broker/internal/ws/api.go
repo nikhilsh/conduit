@@ -173,6 +173,14 @@ type capabilitiesResponse struct {
 		// success-with-count. Apps gate the loop-block builder control on
 		// this flag.
 		PipelineLoop bool `json:"pipeline_loop"`
+		// PipelineResult: GET /api/pipeline/{id} populates a `result` field
+		// (PipelineResult: output/finished/files_changed/insertions/
+		// deletions/branches) once State == "complete". Apps gate the
+		// pipeline result card on this flag — an old broker completes a
+		// pipeline with no result field at all (the drift this flag exists
+		// to prevent; see the pipeline_block_config comment above, #891
+		// pattern).
+		PipelineResult bool `json:"pipeline_result"`
 	} `json:"features"`
 	// Pipeline flags mirrored at the JSON ROOT. Fielded app builds (through
 	// v0.0.214) decode all pipeline_* capability flags from the root — not
@@ -189,6 +197,7 @@ type capabilitiesResponse struct {
 	TopPipelineBlockConfig bool `json:"pipeline_block_config"`
 	TopPipelineBranch      bool `json:"pipeline_branch"`
 	TopPipelineLoop        bool `json:"pipeline_loop"`
+	TopPipelineResult      bool `json:"pipeline_result"`
 	// Models is the per-assistant model+effort catalog discovered live from
 	// the agent CLIs (claude control-protocol initialize, codex app-server
 	// model/list). Omitted while discovery hasn't completed (or on older
@@ -251,6 +260,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.PipelineBlockConfig = true // per-block model/effort/permission_mode/instructions
 	resp.Features.PipelineBranch = true      // step.kind=="branch" (If/Else)
 	resp.Features.PipelineLoop = true        // step.kind=="loop" (bounded Loop-until)
+	resp.Features.PipelineResult = true      // GET /api/pipeline/{id} result field on COMPLETE
 	// Root-level mirrors for fielded apps that decode pipeline_* from the JSON
 	// root (see the struct comment).
 	resp.TopPipeline = true
@@ -261,6 +271,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.TopPipelineBlockConfig = true
 	resp.TopPipelineBranch = true
 	resp.TopPipelineLoop = true
+	resp.TopPipelineResult = true
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
 	// Pass the pushed-credential store as a nil INTERFACE when unset:

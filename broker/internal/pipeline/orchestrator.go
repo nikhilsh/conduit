@@ -7,6 +7,9 @@ import (
 	"log"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/nikhilsh/conduit/broker/internal/session"
 )
 
 // ErrNotAtGate is returned by Continue when the pipeline is not in
@@ -318,13 +321,17 @@ func (o *Orchestrator) spawnNext(p *Pipeline) error {
 		return fmt.Errorf("pipeline %s: resolve branch at step %d: %w", p.ID, next, err)
 	}
 	if next >= len(p.Steps) {
-		// All steps done.
+		// All steps done. Build the end-of-run Result BEFORE reaping
+		// prevIdx's session below — buildPipelineResult reads prevIdx's
+		// worktree via GetWorktreeDir for the git-stats diff.
 		p.Gate = nil // clear gate preview on completion
 		p.State = PipelineComplete
+		p.Result = o.buildPipelineResult(p, prevIdx)
 		if err := p.Save(o.conduitRoot); err != nil {
 			return fmt.Errorf("pipeline %s: save complete: %w", p.ID, err)
 		}
-		log.Printf("pipeline %s: COMPLETE", p.ID)
+		log.Printf("pipeline %s: COMPLETE (result output len=%d, files_changed=%d)",
+			p.ID, len(p.Result.Output), p.Result.FilesChanged)
 		o.terminateStepSession(p, prevIdx)
 		return nil
 	}
@@ -1015,9 +1022,17 @@ func (o *Orchestrator) afterStepSuccess(p *Pipeline, k int) error {
 	step := &p.Steps[k]
 	p.State = PipelineStepDone
 
+	// Harvest this step's output now, before its session can be reaped —
+	// this is the single point shared by the sequential (Advance), fanout
+	// (Pick), and loop (advanceLoop) success paths, so Step.Output and the
+	// eventual PipelineResult.Output (built at the COMPLETE transition in
+	// spawnNext, from the final step's already-harvested Output) never race
+	// terminateStepSession.
+	step.Output = truncateOutput(o.sessions.GetLastAssistantText(step.SessionID))
+
 	if step.GateAfter {
 		gp := &GatePreview{Step: k}
-		gp.Output = o.sessions.GetLastAssistantText(step.SessionID)
+		gp.Output = step.Output
 		if k+1 < len(p.Steps) && p.Steps[k+1].InputFromPrev != InputNone {
 			nextStep := &p.Steps[k+1]
 			workdir := ""
@@ -1073,6 +1088,89 @@ func (o *Orchestrator) terminateStepSession(p *Pipeline, k int) {
 	decLiveAgents(sessID)
 }
 
+// buildPipelineResult constructs the end-of-run PipelineResult once the
+// pipeline has reached its last step (spawnNext's COMPLETE transition).
+// finalIdx is the index of the step that just finished (p.CurrentStep at
+// that point, i.e. prevIdx). Best-effort throughout: a missing/empty
+// worktree or base, or a git error, leaves the diff-stat fields at their
+// zero value rather than blocking completion — the pipeline still reaches
+// PipelineComplete either way.
+func (o *Orchestrator) buildPipelineResult(p *Pipeline, finalIdx int) *PipelineResult {
+	res := &PipelineResult{
+		Finished: time.Now().UTC().Format(time.RFC3339),
+	}
+	if finalIdx >= 0 && finalIdx < len(p.Steps) {
+		res.Output = p.Steps[finalIdx].Output
+	}
+
+	if finalIdx >= 0 && finalIdx < len(p.Steps) {
+		sessID := p.Steps[finalIdx].SessionID
+		if sessID != "" && p.Base != "" {
+			workdir := o.sessions.GetWorktreeDir(sessID)
+			if workdir != "" {
+				files, ins, del, _, err := session.DiffSummary(workdir, p.Base)
+				if err != nil {
+					log.Printf("pipeline %s: buildPipelineResult: DiffSummary(workdir=%s, base=%s): %v",
+						p.ID, workdir, p.Base, err)
+				} else {
+					res.FilesChanged, res.Insertions, res.Deletions = files, ins, del
+				}
+			}
+		}
+	}
+
+	for i := range p.Steps {
+		if b := stepBranchName(p.ID, &p.Steps[i]); b != "" {
+			res.Branches = append(res.Branches, b)
+		}
+	}
+	return res
+}
+
+// stepBranchName reconstructs the git branch name that backed step's
+// completed work, for PipelineResult.Branches' best-effort audit trail.
+// Returns "" when the step never ran (no SessionID) or its exact backing
+// branch cannot be reconstructed from persisted state alone.
+func stepBranchName(pipelineID string, step *Step) string {
+	switch {
+	case step.IsFanout():
+		// The fanout step itself has no single branch — only the picked
+		// winner's run does, and FanoutRun.Branch is already persisted
+		// verbatim (spawnFanoutRun), so no formula is needed here.
+		if step.Fanout == nil || step.Fanout.Winner == nil {
+			return ""
+		}
+		idx := *step.Fanout.Winner
+		if idx < 0 || idx >= len(step.Fanout.Runs) {
+			return ""
+		}
+		return step.Fanout.Runs[idx].Branch
+	case step.Kind == StepKindLoop:
+		// lc.Body reuses the same slice index across passes (advanceLoop's
+		// doc comment), so only the FINAL pass's branch name survives in
+		// persisted state — reconstruct it from Iteration/BodyStep, which
+		// mirrors the exact fmt.Sprintf in spawnLoopBodyStep.
+		if step.Loop == nil || len(step.Loop.Body) == 0 {
+			return ""
+		}
+		passIdx := step.Loop.Iteration - 1
+		if passIdx < 0 {
+			passIdx = 0
+		}
+		bodyIdx := len(step.Loop.Body) - 1
+		return fmt.Sprintf("pipeline-%s-step-%d-iter%d-body%d", pipelineID, step.Index, passIdx, bodyIdx)
+	default:
+		// Plain step — mirrors the exact fmt.Sprintf in spawnStepOpts.
+		if step.SessionID == "" {
+			return ""
+		}
+		if step.Retries > 0 {
+			return fmt.Sprintf("pipeline-%s-step-%d-r%d", pipelineID, step.Index, step.Retries)
+		}
+		return fmt.Sprintf("pipeline-%s-step-%d", pipelineID, step.Index)
+	}
+}
+
 // sendPickPush sends a push notification informing the user that all fanout
 // runs have settled and a pick is required. Best-effort.
 func (o *Orchestrator) sendPickPush(p *Pipeline, stepIndex int) {
@@ -1117,6 +1215,32 @@ func resolveFanoutStr(arr []string, i int, fallback string) string {
 // settled (either by process exit or by turn completion).
 func isRunSettled(phase string) bool {
 	return strings.HasPrefix(phase, "exited") || phase == "turn_complete"
+}
+
+// maxStepOutputBytes bounds Step.Output (and PipelineResult.Output, which
+// copies the final step's) so a chatty agent turn cannot balloon
+// pipeline.json — the file is read in full on every Load/pollStep tick.
+const maxStepOutputBytes = 16 * 1024
+
+// truncatedOutputMarker is appended when truncateOutput cuts text short, so
+// a reader of pipeline.json (or the app) can tell the output was clipped
+// rather than mistaking it for the agent's actual final line.
+const truncatedOutputMarker = "\n...truncated"
+
+// truncateOutput defensively caps a harvested step output to
+// maxStepOutputBytes, appending truncatedOutputMarker when it cuts. Safe to
+// call on already-short (or empty) text — a no-op in that case. Cuts on a
+// UTF-8 rune boundary (never mid-rune) so the truncated value stays valid
+// UTF-8 for JSON encoding.
+func truncateOutput(s string) string {
+	if len(s) <= maxStepOutputBytes {
+		return s
+	}
+	cut := maxStepOutputBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + truncatedOutputMarker
 }
 
 // exitCodeFromPhase parses the exit code from a phase string like "exited(0)" or "exited(1)".
