@@ -405,6 +405,9 @@ extension ConduitUI {
         @State private var errorAlert: String? = nil
         @State private var createdPipeline: CreatedPipeline? = nil
         @State private var navigateToMonitor = false
+        // Chain guardrail (Start-button last-line-of-defense) -- non-empty
+        // means the confirm alert is showing for these 0-based step indices.
+        @State private var chainGuardrailIndices: [Int] = []
 
         // MARK: Phone reorder-drag state
         //
@@ -717,6 +720,33 @@ extension ConduitUI {
                     Button("OK") { errorAlert = nil }
                 } message: {
                     if let m = errorAlert { Text(m) }
+                }
+                // Chain guardrail: last-line-of-defense at Start, since a
+                // saved template/draft carries "none" forever even though
+                // #911 defaults brand-new steps to "output" (owner hit this
+                // twice -- "step 2 just did its own thing").
+                .alert("Steps aren't chained", isPresented: Binding(
+                    get: { !chainGuardrailIndices.isEmpty },
+                    set: { if !$0 { chainGuardrailIndices = [] } }
+                )) {
+                    Button("Chain steps") {
+                        Telemetry.breadcrumb("pipeline", "chain guardrail chain",
+                            data: ["steps": "\(chainGuardrailIndices.count)"])
+                        viewModel.chainUnchainedSteps()
+                        chainGuardrailIndices = []
+                        submitPipeline()
+                    }
+                    Button("Start anyway") {
+                        Telemetry.breadcrumb("pipeline", "chain guardrail start anyway",
+                            data: ["steps": "\(chainGuardrailIndices.count)"])
+                        chainGuardrailIndices = []
+                        submitPipeline()
+                    }
+                    Button("Cancel", role: .cancel) {
+                        chainGuardrailIndices = []
+                    }
+                } message: {
+                    Text(chainGuardrailMessage)
                 }
             }
             .appearanceColorScheme()
@@ -2084,7 +2114,7 @@ extension ConduitUI {
 
         private var startButton: some View {
             ConduitUI.ActionButton(variant: .primary, tint: neon.accent) {
-                submitPipeline()
+                attemptStart()
             } label: {
                 HStack(spacing: 8) {
                     if isSubmitting {
@@ -2107,6 +2137,30 @@ extension ConduitUI {
             title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || viewModel.steps.isEmpty
+        }
+
+        /// Chain guardrail gate -- runs on every Start tap (including a
+        /// pipeline loaded "From template", since the check runs here rather
+        /// than at load time). Shows the confirm alert when any top-level
+        /// step after the first is still `input_from_prev: "none"`;
+        /// otherwise starts immediately.
+        private func attemptStart() {
+            let unchained = viewModel.unchainedStepIndices()
+            guard !unchained.isEmpty else {
+                submitPipeline()
+                return
+            }
+            Telemetry.breadcrumb("pipeline", "chain guardrail shown",
+                data: ["steps": "\(unchained.count)"])
+            chainGuardrailIndices = unchained
+        }
+
+        /// "Step(s) N won't receive the previous step's output." -- 1-based
+        /// step numbers, matching the numbering shown on the block cards.
+        private var chainGuardrailMessage: String {
+            let numbers = chainGuardrailIndices.map { "\($0 + 1)" }.joined(separator: ", ")
+            let noun = chainGuardrailIndices.count == 1 ? "Step" : "Steps"
+            return "\(noun) \(numbers) won't receive the previous step's output."
         }
 
         // MARK: Helpers

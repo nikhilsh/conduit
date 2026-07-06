@@ -150,6 +150,31 @@ extension ConduitUI {
             steps.firstIndex(where: { $0.id == id })
         }
 
+        // MARK: Chain guardrail
+        //
+        // Start-button last-line-of-defense (owner hit this twice: a saved
+        // template/draft carries "none" forever even though #911 defaults
+        // brand-NEW steps to "output"). Top-level steps only -- sub-steps
+        // (branch/loop Then/Else/body) inherit context differently and are
+        // excluded from this check entirely.
+
+        /// Indices (0-based, into `steps`) of top-level steps after the
+        /// first whose `inputFromPrev` is still `"none"` -- these silently
+        /// drop the previous step's reply from their prompt. Step 0 is
+        /// always excluded (there is no previous step to chain from).
+        func unchainedStepIndices() -> [Int] {
+            steps.indices.filter { $0 > 0 && steps[$0].inputFromPrev == "none" }
+        }
+
+        /// "Chain steps" resolution offered by the guardrail alert: flips
+        /// every currently-unchained top-level step to `"output"`. Never
+        /// touches step 0 or sub-steps.
+        func chainUnchainedSteps() {
+            for i in unchainedStepIndices() {
+                steps[i].inputFromPrev = "output"
+            }
+        }
+
         func applyTemplate(_ tmpl: PipelineTemplate) {
             steps = tmpl.steps.map { s in
                 var step = PipelineStep(

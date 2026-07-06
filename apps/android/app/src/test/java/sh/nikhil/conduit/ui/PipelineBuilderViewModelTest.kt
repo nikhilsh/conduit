@@ -283,4 +283,69 @@ class PipelineBuilderViewModelTest {
         assertEquals("loop", loopJson.getString("kind"))
         assertEquals(2, loopJson.getJSONObject("loop").getInt("max_iterations"))
     }
+
+    // ---- Chain guardrail (Start-button last-line-of-defense) ------------
+
+    @Test
+    fun unchainedStepIndicesEmptyWhenAllChained() {
+        val a = PipelineStepDraft(inputFromPrev = "none")
+        val b = PipelineStepDraft(inputFromPrev = "output")
+        val c = PipelineStepDraft(inputFromPrev = "memory+output")
+        val vm = PipelineBuilderViewModel(listOf(a, b, c))
+
+        assertTrue(vm.unchainedStepIndices().isEmpty())
+    }
+
+    @Test
+    fun unchainedStepIndicesCatchesNoneStepsAfterTheFirst() {
+        val a = PipelineStepDraft(inputFromPrev = "none")
+        val b = PipelineStepDraft(inputFromPrev = "none")
+        val c = PipelineStepDraft(inputFromPrev = "output")
+        val d = PipelineStepDraft(inputFromPrev = "none")
+        val vm = PipelineBuilderViewModel(listOf(a, b, c, d))
+
+        assertEquals(listOf(1, 3), vm.unchainedStepIndices())
+    }
+
+    @Test
+    fun unchainedStepIndicesIgnoresStepZero() {
+        // Step 0's "none" is expected (there is no previous step) and must
+        // never trigger the guardrail.
+        val a = PipelineStepDraft(inputFromPrev = "none")
+        val vm = PipelineBuilderViewModel(listOf(a))
+
+        assertTrue(vm.unchainedStepIndices().isEmpty())
+    }
+
+    @Test
+    fun unchainedStepIndicesIgnoresSubSteps() {
+        // A branch/loop sub-step's own "none" first-of-arm is legitimate
+        // (task-2a precedent) and out of scope for this top-level-only check
+        // regardless of the parent step's own index or chaining state.
+        val vm = PipelineBuilderViewModel()
+        vm.addControlFlowStep("loop")
+        val stepId = vm.steps[1].id
+        vm.addSubStep(stepId, PipelineSubStepArm.BODY)
+        val secondBody = vm.steps[1].loopBody[1].copy(inputFromPrev = "none")
+        vm.updateSubStep(stepId, PipelineSubStepArm.BODY, secondBody)
+
+        // The parent loop step itself (index 1) defaults to "output" via
+        // addControlFlowStep, so only its sub-steps carry "none" here.
+        assertTrue(vm.unchainedStepIndices().isEmpty())
+    }
+
+    @Test
+    fun chainUnchainedStepsFlipsOnlyUnchainedTopLevelSteps() {
+        val a = PipelineStepDraft(inputFromPrev = "none")
+        val b = PipelineStepDraft(inputFromPrev = "none")
+        val c = PipelineStepDraft(inputFromPrev = "memory")
+        val vm = PipelineBuilderViewModel(listOf(a, b, c))
+
+        vm.chainUnchainedSteps()
+
+        assertEquals("step 0 must never be rewritten", "none", vm.steps[0].inputFromPrev)
+        assertEquals("output", vm.steps[1].inputFromPrev)
+        assertEquals("an already-set non-none value must not be clobbered", "memory", vm.steps[2].inputFromPrev)
+        assertTrue(vm.unchainedStepIndices().isEmpty())
+    }
 }

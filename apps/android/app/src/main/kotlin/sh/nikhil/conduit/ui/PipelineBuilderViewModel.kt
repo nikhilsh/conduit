@@ -161,6 +161,35 @@ class PipelineBuilderViewModel(initialSteps: List<PipelineStepDraft> = listOf(Pi
         selectedStepId = steps.firstOrNull()?.id
     }
 
+    // ---- Chain guardrail ---------------------------------------------
+    //
+    // Start-button last-line-of-defense (owner hit this twice: a saved
+    // template/draft carries "none" forever even though #911 defaults
+    // brand-NEW steps to "output"). Top-level steps only -- sub-steps
+    // (branch/loop Then/Else/body) inherit context differently and are
+    // excluded from this check entirely. Mirror of iOS
+    // `PipelineBuilderViewModel.unchainedStepIndices`/`chainUnchainedSteps`.
+
+    /**
+     * Indices (0-based, into `steps`) of top-level steps after the first
+     * whose `inputFromPrev` is still `"none"` -- these silently drop the
+     * previous step's reply from their prompt. Step 0 is always excluded
+     * (there is no previous step to chain from).
+     */
+    fun unchainedStepIndices(): List<Int> =
+        steps.indices.filter { it > 0 && steps[it].inputFromPrev == "none" }
+
+    /**
+     * "Chain steps" resolution offered by the guardrail dialog: flips every
+     * currently-unchained top-level step to `"output"`. Never touches step 0
+     * or sub-steps.
+     */
+    fun chainUnchainedSteps() {
+        val unchained = unchainedStepIndices().toSet()
+        if (unchained.isEmpty()) return
+        steps = steps.mapIndexed { i, s -> if (i in unchained) s.copy(inputFromPrev = "output") else s }
+    }
+
     /** `/api/pipeline` create-request body -- same shape/encoder as Phase 1. */
     fun createRequestJson(title: String, task: String, cwd: String, base: String): JSONObject =
         JSONObject().apply {
