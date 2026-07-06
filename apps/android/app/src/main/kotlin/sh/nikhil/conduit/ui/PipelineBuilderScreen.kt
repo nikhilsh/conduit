@@ -597,6 +597,9 @@ fun PipelineBuilderScreen(
 
     var isCreating by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    // Chain guardrail (Start-button last-line-of-defense) -- non-empty means
+    // the confirm dialog is showing for these 0-based step indices.
+    var chainGuardrailIndices by remember { mutableStateOf<List<Int>>(emptyList()) }
 
     // Template state
     var templates by remember { mutableStateOf<List<PipelineTemplateDraft>>(emptyList()) }
@@ -833,6 +836,25 @@ fun PipelineBuilderScreen(
         }
     }
 
+    // Chain guardrail: last-line-of-defense at Start, since a saved
+    // template/draft carries "none" forever even though #911 defaults
+    // brand-new steps to "output" (owner hit this twice -- "step 2 just did
+    // its own thing"). Runs on every Start tap (including a pipeline loaded
+    // "From template", since the check runs here rather than at load time).
+    fun attemptStart() {
+        val unchained = viewModel.unchainedStepIndices()
+        if (unchained.isEmpty()) {
+            postPipeline()
+            return
+        }
+        Telemetry.breadcrumb(
+            "pipeline",
+            "chain_guardrail_shown",
+            mapOf("steps" to unchained.size.toString()),
+        )
+        chainGuardrailIndices = unchained
+    }
+
     Scaffold(
         containerColor = neon.bg,
         topBar = {
@@ -915,7 +937,7 @@ fun PipelineBuilderScreen(
                 canStart = canStart,
                 isCreating = isCreating,
                 isSavingTemplate = isSavingTemplate,
-                onStart = ::postPipeline,
+                onStart = ::attemptStart,
                 onSaveTemplate = ::saveAsTemplate,
                 onOpenSubStepEditor = { subStepEditTarget = it },
             )
@@ -1124,6 +1146,47 @@ fun PipelineBuilderScreen(
             text = { Text(msg) },
             confirmButton = {
                 TextButton(onClick = { errorMessage = null }) { Text("OK") }
+            },
+        )
+    }
+
+    // Chain guardrail confirm dialog (Start-button last-line-of-defense).
+    if (chainGuardrailIndices.isNotEmpty()) {
+        val numbers = chainGuardrailIndices.joinToString(", ") { (it + 1).toString() }
+        val noun = if (chainGuardrailIndices.size == 1) "Step" else "Steps"
+        AlertDialog(
+            onDismissRequest = { chainGuardrailIndices = emptyList() },
+            title = { Text("Steps aren't chained") },
+            text = { Text("$noun $numbers won't receive the previous step's output.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        Telemetry.breadcrumb(
+                            "pipeline",
+                            "chain_guardrail_chain",
+                            mapOf("steps" to chainGuardrailIndices.size.toString()),
+                        )
+                        viewModel.chainUnchainedSteps()
+                        chainGuardrailIndices = emptyList()
+                        postPipeline()
+                    },
+                ) { Text("Chain steps") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(
+                        onClick = {
+                            Telemetry.breadcrumb(
+                                "pipeline",
+                                "chain_guardrail_start_anyway",
+                                mapOf("steps" to chainGuardrailIndices.size.toString()),
+                            )
+                            chainGuardrailIndices = emptyList()
+                            postPipeline()
+                        },
+                    ) { Text("Start anyway") }
+                    TextButton(onClick = { chainGuardrailIndices = emptyList() }) { Text("Cancel") }
+                }
             },
         )
     }

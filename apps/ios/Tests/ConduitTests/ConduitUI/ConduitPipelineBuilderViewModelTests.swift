@@ -281,4 +281,65 @@ struct ConduitPipelineBuilderViewModelTests {
         #expect(req.steps[1].kind == "loop")
         #expect(req.steps[1].loop?.max_iterations == 2)
     }
+
+    // MARK: - Chain guardrail (Start-button last-line-of-defense)
+
+    @Test func unchainedStepIndicesEmptyWhenAllChained() {
+        var a = ConduitUI.PipelineStep(); a.inputFromPrev = "none"
+        var b = ConduitUI.PipelineStep(); b.inputFromPrev = "output"
+        var c = ConduitUI.PipelineStep(); c.inputFromPrev = "memory+output"
+        let vm = ConduitUI.PipelineBuilderViewModel(steps: [a, b, c])
+
+        #expect(vm.unchainedStepIndices().isEmpty)
+    }
+
+    @Test func unchainedStepIndicesCatchesNoneStepsAfterTheFirst() {
+        var a = ConduitUI.PipelineStep(); a.inputFromPrev = "none"
+        var b = ConduitUI.PipelineStep(); b.inputFromPrev = "none"
+        var c = ConduitUI.PipelineStep(); c.inputFromPrev = "output"
+        var d = ConduitUI.PipelineStep(); d.inputFromPrev = "none"
+        let vm = ConduitUI.PipelineBuilderViewModel(steps: [a, b, c, d])
+
+        #expect(vm.unchainedStepIndices() == [1, 3])
+    }
+
+    @Test func unchainedStepIndicesIgnoresStepZero() {
+        // Step 0's "none" is expected (there is no previous step) and must
+        // never trigger the guardrail.
+        var a = ConduitUI.PipelineStep(); a.inputFromPrev = "none"
+        let vm = ConduitUI.PipelineBuilderViewModel(steps: [a])
+
+        #expect(vm.unchainedStepIndices().isEmpty)
+    }
+
+    @Test func unchainedStepIndicesIgnoresSubSteps() {
+        // A branch/loop sub-step's own "none" first-of-arm is legitimate
+        // (task-2a precedent) and out of scope for this top-level-only check
+        // regardless of the parent step's own index or chaining state.
+        let vm = ConduitUI.PipelineBuilderViewModel()
+        vm.addControlFlowStep(kind: "loop")
+        let stepID = vm.steps[1].id
+        vm.addSubStep(stepID: stepID, arm: .body)
+        var secondBody = vm.steps[1].loopBody[1]
+        secondBody.inputFromPrev = "none"
+        vm.updateSubStep(stepID: stepID, arm: .body, subStep: secondBody)
+
+        // The parent loop step itself (index 1) defaults to "output" via
+        // addControlFlowStep, so only its sub-steps carry "none" here.
+        #expect(vm.unchainedStepIndices().isEmpty)
+    }
+
+    @Test func chainUnchainedStepsFlipsOnlyUnchainedTopLevelSteps() {
+        var a = ConduitUI.PipelineStep(); a.inputFromPrev = "none"
+        var b = ConduitUI.PipelineStep(); b.inputFromPrev = "none"
+        var c = ConduitUI.PipelineStep(); c.inputFromPrev = "memory"
+        let vm = ConduitUI.PipelineBuilderViewModel(steps: [a, b, c])
+
+        vm.chainUnchainedSteps()
+
+        #expect(vm.steps[0].inputFromPrev == "none", "step 0 must never be rewritten")
+        #expect(vm.steps[1].inputFromPrev == "output")
+        #expect(vm.steps[2].inputFromPrev == "memory", "an already-set non-none value must not be clobbered")
+        #expect(vm.unchainedStepIndices().isEmpty)
+    }
 }
