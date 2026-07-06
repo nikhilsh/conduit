@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowOutward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -87,6 +88,12 @@ fun AgentPickerSheet(
     // DirectoryStep.onCreate as the initialPrompt fallback when no harness
     // bootstrap prompt is set. Mirrors iOS ConduitAgentPickerSheet.initialPrompt.
     initialPrompt: String? = null,
+    // In-sheet discoverability (device feedback: a pipeline was only
+    // reachable via the command palette / "+" long-press). Tapping the
+    // "Multi-step pipeline" row dismisses this sheet and asks the caller to
+    // present the Builder. Default no-op so existing call sites compile
+    // without change; the row self-gates on `store.pipelinesEnabled`.
+    onOpenPipelineBuilder: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -143,6 +150,11 @@ fun AgentPickerSheet(
                 onSignIn = { provider ->
                     loginAutoStartProvider = OAuthProvider.fromRaw(provider)
                     showAgentLogin = true
+                },
+                onOpenPipelineBuilder = {
+                    Telemetry.breadcrumb("pipeline", "new_session_sheet_row_tapped")
+                    onDismiss()
+                    onOpenPipelineBuilder()
                 },
             )
         } else {
@@ -208,6 +220,7 @@ private fun AgentStep(
     onSelectServer: (String) -> Unit,
     onPick: (String) -> Unit,
     onSignIn: (provider: String) -> Unit = {},
+    onOpenPipelineBuilder: () -> Unit = {},
 ) {
     val neon = LocalNeonTheme.current
     val appearance = sh.nikhil.conduit.LocalAppearanceStore.current
@@ -396,6 +409,41 @@ private fun AgentStep(
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
+            }
+        }
+        // In-sheet discoverability: a compact, non-primary row at the
+        // bottom -- doesn't interrupt the agent-selection flow above.
+        val pipelinesEnabled by store.pipelinesEnabled.collectAsState()
+        if (pipelinesEnabled) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface)
+                    .clickable(onClick = onOpenPipelineBuilder)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.CallSplit,
+                    contentDescription = null,
+                    tint = neon.accent,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    "Multi-step pipeline",
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                    color = neon.text,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    Icons.Filled.ChevronRight,
+                    contentDescription = null,
+                    tint = neon.textFaint,
+                    modifier = Modifier.size(16.dp),
+                )
             }
         }
         Spacer(Modifier.height(8.dp))

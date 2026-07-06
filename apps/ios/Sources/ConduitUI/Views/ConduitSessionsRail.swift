@@ -28,6 +28,15 @@ extension ConduitUI {
         @State private var showSearch = false
         @State private var showAgentPicker = false
         @State private var showOnboarding = false
+        /// Fan-out surface, reachable from the "+" long-press menu (mirrors
+        /// ConduitHomeView's bottom-bar FAB menu).
+        @State private var showFanOut = false
+        /// Pipeline builder, reachable from the "+" long-press menu.
+        @State private var showPipelineBuilder = false
+        /// Set when the new-session sheet's "Multi-step pipeline" row is
+        /// tapped, so the Builder presents AFTER the agent picker sheet
+        /// fully dismisses (avoids the iOS double-sheet race).
+        @State private var pendingOpenPipelineBuilder = false
 
         var body: some View {
             @Bindable var store = store
@@ -68,10 +77,61 @@ extension ConduitUI {
                     embedded: false
                 )
             }
-            .sheet(isPresented: $showAgentPicker) {
-                ConduitUI.AgentPickerSheet(initialPrompt: nil)
+            .sheet(isPresented: $showAgentPicker, onDismiss: {
+                if pendingOpenPipelineBuilder {
+                    pendingOpenPipelineBuilder = false
+                    showPipelineBuilder = true
+                }
+            }) {
+                ConduitUI.AgentPickerSheet(
+                    initialPrompt: nil,
+                    onOpenPipelineBuilder: { pendingOpenPipelineBuilder = true }
+                )
+            }
+            .sheet(isPresented: $showFanOut) {
+                ConduitUI.FanOutView(
+                    onLaunch: { task, branches in
+                        for branch in branches {
+                            store.createSession(assistant: "claude", branch: branch, initialPrompt: task)
+                        }
+                    }
+                )
+                .environment(store)
+                .presentationDetents([.medium, .large])
+            }
+            .sheet(isPresented: $showPipelineBuilder) {
+                ConduitUI.PipelineBuilderView()
+                    .environment(store)
+                    .presentationDetents([.large])
             }
             .neonAccentTint()
+        }
+
+        /// Long-press quick-action menu shared by both "+" affordances
+        /// (header circle + pinned bottom button). Plain tap is unchanged.
+        @ViewBuilder
+        private var plusButtonMenu: some View {
+            Button {
+                if store.harness.canIssueCommands {
+                    showAgentPicker = true
+                } else {
+                    showAddServer = true
+                }
+            } label: {
+                Label("New session", systemImage: "plus.square")
+            }
+            if store.pipelinesEnabled {
+                Button {
+                    showPipelineBuilder = true
+                } label: {
+                    Label("New pipeline", systemImage: "arrow.triangle.merge")
+                }
+            }
+            Button {
+                showFanOut = true
+            } label: {
+                Label("Fan out", systemImage: "square.grid.2x2")
+            }
         }
 
         // MARK: Header (brand + server chip + overflow)
@@ -108,6 +168,9 @@ extension ConduitUI {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("New session")
+            .contextMenu {
+                plusButtonMenu
+            }
         }
 
         private var wordmark: some View {
@@ -229,6 +292,9 @@ extension ConduitUI {
                 )
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                plusButtonMenu
+            }
             .padding(.horizontal, 12)
             .padding(.bottom, 12)
         }

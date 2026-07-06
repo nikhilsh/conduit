@@ -165,6 +165,8 @@ fun AppRoot(
                         onOpenBoxes = { showBoxes = true },
                         onOpenTranscript = { row -> transcriptTarget = row },
                         onHome = { store.select(null) },
+                        onNewPipeline = { showPipelineBuilder = true },
+                        onFanOut = { showFanOut = true },
                     )
                     VerticalDivider(color = neon.border)
                     Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
@@ -184,6 +186,8 @@ fun AppRoot(
                                 onOpenApprovals = { showApprovals = true },
                                 onOpenBoxHealth = { server -> boxHealthTarget = server },
                                 onOpenPipelines = { showPipelineList = true },
+                                onNewPipeline = { showPipelineBuilder = true },
+                                onFanOut = { showFanOut = true },
                                 // The tablet rail header already shows a Settings
                                 // gear -- don't render a second one in the center.
                                 showSettingsButton = false,
@@ -240,6 +244,8 @@ fun AppRoot(
                         onOpenApprovals = { showApprovals = true },
                         onOpenBoxHealth = { server -> boxHealthTarget = server },
                         onOpenPipelines = { showPipelineList = true },
+                        onNewPipeline = { showPipelineBuilder = true },
+                        onFanOut = { showFanOut = true },
                         onOpenOnboarding = {
                             onboardingEntry = FeatureFlags.OnboardingEntry.replay
                             showOnboarding = true
@@ -290,6 +296,7 @@ fun AppRoot(
             store = store,
             headerNote = null,
             initialPrompt = paletteInitialPrompt,
+            onOpenPipelineBuilder = { showPipelineBuilder = true },
             onDismiss = {
                 showAgentPicker = false
                 paletteInitialPrompt = null
