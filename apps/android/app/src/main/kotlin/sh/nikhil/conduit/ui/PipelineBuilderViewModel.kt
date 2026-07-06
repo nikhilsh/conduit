@@ -37,7 +37,12 @@ class PipelineBuilderViewModel(initialSteps: List<PipelineStepDraft> = listOf(Pi
     val canDeleteStep: Boolean get() = steps.size > 1
 
     fun addStep() {
-        val s = PipelineStepDraft()
+        // Task-2a fix (config-sheet redesign): a step after the first
+        // defaults to "output" so the previous step's reply actually
+        // reaches it -- the plain "none" default was a silent no-handoff
+        // bug the owner hit directly. Step 0 keeps "none" (there is no
+        // previous step). Mirror of iOS `PipelineBuilderViewModel.addStep`.
+        val s = PipelineStepDraft(inputFromPrev = if (steps.isEmpty()) "none" else "output")
         steps = steps + s
         selectedStepId = s.id
     }
@@ -51,7 +56,7 @@ class PipelineBuilderViewModel(initialSteps: List<PipelineStepDraft> = listOf(Pi
      * default than an empty Then).
      */
     fun addControlFlowStep(kind: String) {
-        val s = PipelineStepDraft(kind = kind)
+        val s = PipelineStepDraft(kind = kind, inputFromPrev = if (steps.isEmpty()) "none" else "output")
         steps = steps + s
         selectedStepId = s.id
     }
@@ -89,7 +94,12 @@ class PipelineBuilderViewModel(initialSteps: List<PipelineStepDraft> = listOf(Pi
     fun addSubStep(stepId: String, arm: PipelineSubStepArm) {
         steps = steps.map { s ->
             if (s.id != stepId) return@map s
-            withSubStepArray(arm, s, subStepArray(arm, s) + PipelineSubStepDraft())
+            val arr = subStepArray(arm, s)
+            // Task-2a fix: same "output after the first" default within a
+            // Then/Else/body sub-stack -- the arm's own first step keeps
+            // "none".
+            val sub = PipelineSubStepDraft(inputFromPrev = if (arr.isEmpty()) "none" else "output")
+            withSubStepArray(arm, s, arr + sub)
         }
     }
 

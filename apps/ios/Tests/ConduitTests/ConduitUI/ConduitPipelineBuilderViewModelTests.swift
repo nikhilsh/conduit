@@ -204,6 +204,67 @@ struct ConduitPipelineBuilderViewModelTests {
         #expect(vm.steps[1].loopBody[0].id == secondID)
     }
 
+    // MARK: - Config-sheet redesign: task 2a input_from_prev defaults
+
+    @Test func addStepDefaultsInputFromPrevToOutputAfterTheFirst() {
+        let vm = ConduitUI.PipelineBuilderViewModel()
+        // Step 0 (seeded by init) keeps "none" -- there is no previous step.
+        #expect(vm.steps[0].inputFromPrev == "none")
+
+        vm.addStep()
+        #expect(vm.steps[1].inputFromPrev == "output", "a step after the first must default to output, not silently drop the handoff")
+
+        vm.addStep()
+        #expect(vm.steps[2].inputFromPrev == "output")
+    }
+
+    @Test func addControlFlowStepDefaultsInputFromPrevToOutputAfterTheFirst() {
+        let vm = ConduitUI.PipelineBuilderViewModel()
+        vm.addControlFlowStep(kind: "branch")
+        #expect(vm.steps[1].inputFromPrev == "output")
+    }
+
+    @Test func addSubStepDefaultsInputFromPrevToOutputAfterTheFirstInItsArm() {
+        let vm = ConduitUI.PipelineBuilderViewModel()
+        vm.addControlFlowStep(kind: "branch")
+        let stepID = vm.steps[1].id
+
+        // The control-flow step's starter Then sub-step (index 0 of its own
+        // arm) keeps "none".
+        #expect(vm.steps[1].branchThen[0].inputFromPrev == "none")
+
+        vm.addSubStep(stepID: stepID, arm: .then)
+        #expect(vm.steps[1].branchThen[1].inputFromPrev == "output")
+
+        // Else starts a FRESH arm -- its own first sub-step is index 0 of
+        // Else, so it keeps "none" even though the parent step is not first.
+        vm.addSubStep(stepID: stepID, arm: .elseArm)
+        #expect(vm.steps[1].branchElse[0].inputFromPrev == "none")
+        vm.addSubStep(stepID: stepID, arm: .elseArm)
+        #expect(vm.steps[1].branchElse[1].inputFromPrev == "output")
+    }
+
+    // MARK: - Config-sheet redesign: task 1 model dedupe regression
+    //
+    // The pipeline Builder's block-config model row used to hand-roll its
+    // own "Default" + `ForEach(catalog)` menu, which double-listed the
+    // catalog's own "" (recommended) entry alongside the hardcoded "Default"
+    // row (owner screenshot). The redesign deletes that hand-rolled list and
+    // reuses `ForkOptions.models(forAssistant:catalog:)` -- assert it never
+    // yields two rows for the same "" wire value.
+    @Test func pipelineModelOptionsNeverDoubleListDefault() {
+        let catalog: [ConduitUI.AgentModel] = [
+            .init(id: "", displayName: "Default (recommended)",
+                  description: "Opus 4.8 with 1M context",
+                  isDefault: true, efforts: ["low", "medium", "high", "xhigh", "max"]),
+            .init(id: "opus", displayName: "Opus 4.8", isDefault: false, efforts: ["low", "medium", "high"]),
+            .init(id: "sonnet", displayName: "Sonnet 4.6", isDefault: false, efforts: ["low", "medium", "high"]),
+        ]
+        let options = ConduitUI.ForkOptions.models(forAssistant: "claude", catalog: catalog)
+        #expect(options.filter { $0.isEmpty }.count == 1, "exactly one Default row, not a hardcoded row PLUS the catalog's own empty-string entry")
+        #expect(options == ["", "opus", "sonnet"])
+    }
+
     @Test func createRequestRoundTripsBranchAndLoopBlocks() throws {
         var branchStep = ConduitUI.PipelineStep()
         branchStep.kind = "branch"

@@ -875,92 +875,18 @@ extension ConduitUI {
         }
 
         /// Conduit-native model picker presented as a detented sheet.
-        /// Each option is a card: display name + description, RECOMMENDED
-        /// badge when it is the agent's default model, checkmark when selected.
+        /// Extracted to `ConduitUI.ModelPickerSheet` (config-sheet redesign)
+        /// so the pipeline Builder's step/sub-step/fan-out-run model rows
+        /// share this exact implementation instead of re-rolling a stock
+        /// `Menu`/`Picker` per call site.
         private var modelPickerSheet: some View {
-            NavigationStack {
-                ZStack {
-                    GlassAppBackground()
-                    ScrollView {
-                        VStack(spacing: 8) {
-                            ForEach(modelOptions, id: \.self) { option in
-                                let entry = ConduitUI.ForkOptions.catalogEntry(for: option, in: catalog)
-                                let isSelected = option == model
-                                let isRecommended = entry?.isDefault == true || option == ConduitUI.ForkOptions.inheritModel
-                                let label = ConduitUI.ForkOptions.modelLabel(option, catalog: catalog)
-                                let detail = ConduitUI.ForkOptions.modelDetail(option, catalog: catalog)
-                                Button {
-                                    model = option
-                                    Telemetry.breadcrumb("new_session", "model picked",
-                                        data: ["model": option, "agent": agentKind])
-                                    showModelPicker = false
-                                } label: {
-                                    HStack(alignment: .top, spacing: 12) {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            HStack(spacing: 6) {
-                                                Text(label)
-                                                    .font(neon.sans(14).weight(.semibold))
-                                                    .foregroundStyle(neon.text)
-                                                if isRecommended {
-                                                    Text("RECOMMENDED")
-                                                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                                                        .tracking(0.4)
-                                                        .foregroundStyle(tint)
-                                                        .padding(.horizontal, 5)
-                                                        .padding(.vertical, 2)
-                                                        .background(Capsule().fill(tint.opacity(0.14)))
-                                                        .overlay(Capsule().stroke(tint.opacity(0.35), lineWidth: 1))
-                                                }
-                                            }
-                                            if let d = detail, !d.isEmpty {
-                                                Text(d)
-                                                    .font(neon.sans(12))
-                                                    .foregroundStyle(neon.textDim)
-                                                    .fixedSize(horizontal: false, vertical: true)
-                                            }
-                                        }
-                                        Spacer(minLength: 0)
-                                        if isSelected {
-                                            Image(systemName: "checkmark")
-                                                .font(.system(size: 13, weight: .bold))
-                                                .foregroundStyle(tint)
-                                        }
-                                    }
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 12)
-                                    .neonCardSurface(
-                                        neon,
-                                        fill: isSelected ? tint.opacity(neon.dark ? 0.12 : 0.07) : neon.surface,
-                                        cornerRadius: 13,
-                                        border: isSelected ? tint.opacity(0.45) : neon.border
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 18)
-                    }
-                    .scrollIndicators(.hidden)
-                }
-                .navigationTitle("Model")
-                .navigationBarTitleDisplayMode(.inline)
-                .tint(tint)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button {
-                            showModelPicker = false
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(neon.textFaint)
-                        }
-                    }
-                }
-            }
-            .presentationDetents([.medium, .large])
-            .presentationCornerRadius(26)
-            .appearanceColorScheme()
+            ConduitUI.ModelPickerSheet(
+                agentKind: agentKind,
+                catalog: catalog,
+                model: $model,
+                tint: tint,
+                telemetryContext: "new_session"
+            )
         }
 
         @ViewBuilder

@@ -42,7 +42,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -82,6 +81,7 @@ import sh.nikhil.conduit.ui.components.ConduitActionPill
 import sh.nikhil.conduit.ui.components.ConduitButton
 import sh.nikhil.conduit.ui.components.ConduitCard
 import sh.nikhil.conduit.ui.components.ConduitChip
+import sh.nikhil.conduit.ui.components.ConduitToggleRow
 import sh.nikhil.conduit.ui.components.PipelineTopologyItem
 import sh.nikhil.conduit.ui.components.PipelineTopologyRail
 import java.net.HttpURLConnection
@@ -296,6 +296,102 @@ internal fun modelRowHidden(catalog: List<SessionStore.AgentModel>?, descriptor:
 }
 private val ROLE_PRESETS = listOf("researcher", "architect", "engineer", "custom")
 private val INPUT_OPTIONS = listOf("none", "output", "memory", "memory+output")
+
+// ---------------------------------------------------------------------------
+// Themed capsule controls (config-sheet redesign)
+//
+// Replaces the stock `DropdownMenu`/`OutlinedTextField(readOnly)` rows and
+// raw `Row` of hand-rolled capsules used throughout the step config
+// sheet/inspector with `ConduitChip` in a Row -- the exact idiom the
+// new-session mode picker (`AgentPickerSheet.kt` `modeBlock`) already uses.
+// Owner ask: "make it look like the rest of the app".
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun CapsuleSegments(
+    options: List<String>,
+    selected: String,
+    onSelect: (String) -> Unit,
+    label: (String) -> String = { it },
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        options.forEach { opt ->
+            ConduitChip(
+                label = label(opt),
+                selected = selected == opt,
+                modifier = Modifier.clickable { onSelect(opt) },
+            )
+        }
+    }
+}
+
+/** Agent segment with a leading [AgentGlyph] per option. */
+@Composable
+private fun AgentCapsuleSegments(
+    options: List<String>,
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        options.forEach { opt ->
+            val isSelected = selected == opt
+            Row(
+                modifier = Modifier
+                    .glassCapsule(tint = if (isSelected) neon.accent else null)
+                    .clickable { onSelect(opt) }
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                AgentGlyph(assistant = opt, size = 14.dp)
+                Text(
+                    opt,
+                    fontFamily = neon.mono,
+                    fontSize = 11.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                    color = if (isSelected) neon.accentText else neon.textDim,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/** Auto/Plan capsule + helper caption -- identical copy to the new-session
+ * `modeBlock` (`AgentPickerSheet.kt`). */
+@Composable
+private fun ModeCapsuleRow(mode: String, onChange: (String) -> Unit) {
+    val neon = LocalNeonTheme.current
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        CapsuleSegments(
+            options = listOf("", "plan"),
+            selected = mode,
+            onSelect = onChange,
+            label = { if (it == "plan") "Plan" else "Auto" },
+        )
+        Text(
+            "Plan = read-only; agent explores and proposes without editing.",
+            fontFamily = neon.mono,
+            fontSize = 10.5.sp,
+            color = neon.textFaint,
+        )
+    }
+}
+
+/** Caption explaining the "input from prev" segments -- device feedback:
+ * the control's meaning wasn't obvious (owner-hit silent no-handoff bug,
+ * task 2b). */
+@Composable
+private fun InputFromPrevCaption() {
+    val neon = LocalNeonTheme.current
+    Text(
+        "output = the previous step's reply is included in this step's prompt",
+        fontFamily = neon.mono,
+        fontSize = 10.5.sp,
+        color = neon.textFaint,
+    )
+}
 
 /** Preset prompt templates per role. */
 private fun promptForRole(role: String): String = when (role) {
@@ -1787,28 +1883,15 @@ private fun StepConfigEditor(
         )
         return
     }
-    // Agent type dropdown
-    var agentExpanded by remember(step.id) { mutableStateOf(false) }
-    Box {
-        OutlinedTextField(
-            value = step.agentType,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Agent type") },
-            modifier = Modifier.fillMaxWidth().clickable { agentExpanded = true },
-            enabled = false,
+    // Agent type -- themed capsule segments + AgentGlyph, matching the
+    // new-session agent picker's per-agent tinting.
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SectionLabel("Agent")
+        AgentCapsuleSegments(
+            options = agentOptions,
+            selected = step.agentType,
+            onSelect = { onUpdate(step.copy(agentType = it)) },
         )
-        DropdownMenu(expanded = agentExpanded, onDismissRequest = { agentExpanded = false }) {
-            agentOptions.forEach { agent ->
-                DropdownMenuItem(
-                    text = { Text(agent, fontFamily = neon.mono) },
-                    onClick = {
-                        onUpdate(step.copy(agentType = agent))
-                        agentExpanded = false
-                    },
-                )
-            }
-        }
     }
 
     if (showBlockConfig) {
@@ -1828,29 +1911,17 @@ private fun StepConfigEditor(
         )
     }
 
-    // Role preset dropdown
-    var roleExpanded by remember(step.id) { mutableStateOf(false) }
-    Box {
-        OutlinedTextField(
-            value = step.role,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Role preset") },
-            modifier = Modifier.fillMaxWidth().clickable { roleExpanded = true },
-            enabled = false,
+    // Role preset
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SectionLabel("Role")
+        CapsuleSegments(
+            options = ROLE_PRESETS,
+            selected = step.role,
+            onSelect = { role ->
+                val newPrompt = if (role != "custom") promptForRole(role) else step.promptTemplate
+                onUpdate(step.copy(role = role, promptTemplate = newPrompt))
+            },
         )
-        DropdownMenu(expanded = roleExpanded, onDismissRequest = { roleExpanded = false }) {
-            ROLE_PRESETS.forEach { role ->
-                DropdownMenuItem(
-                    text = { Text(role, fontFamily = neon.sans) },
-                    onClick = {
-                        val newPrompt = if (role != "custom") promptForRole(role) else step.promptTemplate
-                        onUpdate(step.copy(role = role, promptTemplate = newPrompt))
-                        roleExpanded = false
-                    },
-                )
-            }
-        }
     }
 
     // Prompt template
@@ -1862,48 +1933,24 @@ private fun StepConfigEditor(
         modifier = Modifier.fillMaxWidth(),
     )
 
-    // Input from prev chips
+    // Input from prev
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            "Input from previous step",
-            fontFamily = neon.mono,
-            fontSize = 11.sp,
-            color = neon.textDim,
+        SectionLabel("Input from prev")
+        CapsuleSegments(
+            options = INPUT_OPTIONS,
+            selected = step.inputFromPrev,
+            onSelect = { onUpdate(step.copy(inputFromPrev = it)) },
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            INPUT_OPTIONS.forEach { option ->
-                val selected = step.inputFromPrev == option
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(if (selected) neon.accent else neon.surface2)
-                        .border(1.dp, if (selected) neon.accent else neon.border, RoundedCornerShape(50))
-                        .clickable { onUpdate(step.copy(inputFromPrev = option)) }
-                        .padding(horizontal = 10.dp, vertical = 5.dp),
-                ) {
-                    Text(
-                        option,
-                        fontFamily = neon.mono,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                        fontSize = 11.sp,
-                        color = if (selected) neon.accentText else neon.textDim,
-                    )
-                }
-            }
-        }
+        InputFromPrevCaption()
     }
 
-    // Gate after switch
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            "Gate after (require approval)",
-            fontFamily = neon.sans,
-            fontSize = 13.sp,
-            color = neon.text,
-            modifier = Modifier.weight(1f),
-        )
-        Switch(checked = step.gateAfter, onCheckedChange = { onUpdate(step.copy(gateAfter = it)) })
-    }
+    // Gate after toggle
+    ConduitToggleRow(
+        icon = Icons.Filled.PanTool,
+        title = "Gate after this step",
+        checked = step.gateAfter,
+        onCheckedChange = { onUpdate(step.copy(gateAfter = it)) },
+    )
 
     if (showFanout) {
         FanoutStepSection(
@@ -2274,27 +2321,13 @@ private fun SubStepConfigEditor(
     modelCatalogMap: Map<String, List<SessionStore.AgentModel>>,
     onUpdate: (PipelineSubStepDraft) -> Unit,
 ) {
-    var agentExpanded by remember(sub.id) { mutableStateOf(false) }
-    Box {
-        OutlinedTextField(
-            value = sub.agentType,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Agent type") },
-            modifier = Modifier.fillMaxWidth().clickable { agentExpanded = true },
-            enabled = false,
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SectionLabel("Agent")
+        AgentCapsuleSegments(
+            options = agentOptions,
+            selected = sub.agentType,
+            onSelect = { onUpdate(sub.copy(agentType = it)) },
         )
-        DropdownMenu(expanded = agentExpanded, onDismissRequest = { agentExpanded = false }) {
-            agentOptions.forEach { agent ->
-                DropdownMenuItem(
-                    text = { Text(agent, fontFamily = neon.mono) },
-                    onClick = {
-                        onUpdate(sub.copy(agentType = agent))
-                        agentExpanded = false
-                    },
-                )
-            }
-        }
     }
 
     if (showBlockConfig) {
@@ -2314,28 +2347,16 @@ private fun SubStepConfigEditor(
         )
     }
 
-    var roleExpanded by remember(sub.id) { mutableStateOf(false) }
-    Box {
-        OutlinedTextField(
-            value = sub.role,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Role preset") },
-            modifier = Modifier.fillMaxWidth().clickable { roleExpanded = true },
-            enabled = false,
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SectionLabel("Role")
+        CapsuleSegments(
+            options = ROLE_PRESETS,
+            selected = sub.role,
+            onSelect = { role ->
+                val newPrompt = if (role != "custom") promptForRole(role) else sub.promptTemplate
+                onUpdate(sub.copy(role = role, promptTemplate = newPrompt))
+            },
         )
-        DropdownMenu(expanded = roleExpanded, onDismissRequest = { roleExpanded = false }) {
-            ROLE_PRESETS.forEach { role ->
-                DropdownMenuItem(
-                    text = { Text(role, fontFamily = neon.sans) },
-                    onClick = {
-                        val newPrompt = if (role != "custom") promptForRole(role) else sub.promptTemplate
-                        onUpdate(sub.copy(role = role, promptTemplate = newPrompt))
-                        roleExpanded = false
-                    },
-                )
-            }
-        }
     }
 
     OutlinedTextField(
@@ -2347,40 +2368,21 @@ private fun SubStepConfigEditor(
     )
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("Input from previous step", fontFamily = neon.mono, fontSize = 11.sp, color = neon.textDim)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            INPUT_OPTIONS.forEach { option ->
-                val selected = sub.inputFromPrev == option
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(if (selected) neon.accent else neon.surface2)
-                        .border(1.dp, if (selected) neon.accent else neon.border, RoundedCornerShape(50))
-                        .clickable { onUpdate(sub.copy(inputFromPrev = option)) }
-                        .padding(horizontal = 10.dp, vertical = 5.dp),
-                ) {
-                    Text(
-                        option,
-                        fontFamily = neon.mono,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                        fontSize = 11.sp,
-                        color = if (selected) neon.accentText else neon.textDim,
-                    )
-                }
-            }
-        }
+        SectionLabel("Input from prev")
+        CapsuleSegments(
+            options = INPUT_OPTIONS,
+            selected = sub.inputFromPrev,
+            onSelect = { onUpdate(sub.copy(inputFromPrev = it)) },
+        )
+        InputFromPrevCaption()
     }
 
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            "Gate after (require approval)",
-            fontFamily = neon.sans,
-            fontSize = 13.sp,
-            color = neon.text,
-            modifier = Modifier.weight(1f),
-        )
-        Switch(checked = sub.gateAfter, onCheckedChange = { onUpdate(sub.copy(gateAfter = it)) })
-    }
+    ConduitToggleRow(
+        icon = Icons.Filled.PanTool,
+        title = "Gate after this step",
+        checked = sub.gateAfter,
+        onCheckedChange = { onUpdate(sub.copy(gateAfter = it)) },
+    )
 }
 
 @Composable
@@ -2403,114 +2405,34 @@ private fun BlockConfigSection(
     val showEffort = efforts.isNotEmpty()
     val showMode = descriptor.supportsPlanMode
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    val tint = neonAgentColor(agentType, neon)
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (showModel) {
-            var modelExpanded by remember { mutableStateOf(false) }
-            Box {
-                OutlinedTextField(
-                    value = forkModelLabel(model, catalog),
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Model") },
-                    modifier = Modifier.fillMaxWidth().clickable { modelExpanded = true },
-                    enabled = false,
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                SectionLabel("Model")
+                ModelPickerRow(
+                    assistant = agentType,
+                    model = model,
+                    catalog = catalog,
+                    onSelect = onModelChange,
                 )
-                DropdownMenu(
-                    expanded = modelExpanded,
-                    onDismissRequest = { modelExpanded = false },
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Default", fontFamily = neon.sans) },
-                        onClick = {
-                            onModelChange("")
-                            modelExpanded = false
-                        },
-                    )
-                    catalog?.forEach { m ->
-                        if (m.id.isEmpty()) return@forEach
-                        DropdownMenuItem(
-                            text = { Text(m.displayName.ifEmpty { m.id }, fontFamily = neon.mono) },
-                            onClick = {
-                                onModelChange(m.id)
-                                modelExpanded = false
-                            },
-                        )
-                    }
-                }
             }
         }
 
         if (showEffort) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    "REASONING EFFORT",
-                    fontFamily = neon.mono,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 10.sp,
-                    color = neon.textFaint,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    (listOf("") + efforts).forEach { level ->
-                        val selected = reasoningEffort == level
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(if (selected) neon.accent else neon.surface2)
-                                .border(
-                                    1.dp,
-                                    if (selected) neon.accent else neon.border,
-                                    RoundedCornerShape(50),
-                                )
-                                .clickable { onEffortChange(level) }
-                                .padding(horizontal = 10.dp, vertical = 5.dp),
-                        ) {
-                            Text(
-                                if (level.isEmpty()) "Default" else effortLabel(level),
-                                fontFamily = neon.mono,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                fontSize = 11.sp,
-                                color = if (selected) neon.accentText else neon.textDim,
-                            )
-                        }
-                    }
-                }
-            }
+            EffortDial(
+                options = efforts,
+                effort = reasoningEffort,
+                tint = tint,
+                onSelect = onEffortChange,
+                allowDefault = true,
+            )
         }
 
         if (showMode) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    "PERMISSION MODE",
-                    fontFamily = neon.mono,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 10.sp,
-                    color = neon.textFaint,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("" to "Auto", "plan" to "Plan").forEach { (value, label) ->
-                        val selected = permissionMode == value
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(if (selected) neon.accent else neon.surface2)
-                                .border(
-                                    1.dp,
-                                    if (selected) neon.accent else neon.border,
-                                    RoundedCornerShape(50),
-                                )
-                                .clickable { onModeChange(value) }
-                                .padding(horizontal = 10.dp, vertical = 5.dp),
-                        ) {
-                            Text(
-                                label,
-                                fontFamily = neon.mono,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                fontSize = 11.sp,
-                                color = if (selected) neon.accentText else neon.textDim,
-                            )
-                        }
-                    }
-                }
+                SectionLabel("Permission mode")
+                ModeCapsuleRow(mode = permissionMode, onChange = onModeChange)
             }
         }
 
@@ -2552,29 +2474,19 @@ private fun FanoutStepSection(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         // Fan out toggle row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Fan out this step",
-                fontFamily = neon.sans,
-                fontSize = 13.sp,
-                color = neon.text,
-                modifier = Modifier.weight(1f),
-            )
-            Switch(
-                checked = step.fanoutEnabled,
-                onCheckedChange = { enabled ->
-                    Telemetry.breadcrumb(
-                        "pipeline",
-                        "fanout_toggle",
-                        mapOf("enabled" to enabled.toString()),
-                    )
-                    onUpdate(step.copy(fanoutEnabled = enabled))
-                },
-            )
-        }
+        ConduitToggleRow(
+            icon = Icons.AutoMirrored.Filled.CallSplit,
+            title = "Fan out this step",
+            checked = step.fanoutEnabled,
+            onCheckedChange = { enabled ->
+                Telemetry.breadcrumb(
+                    "pipeline",
+                    "fanout_toggle",
+                    mapOf("enabled" to enabled.toString()),
+                )
+                onUpdate(step.copy(fanoutEnabled = enabled))
+            },
+        )
 
         if (step.fanoutEnabled) {
             // Run count stepper (1-6)
@@ -2689,7 +2601,6 @@ private fun FanoutStepSection(
                     color = neon.textFaint,
                 )
                 repeat(step.fanoutCount) { runIdx ->
-                    var agentExpanded by remember(runIdx) { mutableStateOf(false) }
                     val currentAgent = step.fanoutAgentTypes.getOrElse(runIdx) { step.agentType }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -2704,39 +2615,16 @@ private fun FanoutStepSection(
                             modifier = Modifier.width(44.dp),
                         )
                         Box(modifier = Modifier.weight(1f)) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(neon.surface2)
-                                    .border(1.dp, neon.border, RoundedCornerShape(8.dp))
-                                    .clickable { agentExpanded = true }
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                            ) {
-                                Text(
-                                    currentAgent,
-                                    fontFamily = neon.mono,
-                                    fontSize = 12.sp,
-                                    color = neon.text,
-                                )
-                            }
-                            DropdownMenu(
-                                expanded = agentExpanded,
-                                onDismissRequest = { agentExpanded = false },
-                            ) {
-                                agentOptions.forEach { agent ->
-                                    DropdownMenuItem(
-                                        text = { Text(agent, fontFamily = neon.mono) },
-                                        onClick = {
-                                            val arr = step.fanoutAgentTypes.toMutableList()
-                                            while (arr.size <= runIdx) arr.add(step.agentType)
-                                            arr[runIdx] = agent
-                                            onUpdate(step.copy(fanoutAgentTypes = arr))
-                                            agentExpanded = false
-                                        },
-                                    )
-                                }
-                            }
+                            AgentCapsuleSegments(
+                                options = agentOptions,
+                                selected = currentAgent,
+                                onSelect = { agent ->
+                                    val arr = step.fanoutAgentTypes.toMutableList()
+                                    while (arr.size <= runIdx) arr.add(step.agentType)
+                                    arr[runIdx] = agent
+                                    onUpdate(step.copy(fanoutAgentTypes = arr))
+                                },
+                            )
                         }
                     }
                     if (showBlockConfig) {
@@ -2787,112 +2675,43 @@ private fun RunConfigRow(
         Spacer(Modifier.width(44.dp))
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (showModel) {
-                var expanded by remember(runIdx) { mutableStateOf(false) }
-                Box {
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(neon.surface2)
-                            .border(1.dp, neon.border, RoundedCornerShape(8.dp))
-                            .clickable { expanded = true }
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "Model: " + forkModelLabel(model, catalog),
-                            fontFamily = neon.mono,
-                            fontSize = 11.sp,
-                            color = neon.textDim,
-                        )
-                    }
-                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                        DropdownMenuItem(
-                            text = { Text("Default", fontFamily = neon.sans) },
-                            onClick = {
-                                val arr = step.fanoutModels.toMutableList()
-                                while (arr.size <= runIdx) arr.add("")
-                                arr[runIdx] = ""
-                                onUpdate(step.copy(fanoutModels = arr))
-                                expanded = false
-                            },
-                        )
-                        catalog?.forEach { m ->
-                            if (m.id.isEmpty()) return@forEach
-                            DropdownMenuItem(
-                                text = { Text(m.displayName.ifEmpty { m.id }, fontFamily = neon.mono) },
-                                onClick = {
-                                    val arr = step.fanoutModels.toMutableList()
-                                    while (arr.size <= runIdx) arr.add("")
-                                    arr[runIdx] = m.id
-                                    onUpdate(step.copy(fanoutModels = arr))
-                                    expanded = false
-                                },
-                            )
-                        }
-                    }
-                }
+                ModelPickerRow(
+                    assistant = runAgent,
+                    model = model,
+                    catalog = catalog,
+                    onSelect = { picked ->
+                        val arr = step.fanoutModels.toMutableList()
+                        while (arr.size <= runIdx) arr.add("")
+                        arr[runIdx] = picked
+                        onUpdate(step.copy(fanoutModels = arr))
+                    },
+                )
             }
             if (showEffort) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    (listOf("") + efforts).forEach { level ->
-                        val selected = effort == level
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(if (selected) neon.accent else neon.surface2)
-                                .border(
-                                    1.dp,
-                                    if (selected) neon.accent else neon.border,
-                                    RoundedCornerShape(50),
-                                )
-                                .clickable {
-                                    val arr = step.fanoutReasoningEfforts.toMutableList()
-                                    while (arr.size <= runIdx) arr.add("")
-                                    arr[runIdx] = level
-                                    onUpdate(step.copy(fanoutReasoningEfforts = arr))
-                                }
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
-                        ) {
-                            Text(
-                                if (level.isEmpty()) "Default" else effortLabel(level),
-                                fontFamily = neon.mono,
-                                fontSize = 10.sp,
-                                color = if (selected) neon.accentText else neon.textDim,
-                            )
-                        }
-                    }
-                }
+                CapsuleSegments(
+                    options = listOf("") + efforts,
+                    selected = effort,
+                    onSelect = { level ->
+                        val arr = step.fanoutReasoningEfforts.toMutableList()
+                        while (arr.size <= runIdx) arr.add("")
+                        arr[runIdx] = level
+                        onUpdate(step.copy(fanoutReasoningEfforts = arr))
+                    },
+                    label = { if (it.isEmpty()) "Default" else effortLabel(it) },
+                )
             }
             if (showMode) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("" to "Auto", "plan" to "Plan").forEach { (value, label) ->
-                        val selected = mode == value
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(if (selected) neon.accent else neon.surface2)
-                                .border(
-                                    1.dp,
-                                    if (selected) neon.accent else neon.border,
-                                    RoundedCornerShape(50),
-                                )
-                                .clickable {
-                                    val arr = step.fanoutPermissionModes.toMutableList()
-                                    while (arr.size <= runIdx) arr.add("")
-                                    arr[runIdx] = value
-                                    onUpdate(step.copy(fanoutPermissionModes = arr))
-                                }
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
-                        ) {
-                            Text(
-                                label,
-                                fontFamily = neon.mono,
-                                fontSize = 10.sp,
-                                color = if (selected) neon.accentText else neon.textDim,
-                            )
-                        }
-                    }
-                }
+                CapsuleSegments(
+                    options = listOf("", "plan"),
+                    selected = mode,
+                    onSelect = { value ->
+                        val arr = step.fanoutPermissionModes.toMutableList()
+                        while (arr.size <= runIdx) arr.add("")
+                        arr[runIdx] = value
+                        onUpdate(step.copy(fanoutPermissionModes = arr))
+                    },
+                    label = { if (it == "plan") "Plan" else "Auto" },
+                )
             }
         }
     }
