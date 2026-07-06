@@ -217,9 +217,14 @@ fun ConduitToggleRow(
 
 /**
  * Small label chip using the glass capsule surface. [selected] fills the
- * capsule with [tint] (or [NeonTheme.accent]) and switches the label to
- * [NeonTheme.accentText] for legibility on the filled surface. Unselected
- * chips use the standard capsule chrome with [tint] or [NeonTheme.text].
+ * capsule with a SOLID [tint] (or [NeonTheme.accent]) and switches the
+ * label to [NeonTheme.accentText] for legibility on the filled surface --
+ * `glassCapsule(tint = ...)` only recolors the BORDER/glow, keeping the
+ * background at the plain dark `neon.surface`, so routing the selected
+ * state through it read as near-invisible `accentText` on a dark surface
+ * (owner: "selected options cannot be read", pipeline Builder #911
+ * follow-up). Unselected chips keep the standard capsule chrome with
+ * [tint] or [NeonTheme.text].
  *
  * [leadingIcon] mirrors iOS ConduitUI.Chip's `systemImage` slot: when
  * non-null a small [Icon] (~11dp) is rendered before the label text.
@@ -238,10 +243,16 @@ fun ConduitChip(
         tint != null -> tint
         else -> neon.text
     }
-    Row(
+    val chipShape = RoundedCornerShape(percent = 50)
+    val base = if (selected) {
         modifier
-            .glassCapsule(tint = if (selected) (tint ?: neon.accent) else tint)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
+            .clip(chipShape)
+            .background(color = tint ?: neon.accent, shape = chipShape)
+    } else {
+        modifier.glassCapsule(tint = tint)
+    }
+    Row(
+        base.padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {

@@ -406,6 +406,18 @@ extension ConduitUI {
         @State private var createdPipeline: CreatedPipeline? = nil
         @State private var navigateToMonitor = false
 
+        // MARK: Phone reorder-drag state
+        //
+        // Long-press-then-drag reorder for the phone block stack (replaces
+        // List's `.onMove`, which required a permanently-active edit mode
+        // that neutered the row's horizontal insets -- see `phoneBody`).
+        // Mirrors Android's `ReorderableBlockStack` (PipelineBuilderScreen.kt):
+        // each card reports its own measured height; crossing half a
+        // neighbor's height while dragging swaps it via `viewModel.moveSteps`.
+        @State private var draggingStepID: PipelineStep.ID?
+        @State private var dragOffsetY: CGFloat = 0
+        @State private var stepHeights: [PipelineStep.ID: CGFloat] = [:]
+
         // Template state
         @State private var templates: [PipelineTemplate] = []
         @State private var isLoadingTemplates = false
@@ -492,24 +504,48 @@ extension ConduitUI {
                     Button {
                         selection.wrappedValue = opt
                     } label: {
-                        HStack(spacing: 5) {
-                            if let glyph {
-                                glyph(opt)
-                                    .frame(width: 14, height: 14)
-                            }
-                            Text(label(opt))
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.85)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 7)
-                        .foregroundStyle(selected ? neon.accentText : neon.textDim)
-                        .conduitGlassCapsule(tint: selected ? neon.accent : nil)
+                        segmentLabelContent(opt: opt, selected: selected, label: label, glyph: glyph)
                     }
                     .buttonStyle(.plain)
                 }
+            }
+        }
+
+        /// Selected = a SOLID accent-filled capsule (same convention as
+        /// `ConduitActionPill`'s `.solid` variant / the chat option-row
+        /// selected state: opaque tint fill + `accentText`). The glass-tint
+        /// wash this used to route through (`conduitGlassCapsule(tint:
+        /// neon.accent)`) only overlays a 6%-opacity fill on top of the
+        /// glass, which read as near-black `accentText` on a barely-tinted
+        /// dark surface -- illegible (owner: "selected options cannot be
+        /// read", #911 follow-up). Unselected keeps the plain glass capsule
+        /// unchanged.
+        @ViewBuilder
+        private func segmentLabelContent(
+            opt: String,
+            selected: Bool,
+            label: (String) -> String,
+            glyph: ((String) -> AgentGlyph)?
+        ) -> some View {
+            let content = HStack(spacing: 5) {
+                if let glyph {
+                    glyph(opt)
+                        .frame(width: 14, height: 14)
+                }
+                Text(label(opt))
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .foregroundStyle(selected ? neon.accentText : neon.textDim)
+
+            if selected {
+                content.background(Capsule().fill(neon.accent))
+            } else {
+                content.conduitGlassCapsule(tint: nil)
             }
         }
 
@@ -696,83 +732,124 @@ extension ConduitUI {
         }
 
         // MARK: Phone layout -- stacked block-card list + config sheet
-
+        //
+        // A plain `ScrollView` + `VStack`, NOT a `List`. A `List` was tried
+        // twice (Phase 2, then #909's `.listRowInsets` pass) and neither
+        // produced reliable side margins: this screen holds the steps
+        // `ForEach` permanently in edit mode (`.environment(\.editMode,
+        // .constant(.active))`) so `.onMove` always shows its drag handle,
+        // and UIKit's editing-state row layout does NOT reliably honor a
+        // custom `.listRowInsets` leading/trailing pair once a row belongs
+        // to a movable group -- the reorder accessory is drawn past the
+        // row's own inset box, and empirically the whole row's content
+        // insets go along with it. `tabletBody` below never had this
+        // problem because it was ALREADY a plain `ScrollView` + `VStack`
+        // with a single `.padding(16)` -- that's the proven precedent this
+        // mirrors, plus Android's `PipelineBuilderScreen.kt`, which never
+        // used a `LazyColumn` item's own insets either: one
+        // `contentPadding(horizontal = 16.dp)` on the whole column, same
+        // number reused here.
         private var phoneBody: some View {
-            List {
-                Section {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
                     metadataSection
-                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                }
 
-                Section {
-                    stepsHeader
-                        .listRowInsets(EdgeInsets(top: 0, leading: 14, bottom: 4, trailing: 14))
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
+                    VStack(alignment: .leading, spacing: 10) {
+                        stepsHeader
 
-                    if viewModel.steps.count > 1 {
-                        topologyPreview
-                            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
+                        if viewModel.steps.count > 1 {
+                            topologyPreview
+                        }
+
+                        reorderableStepStack
+
+                        addStepRow
                     }
 
-                    ForEach(Array(viewModel.steps.enumerated()), id: \.element.id) { index, step in
-                        blockCard(step: step, index: index)
-                            // Leading matches metadataSection's card; trailing
-                            // gets extra room so the system's edit-mode drag
-                            // handle (rendered past the row's trailing edge)
-                            // has breathing space instead of crowding the
-                            // card's rounded corner (owner device feedback).
-                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 14))
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: viewModel.canDeleteStep) {
-                                if viewModel.canDeleteStep {
-                                    Button(role: .destructive) {
-                                        viewModel.removeStep(id: step.id)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                            }
-                            .onTapGesture { configSheetStepID = step.id }
-                    }
-                    .onMove { offsets, destination in
-                        viewModel.moveSteps(from: offsets, to: destination)
-                    }
-
-                    addStepRow
-                        .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 0, trailing: 14))
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                }
-
-                if store.pipelineTemplates {
-                    Section {
+                    if store.pipelineTemplates {
                         saveTemplateButton
-                            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
                     }
-                }
 
-                Section {
                     startButton
-                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+            }
+        }
+
+        /// Long-press-then-drag reorder stack (replaces `List.onMove`).
+        /// Each card measures its own height via a `GeometryReader` background;
+        /// while dragging, crossing half of a neighbor's height swaps places with
+        /// it through `viewModel.moveSteps` -- the SAME tested reorder
+        /// entrypoint the old `.onMove` closure called, so
+        /// `ConduitPipelineBuilderViewModelTests`'s move-semantics coverage
+        /// still applies unchanged. Mirrors Android's
+        /// `ReorderableBlockStack` measured-height + threshold-swap design.
+        private var reorderableStepStack: some View {
+            VStack(spacing: 8) {
+                ForEach(Array(viewModel.steps.enumerated()), id: \.element.id) { index, step in
+                    let isDragging = draggingStepID == step.id
+                    blockCard(step: step, index: index, onDelete: viewModel.canDeleteStep ? {
+                        viewModel.removeStep(id: step.id)
+                    } : nil)
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear
+                                    .onAppear { stepHeights[step.id] = geo.size.height }
+                                    .onChange(of: geo.size.height) { _, newHeight in
+                                        stepHeights[step.id] = newHeight
+                                    }
+                            }
+                        )
+                        .zIndex(isDragging ? 1 : 0)
+                        .offset(y: isDragging ? dragOffsetY : 0)
+                        .opacity(isDragging ? 0.92 : 1)
+                        .animation(.interactiveSpring(response: 0.25, dampingFraction: 0.8), value: dragOffsetY)
+                        .onTapGesture { configSheetStepID = step.id }
+                        .simultaneousGesture(stepDragGesture(step: step, index: index))
                 }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            // Always show reorder handles (Shortcuts-style always-draggable
-            // stack) -- no `onDelete` is supplied so edit mode contributes
-            // ONLY the drag handle, never the system delete circle (our own
-            // swipe/trash affordance stays authoritative).
-            .environment(\.editMode, .constant(.active))
+        }
+
+        /// Long-press (so a plain tap still opens the config sheet) then
+        /// drag vertically; crossing half the dragged card's own height
+        /// past a neighbor swaps the two via `viewModel.moveSteps` (List
+        /// `.onMove` offset/destination convention -- see the view model's
+        /// doc comment). `current` is re-looked-up by id each callback so a
+        /// mid-drag swap (which changes array indices) stays consistent.
+        private func stepDragGesture(step: PipelineStep, index: Int) -> some Gesture {
+            LongPressGesture(minimumDuration: 0.35)
+                .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+                .onChanged { value in
+                    switch value {
+                    case .second(true, let drag):
+                        guard let drag else { return }
+                        if draggingStepID == nil {
+                            draggingStepID = step.id
+                            Telemetry.breadcrumb("pipeline", "builder_drag_start", data: ["index": "\(index)"])
+                        }
+                        dragOffsetY = drag.translation.height
+                        guard let current = viewModel.index(for: step.id),
+                              let myHeight = stepHeights[step.id], myHeight > 0 else { return }
+                        if dragOffsetY > myHeight / 2, current < viewModel.steps.count - 1 {
+                            let neighborID = viewModel.steps[current + 1].id
+                            let neighborHeight = stepHeights[neighborID] ?? myHeight
+                            viewModel.moveSteps(from: IndexSet(integer: current), to: current + 2)
+                            dragOffsetY -= neighborHeight + 8
+                        } else if dragOffsetY < -(myHeight / 2), current > 0 {
+                            let neighborID = viewModel.steps[current - 1].id
+                            let neighborHeight = stepHeights[neighborID] ?? myHeight
+                            viewModel.moveSteps(from: IndexSet(integer: current), to: current - 1)
+                            dragOffsetY += neighborHeight + 8
+                        }
+                    default:
+                        break
+                    }
+                }
+                .onEnded { _ in
+                    draggingStepID = nil
+                    dragOffsetY = 0
+                }
         }
 
         private func configSheet(index: Int) -> some View {
@@ -1099,15 +1176,15 @@ extension ConduitUI {
         // MARK: Block card (compact -- tap opens config)
 
         @ViewBuilder
-        private func blockCard(step: PipelineStep, index: Int, isSelected: Bool = false) -> some View {
+        private func blockCard(step: PipelineStep, index: Int, isSelected: Bool = false, onDelete: (() -> Void)? = nil) -> some View {
             if step.isControlFlow {
-                controlFlowBlockCard(step: step, index: index, isSelected: isSelected)
+                controlFlowBlockCard(step: step, index: index, isSelected: isSelected, onDelete: onDelete)
             } else {
-                agentBlockCard(step: step, index: index, isSelected: isSelected)
+                agentBlockCard(step: step, index: index, isSelected: isSelected, onDelete: onDelete)
             }
         }
 
-        private func agentBlockCard(step: PipelineStep, index: Int, isSelected: Bool) -> some View {
+        private func agentBlockCard(step: PipelineStep, index: Int, isSelected: Bool, onDelete: (() -> Void)? = nil) -> some View {
             ConduitUI.Card(
                 tint: isSelected ? neon.accent : nil
             ) {
@@ -1146,6 +1223,18 @@ extension ConduitUI {
 
                     Spacer(minLength: 4)
 
+                    // Phone-only (List's `.swipeActions` is gone along with
+                    // the List itself -- see `phoneBody`); tablet keeps its
+                    // existing `.contextMenu` delete and passes no closure.
+                    if let onDelete {
+                        Button(role: .destructive, action: onDelete) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(neon.red)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(neon.textFaint)
@@ -1158,7 +1247,7 @@ extension ConduitUI {
         /// sub-stack counts only. The full Then/Else/body editor lives in
         /// the config sheet/inspector (`controlFlowConfigEditor`), reached
         /// by tapping this card, same precedent as the fanout toggle today.
-        private func controlFlowBlockCard(step: PipelineStep, index: Int, isSelected: Bool) -> some View {
+        private func controlFlowBlockCard(step: PipelineStep, index: Int, isSelected: Bool, onDelete: (() -> Void)? = nil) -> some View {
             ConduitUI.Card(
                 tint: isSelected ? neon.accent : nil
             ) {
@@ -1201,6 +1290,15 @@ extension ConduitUI {
                     }
 
                     Spacer(minLength: 4)
+
+                    if let onDelete {
+                        Button(role: .destructive, action: onDelete) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(neon.red)
+                        }
+                        .buttonStyle(.plain)
+                    }
 
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11, weight: .semibold))
