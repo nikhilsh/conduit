@@ -22,7 +22,11 @@ extension ConduitUI {
         let started: String?
         let ended: String?
 
-        var isDone: Bool { phase == "exited(0)" || phase == "exited" }
+        // "turn_complete" is the structured-chat (claude/codex) completion
+        // signal -- those backends never exit the process between turns, so
+        // there is no "exited(0)" to observe. It counts as done, mirroring
+        // exitCodeFromPhase in broker/internal/pipeline/orchestrator.go.
+        var isDone: Bool { phase == "exited(0)" || phase == "exited" || phase == "turn_complete" }
         var isFailed: Bool {
             guard let p = phase else { return false }
             return p.hasPrefix("exited") && !isDone
@@ -86,9 +90,13 @@ extension ConduitUI {
             return p == "running" || p == "ready"
         }
 
+        // "turn_complete" is the structured-chat (claude/codex) completion
+        // signal -- those backends never exit the process between turns, so
+        // there is no "exited(0)" to observe. It counts as done, mirroring
+        // exitCodeFromPhase in broker/internal/pipeline/orchestrator.go.
         var isDone: Bool {
             guard let p = phase else { return false }
-            return p == "exited(0)" || p == "exited"
+            return p == "exited(0)" || p == "exited" || p == "turn_complete"
         }
 
         var isFailed: Bool {
@@ -96,9 +104,66 @@ extension ConduitUI {
             return p.hasPrefix("exited") && !isDone
         }
 
+        /// True when this step has unambiguously finished (by whatever
+        /// signal is available) even if its `phase` is something this build
+        /// doesn't recognize -- an unmapped future phase, a step index
+        /// already behind the pipeline's current step, or the pipeline
+        /// itself having reached a terminal state. Used as the display
+        /// fallback so an unrecognized phase never renders as "queued" for
+        /// a step that plainly already ran.
+        func hasClearlyFinished(pipeline: PipelineStatus) -> Bool {
+            ended != nil || index < pipeline.current_step || pipeline.isTerminal
+        }
+
         var isFanout: Bool { fanout != nil }
         var isLoop: Bool { kind == "loop" }
         var wasSpliced: Bool { !(spliced_from?.isEmpty ?? true) }
+    }
+
+    /// Pure step-display-state mapping -- kept off SwiftUI (mirrors
+    /// `PipelineListViewModel`) so the phase -> display-state rules are
+    /// directly unit-testable. Maps a step's raw `phase` string (as
+    /// persisted by the broker -- "running", "exited(0)", "exited(1)",
+    /// "turn_complete", or any future/unmapped value) plus pipeline
+    /// context to one of the Monitor's five display buckets.
+    enum PipelineStepDisplayViewModel {
+        enum State: Equatable {
+            case queued, running, done, failed, awaitingGate, awaitingPick
+        }
+
+        static func state(for step: PipelineStepStatus, pipeline: PipelineStatus) -> State {
+            if step.session_id == nil && step.fanout?.runs == nil {
+                // A loop step's own SessionID is only adopted once the loop
+                // is DONE (orchestrator.advanceLoop) -- while iterating it
+                // stays nil, so without this check an in-progress loop would
+                // misleadingly show "queued" (PLAN-HARNESS-BUILDER Phase 3).
+                if step.isLoop && step.index == pipeline.current_step && !pipeline.isTerminal {
+                    return .running
+                }
+                if step.hasClearlyFinished(pipeline: pipeline) { return .done }
+                return .queued
+            }
+            if step.isDone { return .done }
+            if step.isFailed { return .failed }
+            if pipeline.isAwaitingPick && step.index == pipeline.current_step {
+                return .awaitingPick
+            }
+            if step.isRunning {
+                if pipeline.isAwaitingGate && step.index == pipeline.current_step {
+                    return .awaitingGate
+                }
+                return .running
+            }
+            // Fanout step: has runs but no step-level session (not yet picked)
+            if step.isFanout, let runs = step.fanout?.runs, !runs.isEmpty {
+                return .running
+            }
+            // Unmapped/unknown future phase (see `hasClearlyFinished` docs)
+            // -- never render "queued" for a step that has plainly already
+            // run.
+            if step.hasClearlyFinished(pipeline: pipeline) { return .done }
+            return .queued
+        }
     }
 
     /// Gate metadata returned by the broker when a pipeline is in the
@@ -201,10 +266,16 @@ extension ConduitUI {
                         .frame(maxWidth: .infinity)
                     }
                     .navigationDestination(item: $selectedSessionID) { id in
+                        // A completed step's agent process is reaped (#881),
+                        // so it's usually gone from `store.sessions` (the
+                        // live-session set) by the time the row is tapped.
+                        // Fall back to the persisted-transcript read-only
+                        // path -- the same one `SessionsScreen` uses for
+                        // exited rows -- instead of a blank sheet.
                         if let session = store.sessions.first(where: { $0.id == id }) {
                             ConduitUI.ProjectView(session: session)
                         } else {
-                            Color.clear
+                            SavedTranscriptView(session: syntheticStepSession(sessionID: id, pipeline: p))
                         }
                     }
                 } else if errorBanner == nil {
@@ -326,7 +397,7 @@ extension ConduitUI {
 
             return VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 12) {
-                    AgentAvatar(assistant: step.agent_type, size: 28)
+                    AgentGlyph(assistant: step.agent_type, size: 28)
 
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
@@ -454,7 +525,7 @@ extension ConduitUI {
             }()
 
             return HStack(spacing: 8) {
-                AgentAvatar(assistant: run.agent_type, size: 20)
+                AgentGlyph(assistant: run.agent_type, size: 20)
                 Text(run.agent_type)
                     .font(neon.mono(11))
                     .foregroundStyle(isFailed ? neon.textFaint : neon.textDim)
@@ -482,40 +553,11 @@ extension ConduitUI {
             .opacity(isFailed ? 0.5 : 1)
         }
 
-        private enum StepDisplayState {
-            case queued, running, done, failed, awaitingGate, awaitingPick
+        private func stepDisplayState(step: PipelineStepStatus, pipeline: PipelineStatus) -> PipelineStepDisplayViewModel.State {
+            PipelineStepDisplayViewModel.state(for: step, pipeline: pipeline)
         }
 
-        private func stepDisplayState(step: PipelineStepStatus, pipeline: PipelineStatus) -> StepDisplayState {
-            if step.session_id == nil && step.fanout?.runs == nil {
-                // A loop step's own SessionID is only adopted once the loop
-                // is DONE (orchestrator.advanceLoop) -- while iterating it
-                // stays nil, so without this check an in-progress loop would
-                // misleadingly show "queued" (PLAN-HARNESS-BUILDER Phase 3).
-                if step.isLoop && step.index == pipeline.current_step && !pipeline.isTerminal {
-                    return .running
-                }
-                return .queued
-            }
-            if step.isDone { return .done }
-            if step.isFailed { return .failed }
-            if pipeline.isAwaitingPick && step.index == pipeline.current_step {
-                return .awaitingPick
-            }
-            if step.isRunning {
-                if pipeline.isAwaitingGate && step.index == pipeline.current_step {
-                    return .awaitingGate
-                }
-                return .running
-            }
-            // Fanout step: has runs but no step-level session (not yet picked)
-            if step.isFanout, let runs = step.fanout?.runs, !runs.isEmpty {
-                return .running
-            }
-            return .queued
-        }
-
-        private func stepStateDisplay(_ state: StepDisplayState) -> (String, Color) {
+        private func stepStateDisplay(_ state: PipelineStepDisplayViewModel.State) -> (String, Color) {
             switch state {
             case .queued:        return ("queued", neon.textFaint)
             case .running:       return ("running", neon.accent)
@@ -524,6 +566,51 @@ extension ConduitUI {
             case .awaitingGate:  return ("gate", neon.yellow)
             case .awaitingPick:  return ("pick", neon.accent)
             }
+        }
+
+        /// Builds a stand-in `SavedSession` for a step (or fanout run)
+        /// whose session isn't in `store.sessions` -- true for any
+        /// completed step, since its agent process is reaped (#881). Feeds
+        /// `SavedTranscriptView`, which fetches the persisted transcript
+        /// over HTTP by session id and degrades to a themed "no saved
+        /// transcript" state on its own if the broker has nothing for it
+        /// (never a blank screen). Metadata (agent/cwd/timestamps) is
+        /// best-effort from the matching step/run; the fetch only needs
+        /// `sessionID` to succeed.
+        private func syntheticStepSession(sessionID: String, pipeline: PipelineStatus) -> SavedSession {
+            var agent = "claude"
+            var started: String?
+            var ended: String?
+            var roleLabel = ""
+            search: for step in pipeline.steps {
+                if step.session_id == sessionID {
+                    agent = step.agent_type
+                    started = step.started
+                    ended = step.ended
+                    roleLabel = step.role
+                    break search
+                }
+                if let runs = step.fanout?.runs {
+                    for run in runs where run.session_id == sessionID {
+                        agent = run.agent_type
+                        started = run.started
+                        ended = run.ended
+                        roleLabel = step.role
+                        break search
+                    }
+                }
+            }
+            return SavedSession(
+                id: sessionID,
+                serverID: "",
+                agent: agent,
+                cwd: pipeline.cwd,
+                firstSeen: started ?? "",
+                lastSeen: ended ?? started ?? "",
+                messageCount: 0,
+                summary: roleLabel,
+                status: .exited
+            )
         }
 
         // MARK: Pick panel (awaiting_pick)
@@ -599,7 +686,7 @@ extension ConduitUI {
 
             return VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    AgentAvatar(assistant: run.label.isEmpty ? "claude" : run.label, size: 22)
+                    AgentGlyph(assistant: run.label.isEmpty ? "claude" : run.label, size: 22)
                     Text(run.label.isEmpty ? "Run \(actualRunIndex + 1)" : run.label)
                         .font(neon.mono(13).weight(.bold))
                         .foregroundStyle(neon.text)
@@ -721,7 +808,7 @@ extension ConduitUI {
             let canPick = run.isDone && !isPicking && !isWinner
 
             return HStack(spacing: 10) {
-                AgentAvatar(assistant: run.agent_type, size: 22)
+                AgentGlyph(assistant: run.agent_type, size: 22)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Run \(run.index + 1) — \(run.agent_type)")
                         .font(neon.mono(12).weight(.semibold))

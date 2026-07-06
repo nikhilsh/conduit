@@ -140,4 +140,31 @@ class PipelineListScreenTest {
         assertFalse(PipelineListViewModel.isActiveForHomeAffordance("failed"))
         assertFalse(PipelineListViewModel.isActiveForHomeAffordance("cancelled"))
     }
+
+    // ---- Recent-terminal affordance gate (Home banner, bug 3) --------------
+
+    @Test
+    fun recentTerminalGatesOnCompleteOrFailedOnly() {
+        val now = System.currentTimeMillis()
+        val recent = java.time.Instant.ofEpochMilli(now - 60_000).toString()
+        assertTrue(PipelineListViewModel.isRecentTerminal(summary(id = "a", state = "complete", created = recent), now))
+        assertTrue(PipelineListViewModel.isRecentTerminal(summary(id = "b", state = "failed", created = recent), now))
+        assertFalse(PipelineListViewModel.isRecentTerminal(summary(id = "c", state = "cancelled", created = recent), now))
+        assertFalse(PipelineListViewModel.isRecentTerminal(summary(id = "d", state = "running", created = recent), now))
+    }
+
+    @Test
+    fun recentTerminalExcludesOlderThan24h() {
+        val now = System.currentTimeMillis()
+        val justInside = java.time.Instant.ofEpochMilli(now - 23L * 3600 * 1000).toString()
+        val justOutside = java.time.Instant.ofEpochMilli(now - 25L * 3600 * 1000).toString()
+        assertTrue(PipelineListViewModel.isRecentTerminal(summary(id = "a", state = "complete", created = justInside), now))
+        assertFalse(PipelineListViewModel.isRecentTerminal(summary(id = "b", state = "complete", created = justOutside), now))
+    }
+
+    @Test
+    fun recentTerminalRequiresCreatedTimestamp() {
+        val now = System.currentTimeMillis()
+        assertFalse(PipelineListViewModel.isRecentTerminal(summary(id = "a", state = "complete", created = null), now))
+    }
 }

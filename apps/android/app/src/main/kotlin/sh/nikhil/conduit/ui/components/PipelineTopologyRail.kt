@@ -22,7 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import sh.nikhil.conduit.ui.AgentAvatar
+import sh.nikhil.conduit.ui.AgentGlyph
 import sh.nikhil.conduit.ui.LocalNeonTheme
 import sh.nikhil.conduit.ui.NeonTheme
 
@@ -99,7 +99,7 @@ private fun TopologyRow(
                     modifier = Modifier.height(16.dp),
                 )
             } else {
-                AgentAvatar(assistant = item.agentType, size = 20.dp)
+                AgentGlyph(assistant = item.agentType, size = 20.dp)
             }
             Text(
                 "${index + 1}. ${

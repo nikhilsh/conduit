@@ -26,6 +26,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
@@ -164,6 +166,14 @@ fun HomeScreen(
     }
     val activePipelines = remember(pipelineSummaries) {
         pipelineSummaries.filter { PipelineListViewModel.isActiveForHomeAffordance(it.state) }
+    }
+    // Pipelines that finished (complete/failed) within the last 24h --
+    // extends the affordance so a pipeline doesn't go invisible the
+    // instant it settles (owner feedback: "we can't see a nice UI telling
+    // me there is a pipeline on home"). Rendered dim/terminal-styled,
+    // distinct from the accent-styled active card.
+    val recentTerminalPipelines = remember(pipelineSummaries) {
+        pipelineSummaries.filter { PipelineListViewModel.isRecentTerminal(it) }
     }
 
     // Pending exit target for the session-row long-press confirmation.
@@ -324,15 +334,18 @@ fun HomeScreen(
             )
         }
 
-        // Active-pipeline affordance (fix for a running pipeline becoming
-        // unreachable once its creation sheet is dismissed): surfaces ONLY
-        // when a pipeline is genuinely running/gated/picking, never a
-        // fabricated count. Tapping opens the full Pipelines list.
-        if (activePipelines.isNotEmpty()) {
+        // Pipeline affordance (fix for a running pipeline becoming
+        // unreachable once its creation sheet is dismissed, PLUS a
+        // finished pipeline going invisible the instant it settles):
+        // surfaces when a pipeline is genuinely running/gated/picking OR
+        // finished within the last 24h, never a fabricated count. Tapping
+        // opens the full Pipelines list.
+        if (activePipelines.isNotEmpty() || recentTerminalPipelines.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
             ActivePipelinesBannerCard(
                 neon = neon,
-                pipelines = activePipelines,
+                active = activePipelines,
+                recentTerminal = recentTerminalPipelines,
                 modifier = Modifier.padding(horizontal = 14.dp),
                 onOpen = onOpenPipelines,
             )
@@ -1222,34 +1235,58 @@ private fun NeedsYouBannerCard(
 }
 
 /**
- * Home's active-pipeline affordance: an accent-tinted card shown ONLY when
- * at least one pipeline is currently running / awaiting_gate / awaiting_pick
- * ([PipelineListViewModel.isActiveForHomeAffordance]). Tapping opens the
- * full `PipelineListScreen`. This is the fix for a running pipeline becoming
- * unreachable once its creation sheet is swiped away -- before this,
- * `PipelineBuilderScreen`'s own post-create navigation was the ONLY path to
- * the monitor. Mirror of iOS `ActivePipelinesBannerCard`.
+ * Home's pipeline affordance: a card shown when at least one pipeline is
+ * either currently active (running / awaiting_gate / awaiting_pick,
+ * [PipelineListViewModel.isActiveForHomeAffordance]) or finished
+ * (complete/failed) within the last 24h
+ * ([PipelineListViewModel.isRecentTerminal]). Tapping opens the full
+ * `PipelineListScreen`.
+ *
+ * An active pipeline always wins the headline (accent, "today" styling)
+ * since it needs attention soonest; a recent-terminal-only set gets a dim
+ * card with a state-tinted icon instead (green for complete, red for
+ * failed). One compact card regardless of how many pipelines qualify --
+ * extras collapse into a "N more" trailer rather than growing Home into a
+ * pipeline feed. Mirror of iOS `PipelinesBannerCard`.
  */
 @Composable
 private fun ActivePipelinesBannerCard(
     neon: NeonTheme,
-    pipelines: List<PipelineSummary>,
+    active: List<PipelineSummary>,
+    recentTerminal: List<PipelineSummary>,
     modifier: Modifier = Modifier,
     onOpen: () -> Unit,
 ) {
-    val title = if (pipelines.size == 1) "1 pipeline running" else "${pipelines.size} pipelines running"
-    val sub = pipelines.singleOrNull()?.let { first ->
-        first.title.ifEmpty { "step ${first.currentStep + 1} / ${maxOf(first.stepCount, 1)}" }
-    } ?: "tap to view progress"
+    val headline = active.firstOrNull() ?: recentTerminal.firstOrNull() ?: return
+    val isActiveHeadline = active.isNotEmpty()
+    val extraCount = active.size + recentTerminal.size - 1
+
+    val tint = when {
+        isActiveHeadline -> neon.accent
+        headline.state == "failed" -> neon.red
+        else -> neon.green
+    }
+    val title = when {
+        isActiveHeadline -> if (active.size == 1) "1 pipeline running" else "${active.size} pipelines running"
+        headline.state == "failed" -> if (extraCount > 0) "Pipeline failed · $extraCount more" else "Pipeline failed"
+        else -> if (extraCount > 0) "Pipeline complete · $extraCount more" else "Pipeline complete"
+    }
+    val sub = headline.title.ifEmpty { "step ${headline.currentStep + 1} / ${maxOf(headline.stepCount, 1)}" }
+    val icon = when {
+        isActiveHeadline -> Icons.AutoMirrored.Filled.CallSplit
+        headline.state == "failed" -> Icons.Filled.Cancel
+        else -> Icons.Filled.CheckCircle
+    }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
             .neonCardSurface(
                 neon = neon,
                 shape = RoundedCornerShape(12.dp),
-                fill = neon.accent.copy(alpha = 0.07f),
-                borderColor = neon.accent.copy(alpha = 0.27f),
-                glowTint = neon.accent,
+                fill = tint.copy(alpha = if (isActiveHeadline) 0.07f else 0.05f),
+                borderColor = tint.copy(alpha = if (isActiveHeadline) 0.27f else 0.2f),
+                glowTint = if (isActiveHeadline) tint else null,
             )
             .clickable(onClick = onOpen)
             .padding(horizontal = 13.dp, vertical = 9.dp),
@@ -1257,10 +1294,10 @@ private fun ActivePipelinesBannerCard(
         horizontalArrangement = Arrangement.spacedBy(11.dp),
     ) {
         Box(
-            modifier = Modifier.size(34.dp).background(neon.accent.copy(alpha = 0.14f), RoundedCornerShape(9.dp)),
+            modifier = Modifier.size(34.dp).background(tint.copy(alpha = 0.14f), RoundedCornerShape(9.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.AutoMirrored.Filled.CallSplit, null, modifier = Modifier.size(18.dp), tint = neon.accent)
+            Icon(icon, null, modifier = Modifier.size(18.dp), tint = tint)
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -1268,7 +1305,7 @@ private fun ActivePipelinesBannerCard(
                 style = MaterialTheme.typography.titleSmall,
                 fontFamily = neon.sans,
                 fontWeight = FontWeight.SemiBold,
-                color = neon.text,
+                color = if (isActiveHeadline) neon.text else neon.textDim,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1283,8 +1320,8 @@ private fun ActivePipelinesBannerCard(
         }
         ConduitActionPill(
             label = "View",
-            variant = ActionPillVariant.Solid,
-            tint = neon.accent,
+            variant = if (isActiveHeadline) ActionPillVariant.Solid else ActionPillVariant.Soft,
+            tint = tint,
             onClick = onOpen,
         )
     }

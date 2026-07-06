@@ -82,6 +82,26 @@ extension ConduitUI {
         static func isActiveForHomeAffordance(_ state: String) -> Bool {
             state == "running" || state == "awaiting_gate" || state == "awaiting_pick"
         }
+
+        /// Home's "recently finished" affordance gate: a pipeline that
+        /// reached `complete` or `failed` within the last 24h. Keeps a
+        /// just-finished pipeline visible on Home instead of vanishing the
+        /// instant its last step settles (only reachable via the full
+        /// Pipelines list before this) -- but doesn't resurrect arbitrarily
+        /// old history.
+        ///
+        /// `GET /api/pipelines` carries only `created` (no top-level
+        /// "ended" timestamp), so this uses `created` as the recency
+        /// signal -- a reasonable proxy since pipelines are short-lived
+        /// (minutes to low hours), not a precise completion time.
+        /// `cancelled` is deliberately excluded (an explicit user action,
+        /// not a completion the user needs surfaced back to them).
+        static func isRecentTerminal(_ summary: PipelineSummary, now: Date = Date()) -> Bool {
+            guard summary.state == "complete" || summary.state == "failed" else { return false }
+            guard let created = summary.created,
+                  let createdDate = ISO8601DateFormatter().date(from: created) else { return false }
+            return now.timeIntervalSince(createdDate) <= 24 * 3600
+        }
     }
 
     struct PipelineListView: View {

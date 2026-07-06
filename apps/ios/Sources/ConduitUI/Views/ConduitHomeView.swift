@@ -581,6 +581,15 @@ extension ConduitUI {
             pipelineSummaries.filter { ConduitUI.PipelineListViewModel.isActiveForHomeAffordance($0.state) }
         }
 
+        /// Pipelines that finished (complete/failed) within the last 24h --
+        /// extends the affordance so a pipeline doesn't go invisible the
+        /// instant it settles (owner feedback: "we can't see a nice UI
+        /// telling me there is a pipeline on home"). Rendered dim/terminal-
+        /// styled, distinct from the accent-styled active card.
+        private var recentTerminalPipelines: [ConduitUI.PipelineSummary] {
+            pipelineSummaries.filter { ConduitUI.PipelineListViewModel.isRecentTerminal($0) }
+        }
+
         /// One-line preview of the latest activity in a session for the
         /// home card. Pulls the most recent NON-user transcript item from
         /// `store.conversationLog` (assistant reply or tool action) — the
@@ -668,13 +677,16 @@ extension ConduitUI {
                     }
                 }
 
-                // Active-pipeline affordance (§ "a running pipeline is
-                // unreachable once its sheet is dismissed"): surfaces ONLY
-                // when a pipeline is genuinely running/gated/picking, never
-                // a fabricated count. Tapping opens the full Pipelines list.
-                if !activePipelines.isEmpty {
+                // Pipeline affordance (§ "a running pipeline is
+                // unreachable once its sheet is dismissed" + "can't see a
+                // pipeline finished on home"): surfaces when a pipeline is
+                // genuinely running/gated/picking (accent-styled) OR
+                // finished within the last 24h (dim, terminal-styled).
+                // Never a fabricated count. Tapping opens the full
+                // Pipelines list.
+                if !activePipelines.isEmpty || !recentTerminalPipelines.isEmpty {
                     Section {
-                        ActivePipelinesBannerCard(pipelines: activePipelines) {
+                        PipelinesBannerCard(active: activePipelines, recentTerminal: recentTerminalPipelines) {
                             showPipelineList = true
                         }
                         .listRowBackground(Color.clear)
@@ -1037,44 +1049,75 @@ private struct NeedsYouBannerCard: View {
     }
 }
 
-/// Home's active-pipeline affordance: an accent-tinted card that appears
-/// ONLY when at least one pipeline is currently running / awaiting_gate /
-/// awaiting_pick (`ConduitUI.PipelineListViewModel.isActiveForHomeAffordance`).
-/// Tapping opens the full `PipelineListView`. This is the fix for a running
-/// pipeline becoming unreachable once its creation sheet is swiped away --
-/// before this, the Builder's own post-create navigation was the ONLY path
-/// to the monitor.
-private struct ActivePipelinesBannerCard: View {
-    let pipelines: [ConduitUI.PipelineSummary]
+/// Home's pipeline affordance: a card that appears when at least one
+/// pipeline is either currently active (running / awaiting_gate /
+/// awaiting_pick) or finished (complete/failed) within the last 24h
+/// (`ConduitUI.PipelineListViewModel.isActiveForHomeAffordance` /
+/// `.isRecentTerminal`). Tapping opens the full `PipelineListView`.
+///
+/// An active pipeline always wins the headline (styled accent, "today"
+/// treatment) since it needs attention soonest; a recent-terminal-only set
+/// gets a dim card with a state chip (complete = green tint, failed = red)
+/// instead. One compact card regardless of how many pipelines qualify --
+/// extras collapse into a "N more" trailer rather than growing Home into a
+/// pipeline feed.
+private struct PipelinesBannerCard: View {
+    let active: [ConduitUI.PipelineSummary]
+    let recentTerminal: [ConduitUI.PipelineSummary]
     let onOpen: () -> Void
     @Environment(\.neonTheme) private var neon
 
+    /// The pipeline the card headlines on -- the first active one if any,
+    /// else the most recent terminal one (list is already sorted
+    /// recency-first by the caller's `refreshPipelines`/list ordering, but
+    /// we don't depend on that -- just take the first).
+    private var headline: ConduitUI.PipelineSummary? { active.first ?? recentTerminal.first }
+
+    private var isActiveHeadline: Bool { !active.isEmpty }
+
+    private var extraCount: Int { active.count + recentTerminal.count - 1 }
+
     private var titleText: String {
-        pipelines.count == 1 ? "1 pipeline running" : "\(pipelines.count) pipelines running"
+        guard let headline else { return "" }
+        if isActiveHeadline {
+            return active.count == 1 ? "1 pipeline running" : "\(active.count) pipelines running"
+        }
+        let base = headline.state == "failed" ? "Pipeline failed" : "Pipeline complete"
+        return extraCount > 0 ? "\(base) · \(extraCount) more" : base
     }
 
     private var subText: String {
-        if pipelines.count == 1, let first = pipelines.first {
-            return first.title.isEmpty ? "step \(first.current_step + 1) / \(max(first.step_count, 1))" : first.title
+        guard let headline else { return "" }
+        if headline.title.isEmpty {
+            return "step \(headline.current_step + 1) / \(max(headline.step_count, 1))"
         }
-        return "tap to view progress"
+        return headline.title
+    }
+
+    /// Card tint: accent while anything is active, else the terminal
+    /// state's color (green for complete, red for failed).
+    private var tint: Color {
+        guard isActiveHeadline else {
+            return headline?.state == "failed" ? neon.red : neon.green
+        }
+        return neon.accent
     }
 
     var body: some View {
         Button(action: onOpen) {
             HStack(spacing: 11) {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(neon.accent.opacity(0.14))
+                    .fill(tint.opacity(0.14))
                     .frame(width: 34, height: 34)
                     .overlay(
-                        Image(systemName: "arrow.triangle.merge")
+                        Image(systemName: isActiveHeadline ? "arrow.triangle.merge" : (headline?.state == "failed" ? "xmark.circle" : "checkmark.circle"))
                             .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(neon.accent)
+                            .foregroundStyle(tint)
                     )
                 VStack(alignment: .leading, spacing: 2) {
                     Text(titleText)
                         .font(neon.sans(13).weight(.semibold))
-                        .foregroundStyle(neon.text)
+                        .foregroundStyle(isActiveHeadline ? neon.text : neon.textDim)
                         .lineLimit(1)
                     Text(subText)
                         .font(neon.mono(10.5))
@@ -1085,19 +1128,22 @@ private struct ActivePipelinesBannerCard: View {
                 Spacer(minLength: 6)
                 Text("View")
                     .font(neon.sans(12.5).weight(.semibold))
-                    .foregroundStyle(neon.bg)
+                    .foregroundStyle(isActiveHeadline ? neon.bg : tint)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .background(Capsule().fill(neon.accent))
+                    .background(
+                        Capsule()
+                            .fill(isActiveHeadline ? AnyShapeStyle(tint) : AnyShapeStyle(tint.opacity(0.14)))
+                    )
             }
             .padding(.horizontal, 13)
             .padding(.vertical, 9)
             .neonCardSurface(
                 neon,
-                fill: neon.accent.opacity(neon.dark ? 0.07 : 0.05),
+                fill: tint.opacity(neon.dark ? (isActiveHeadline ? 0.07 : 0.05) : (isActiveHeadline ? 0.05 : 0.04)),
                 cornerRadius: 12,
-                border: neon.accent.opacity(0.27),
-                glowTint: neon.glow ? neon.accent : nil
+                border: tint.opacity(isActiveHeadline ? 0.27 : 0.2),
+                glowTint: isActiveHeadline && neon.glow ? tint : nil
             )
         }
         .buttonStyle(.plain)

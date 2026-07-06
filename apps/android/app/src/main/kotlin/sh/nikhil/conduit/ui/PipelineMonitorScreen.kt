@@ -50,6 +50,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import sh.nikhil.conduit.SavedSession
+import sh.nikhil.conduit.SavedSessionStatus
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 import java.net.HttpURLConnection
@@ -64,8 +66,14 @@ data class FanoutRun(
     val sessionId: String?,
     val branch: String?,
     val phase: String?,
+    val started: String? = null,
+    val ended: String? = null,
 ) {
-    val isDone: Boolean get() = phase == "exited(0)" || phase == "exited"
+    // "turn_complete" is the structured-chat (claude/codex) completion
+    // signal -- those backends never exit the process between turns, so
+    // there is no "exited(0)" to observe. It counts as done, mirroring
+    // exitCodeFromPhase in broker/internal/pipeline/orchestrator.go.
+    val isDone: Boolean get() = phase == "exited(0)" || phase == "exited" || phase == "turn_complete"
     val isFailed: Boolean get() = phase != null && phase.startsWith("exited") && !isDone
     val isRunning: Boolean get() = phase == "running" || phase == "ready"
 }
@@ -100,6 +108,8 @@ data class PipelineStep(
     val gateAfter: Boolean,
     val sessionId: String?,
     val phase: String?,
+    val started: String? = null,
+    val ended: String? = null,
     /** Number of times this step has been retried via POST /api/pipeline/{id}/resume. */
     val retries: Int = 0,
     /** Previous session IDs for retried executions of this step. */
@@ -125,6 +135,16 @@ data class PipelineStep(
     val isFanout: Boolean get() = fanout != null
     val isLoop: Boolean get() = kind == "loop"
     val wasSpliced: Boolean get() = !splicedFrom.isNullOrEmpty()
+
+    /** True when this step has unambiguously finished (by whatever signal
+     * is available) even if its `phase` is something this build doesn't
+     * recognize -- an unmapped future phase, a step index already behind
+     * the pipeline's current step, or the pipeline itself having reached a
+     * terminal state. Used as the display fallback so an unrecognized
+     * phase never renders as "queued" for a step that plainly already ran.
+     * Mirror of iOS `PipelineStepStatus.hasClearlyFinished`. */
+    fun hasClearlyFinished(pipeline: Pipeline): Boolean =
+        ended != null || index < pipeline.currentStep || pipeline.state in TERMINAL_STATES
 }
 
 /**
@@ -183,6 +203,8 @@ private fun parsePipeline(json: JSONObject): Pipeline {
                                 sessionId = run.optString("session_id", "").takeIf { it.isNotEmpty() },
                                 branch = run.optString("branch", "").takeIf { it.isNotEmpty() },
                                 phase = run.optString("phase", "").takeIf { it.isNotEmpty() },
+                                started = run.optString("started", "").takeIf { it.isNotEmpty() },
+                                ended = run.optString("ended", "").takeIf { it.isNotEmpty() },
                             ))
                         }
                     }
@@ -219,6 +241,8 @@ private fun parsePipeline(json: JSONObject): Pipeline {
                     gateAfter = s.optBoolean("gate_after", false),
                     sessionId = s.optString("session_id", "").takeIf { it.isNotEmpty() },
                     phase = s.optString("phase", "").takeIf { it.isNotEmpty() },
+                    started = s.optString("started", "").takeIf { it.isNotEmpty() },
+                    ended = s.optString("ended", "").takeIf { it.isNotEmpty() },
                     retries = s.optInt("retries", 0),
                     prevSessionIds = prevSessionIds,
                     fanout = fanout,
@@ -292,6 +316,31 @@ fun PipelineMonitorScreen(
     var isLoadingCompare by remember { mutableStateOf(false) }
     var isPicking by remember { mutableStateOf(false) }
     var pickLoadedForId by remember { mutableStateOf("") }
+    // Read-only transcript fallback (bug 2): a completed step's agent
+    // process is reaped (#881), so it's usually gone from `store.sessions`
+    // by the time its row is tapped. Rather than a blank screen, we show
+    // the persisted transcript read-only via SavedTranscriptScreen -- the
+    // same path SessionsScreen/HistoryScreen use for exited rows.
+    var stepTranscriptTarget by remember { mutableStateOf<SavedSession?>(null) }
+    val liveSessions by store.sessions.collectAsState()
+
+    fun openStepSession(sessionId: String, agentType: String, roleLabel: String, started: String?, ended: String?) {
+        if (liveSessions.any { it.id == sessionId }) {
+            onOpenSession(sessionId)
+            return
+        }
+        stepTranscriptTarget = SavedSession(
+            id = sessionId,
+            serverId = "",
+            agent = agentType,
+            cwd = pipeline?.cwd,
+            firstSeen = started ?: "",
+            lastSeen = ended ?: started ?: "",
+            messageCount = 0,
+            summary = roleLabel,
+            status = SavedSessionStatus.EXITED,
+        )
+    }
 
     Telemetry.breadcrumb(
         "pipeline",
@@ -518,7 +567,7 @@ fun PipelineMonitorScreen(
                                     "step_session_opened",
                                     mapOf("pipeline_id" to pipelineId, "step" to step.index.toString()),
                                 )
-                                onOpenSession(sid)
+                                openStepSession(sid, step.agentType, step.role, step.started, step.ended)
                             }
                         },
                         onTapRun = { sessionId ->
@@ -527,7 +576,8 @@ fun PipelineMonitorScreen(
                                 "fanout_run_opened",
                                 mapOf("pipeline_id" to pipelineId, "session_id" to sessionId),
                             )
-                            onOpenSession(sessionId)
+                            val run = step.fanout?.runs?.firstOrNull { it.sessionId == sessionId }
+                            openStepSession(sessionId, run?.agentType ?: step.agentType, step.role, run?.started, run?.ended)
                         },
                     )
                 }
@@ -666,7 +716,15 @@ fun PipelineMonitorScreen(
                                         canPick = canPick,
                                         isPicking = isPicking,
                                         neon = neon,
-                                        onOpen = { onOpenSession(run.sessionId) },
+                                        onOpen = {
+                                            openStepSession(
+                                                run.sessionId,
+                                                runEntry?.agentType ?: run.label,
+                                                fanoutStep?.role ?: "",
+                                                runEntry?.started,
+                                                runEntry?.ended,
+                                            )
+                                        },
                                         onPick = {
                                             isPicking = true
                                             Telemetry.breadcrumb(
@@ -715,7 +773,7 @@ fun PipelineMonitorScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     ) {
-                                        AgentAvatar(assistant = run.agentType, size = 22.dp)
+                                        AgentGlyph(assistant = run.agentType, size = 22.dp)
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
                                                 "Run ${run.index + 1} — ${run.agentType}",
@@ -991,7 +1049,13 @@ fun PipelineMonitorScreen(
                                                 "failed_step_session_opened",
                                                 mapOf("pipeline_id" to pipelineId),
                                             )
-                                            onOpenSession(failedStep.sessionId)
+                                            openStepSession(
+                                                failedStep.sessionId,
+                                                failedStep.agentType,
+                                                failedStep.role,
+                                                failedStep.started,
+                                                failedStep.ended,
+                                            )
                                         }
                                         .padding(vertical = 12.dp),
                                     contentAlignment = Alignment.Center,
@@ -1217,34 +1281,83 @@ fun PipelineMonitorScreen(
             },
         )
     }
+
+    // Read-only transcript fallback for a step whose session isn't live
+    // (bug 2) -- overlays on top of the Scaffold above, same sibling-
+    // composable-in-a-Box pattern AppRoot uses for its full-screen
+    // overlays.
+    stepTranscriptTarget?.let { session ->
+        SavedTranscriptScreen(
+            store = store,
+            session = session,
+            onDismiss = { stepTranscriptTarget = null },
+        )
+    }
+}
+
+/**
+ * Pure step-display-state mapping -- kept off Compose (mirrors
+ * [PipelineListViewModel]) so the phase -> display-state rules are
+ * directly unit-testable. Maps a step's raw `phase` string (as persisted
+ * by the broker -- "running", "exited(0)", "exited(1)", "turn_complete",
+ * or any future/unmapped value) plus pipeline context to one of the
+ * Monitor's display buckets. Mirror of iOS
+ * `ConduitUI.PipelineStepDisplayViewModel`.
+ */
+object PipelineStepDisplayViewModel {
+    enum class State { QUEUED, RUNNING, DONE, FAILED, AWAITING_GATE, AWAITING_PICK }
+
+    fun state(step: PipelineStep, pipeline: Pipeline): State {
+        // Fanout step at current position while awaiting pick
+        if (step.isFanout && step.index == pipeline.currentStep && pipeline.state == "awaiting_pick") {
+            return State.AWAITING_PICK
+        }
+        val phase = step.phase
+        if (phase.isNullOrEmpty()) {
+            // Fanout step with runs but no step-level session is "running"
+            if (step.isFanout && step.fanout?.runs?.isNotEmpty() == true) return State.RUNNING
+            // A loop step's own SessionID/Phase is only adopted once the loop is
+            // DONE (orchestrator.advanceLoop) -- while iterating both stay null,
+            // so without this check an in-progress loop would misleadingly show
+            // "queued" (PLAN-HARNESS-BUILDER Phase 3).
+            if (step.isLoop && step.index == pipeline.currentStep && pipeline.state !in TERMINAL_STATES) return State.RUNNING
+            // Unmapped/unknown future phase (or no phase at all) on a step
+            // that's otherwise clearly finished -- never render "queued"
+            // for a step that has plainly already run.
+            if (step.hasClearlyFinished(pipeline)) return State.DONE
+            return State.QUEUED
+        }
+        // "turn_complete" is the structured-chat (claude/codex) completion
+        // signal -- those backends never exit the process between turns,
+        // so there is no "exited(0)" to observe. It counts as done,
+        // mirroring exitCodeFromPhase in broker/internal/pipeline/orchestrator.go.
+        if (phase == "turn_complete") return State.DONE
+        if (!phase.startsWith("exited")) {
+            if (pipeline.state == "awaiting_gate" && step.index == pipeline.currentStep) {
+                return State.AWAITING_GATE
+            }
+            return State.RUNNING
+        }
+        val open = phase.indexOf('(')
+        val close = phase.indexOf(')')
+        if (open in 0 until close) {
+            val code = phase.substring(open + 1, close).toIntOrNull()
+            if (code != null) return if (code == 0) State.DONE else State.FAILED
+        }
+        return State.DONE
+    }
 }
 
 /** Derive a display state string for a step given pipeline state. */
-private fun resolveStepState(step: PipelineStep, pipeline: Pipeline): String {
-    // Fanout step at current position while awaiting pick
-    if (step.isFanout && step.index == pipeline.currentStep && pipeline.state == "awaiting_pick") {
-        return "pick"
+private fun resolveStepState(step: PipelineStep, pipeline: Pipeline): String =
+    when (PipelineStepDisplayViewModel.state(step, pipeline)) {
+        PipelineStepDisplayViewModel.State.QUEUED -> "queued"
+        PipelineStepDisplayViewModel.State.RUNNING -> "running"
+        PipelineStepDisplayViewModel.State.DONE -> "done"
+        PipelineStepDisplayViewModel.State.FAILED -> "failed"
+        PipelineStepDisplayViewModel.State.AWAITING_GATE -> "awaiting-gate"
+        PipelineStepDisplayViewModel.State.AWAITING_PICK -> "pick"
     }
-    val phase = step.phase
-    if (phase.isNullOrEmpty()) {
-        // Fanout step with runs but no step-level session is "running"
-        if (step.isFanout && step.fanout?.runs?.isNotEmpty() == true) return "running"
-        // A loop step's own SessionID/Phase is only adopted once the loop is
-        // DONE (orchestrator.advanceLoop) -- while iterating both stay null,
-        // so without this check an in-progress loop would misleadingly show
-        // "queued" (PLAN-HARNESS-BUILDER Phase 3).
-        if (step.isLoop && step.index == pipeline.currentStep && pipeline.state !in TERMINAL_STATES) return "running"
-        return "queued"
-    }
-    if (!phase.startsWith("exited")) return "running"
-    val open = phase.indexOf('(')
-    val close = phase.indexOf(')')
-    if (open in 0 until close) {
-        val code = phase.substring(open + 1, close).toIntOrNull()
-        if (code != null) return if (code == 0) "done" else "failed"
-    }
-    return "done"
-}
 
 @Composable
 private fun PipelineStateChip(state: String, neon: NeonTheme) {
@@ -1304,7 +1417,7 @@ private fun PipelineStepRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                AgentAvatar(assistant = step.agentType, size = 30.dp)
+                AgentGlyph(assistant = step.agentType, size = 30.dp)
                 Column(modifier = Modifier.weight(1f)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -1446,7 +1559,7 @@ private fun PipelineStepRow(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
-                                AgentAvatar(assistant = run.agentType, size = 18.dp)
+                                AgentGlyph(assistant = run.agentType, size = 18.dp)
                                 Text(
                                     run.agentType,
                                     fontFamily = neon.mono,
@@ -1522,7 +1635,7 @@ private fun PickRunCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            AgentAvatar(assistant = run.label.ifEmpty { "claude" }, size = 20.dp)
+            AgentGlyph(assistant = run.label.ifEmpty { "claude" }, size = 20.dp)
             Text(
                 run.label.ifEmpty { "Run ${runIndex + 1}" },
                 fontFamily = neon.mono,
