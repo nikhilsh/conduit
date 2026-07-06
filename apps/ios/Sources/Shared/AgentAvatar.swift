@@ -92,7 +92,12 @@ struct AgentAvatar: View {
     /// "C" already belongs to Claude, so Codex gets "X" (its OpenAI
     /// internal codename rendered as "Codex eXecution" — and visually
     /// distinct from C). Everything else is the first letter.
-    private var monogram: String {
+    private var monogram: String { AgentAvatar.monogram(forAgent: assistant) }
+
+    /// Static form of the per-agent monogram, so other bare-glyph
+    /// components (e.g. [AgentGlyph]) can reuse it without instantiating
+    /// a full `AgentAvatar`.
+    static func monogram(forAgent assistant: String) -> String {
         switch assistant.lowercased() {
         case "claude":   return "C"
         case "codex":    return "X"
@@ -102,6 +107,35 @@ struct AgentAvatar: View {
         default:
             return String(assistant.prefix(1)).uppercased()
         }
+    }
+}
+
+/// Bare tinted per-agent glyph -- no background disc/tile, just the SF
+/// Symbol brand glyph (or monogram letter fallback) tinted with the
+/// agent's theme color. This is the ConduitUI list-row idiom ("rows lead
+/// with a bare tinted symbol, not a filled tile" -- see `ConduitListRow`).
+/// Use this instead of `AgentAvatar` in any row-leading position; reserve
+/// `AgentAvatar`'s filled disc (incl. real brand-logo artwork) for picker /
+/// hero contexts that want a heavier visual anchor.
+struct AgentGlyph: View {
+    let assistant: String
+    var size: CGFloat = 20
+    @Environment(\.neonTheme) private var neon
+
+    var body: some View {
+        let tint = neon.agentTint(forAgent: assistant)
+        return Group {
+            if let symbol = AgentAvatar.symbol(forAgent: assistant) {
+                Image(systemName: symbol)
+                    .font(.system(size: size * 0.62, weight: .semibold))
+            } else {
+                Text(AgentAvatar.monogram(forAgent: assistant))
+                    .font(.system(size: size * 0.58, weight: .heavy, design: .rounded))
+            }
+        }
+        .foregroundStyle(tint)
+        .frame(width: size, height: size)
+        .accessibilityLabel(Text(assistant.capitalized))
     }
 }
 

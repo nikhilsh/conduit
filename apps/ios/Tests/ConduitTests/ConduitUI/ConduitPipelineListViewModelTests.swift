@@ -124,4 +124,35 @@ struct ConduitPipelineListViewModelTests {
         #expect(!ConduitUI.PipelineListViewModel.isActiveForHomeAffordance("failed"))
         #expect(!ConduitUI.PipelineListViewModel.isActiveForHomeAffordance("cancelled"))
     }
+
+    // MARK: - Recent-terminal affordance gate (Home banner, bug 3)
+
+    @Test func recentTerminalGatesOnCompleteOrFailedOnly() {
+        let now = Date()
+        let recent = ISO8601DateFormatter().string(from: now.addingTimeInterval(-60))
+        #expect(ConduitUI.PipelineListViewModel.isRecentTerminal(
+            summary(id: "a", state: "complete", created: recent), now: now))
+        #expect(ConduitUI.PipelineListViewModel.isRecentTerminal(
+            summary(id: "b", state: "failed", created: recent), now: now))
+        #expect(!ConduitUI.PipelineListViewModel.isRecentTerminal(
+            summary(id: "c", state: "cancelled", created: recent), now: now))
+        #expect(!ConduitUI.PipelineListViewModel.isRecentTerminal(
+            summary(id: "d", state: "running", created: recent), now: now))
+    }
+
+    @Test func recentTerminalExcludesOlderThan24h() {
+        let now = Date()
+        let justInside = ISO8601DateFormatter().string(from: now.addingTimeInterval(-23 * 3600))
+        let justOutside = ISO8601DateFormatter().string(from: now.addingTimeInterval(-25 * 3600))
+        #expect(ConduitUI.PipelineListViewModel.isRecentTerminal(
+            summary(id: "a", state: "complete", created: justInside), now: now))
+        #expect(!ConduitUI.PipelineListViewModel.isRecentTerminal(
+            summary(id: "b", state: "complete", created: justOutside), now: now))
+    }
+
+    @Test func recentTerminalRequiresCreatedTimestamp() {
+        let now = Date()
+        #expect(!ConduitUI.PipelineListViewModel.isRecentTerminal(
+            summary(id: "a", state: "complete", created: nil), now: now))
+    }
 }

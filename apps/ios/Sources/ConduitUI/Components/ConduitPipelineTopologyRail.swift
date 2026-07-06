@@ -55,7 +55,7 @@ extension ConduitUI {
                             .foregroundStyle(neon.accent)
                             .frame(width: 20, height: 20)
                     } else {
-                        AgentAvatar(assistant: item.agentType, size: 20)
+                        AgentGlyph(assistant: item.agentType, size: 20)
                     }
                     Text("\(index + 1). \(item.isControlFlow ? (item.kind == "loop" ? "Loop" : "If/Else") : item.role.capitalized)")
                         .font(neon.mono(11).weight(.semibold))

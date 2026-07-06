@@ -108,6 +108,37 @@ object PipelineListViewModel {
      */
     fun isActiveForHomeAffordance(state: String): Boolean =
         state == "running" || state == "awaiting_gate" || state == "awaiting_pick"
+
+    /**
+     * Home's "recently finished" affordance gate: a pipeline that reached
+     * `complete` or `failed` within the last 24h. Keeps a just-finished
+     * pipeline visible on Home instead of vanishing the instant its last
+     * step settles (only reachable via the full Pipelines list before
+     * this) -- but doesn't resurrect arbitrarily old history.
+     *
+     * `GET /api/pipelines` carries only `created` (no top-level "ended"
+     * timestamp), so this uses `created` as the recency signal -- a
+     * reasonable proxy since pipelines are short-lived (minutes to low
+     * hours), not a precise completion time. `cancelled` is deliberately
+     * excluded (an explicit user action, not a completion the user needs
+     * surfaced back to them). Mirror of iOS `isRecentTerminal`.
+     */
+    fun isRecentTerminal(summary: PipelineSummary, nowMillis: Long = System.currentTimeMillis()): Boolean {
+        if (summary.state != "complete" && summary.state != "failed") return false
+        val created = summary.created ?: return false
+        val createdMillis = parseIso8601Millis(created) ?: return false
+        return nowMillis - createdMillis <= 24L * 3600 * 1000
+    }
+
+    /** Minimal ISO-8601 (RFC3339, `Z`-suffixed UTC) parser -- avoids
+     * pulling in java.time.Instant's stricter format requirements for the
+     * broker's `time.Now().UTC().Format(time.RFC3339)` output. Returns
+     * null on any parse failure (treated as "not recent" by the caller). */
+    private fun parseIso8601Millis(iso: String): Long? = try {
+        java.time.Instant.parse(iso).toEpochMilli()
+    } catch (_: Exception) {
+        null
+    }
 }
 
 /**

@@ -102,6 +102,53 @@ fun AgentAvatar(
 }
 
 /**
+ * Bare tinted per-agent glyph -- no background disc/tile, just the icon
+ * (or monogram letter fallback) tinted with the agent's theme color. This
+ * is the ConduitUI list-row idiom ("rows lead with a bare tinted symbol,
+ * not a filled tile" -- see [ConduitNavRow] / iOS `ConduitListRow`). Use
+ * this instead of [AgentAvatar] in any row-leading position; reserve
+ * [AgentAvatar]'s filled disc (incl. real brand-logo artwork) for picker /
+ * hero contexts that want a heavier visual anchor. Mirror of iOS
+ * `AgentGlyph` (`apps/ios/Sources/Shared/AgentAvatar.swift`).
+ */
+@Composable
+fun AgentGlyph(
+    assistant: String,
+    modifier: Modifier = Modifier,
+    size: Dp = 20.dp,
+) {
+    val tint = agentAccent(assistant)
+    val glyph = agentGlyph(assistant)
+    val label = assistant.replaceFirstChar { it.uppercaseChar() }
+
+    Box(
+        modifier = modifier
+            .size(size)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (glyph != null) {
+            Icon(
+                imageVector = glyph,
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(size * 0.62f),
+            )
+        } else {
+            Text(
+                text = monogramFor(assistant),
+                color = tint,
+                style = TextStyle(
+                    fontFamily = FontFamily.SansSerif,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = (size.value * 0.58f).sp,
+                ),
+            )
+        }
+    }
+}
+
+/**
  * Resolves the bundled brand-logo drawable for an agent, if the app owner
  * has supplied the official artwork (`claude_mark` / `codex_mark`). Looked
  * up by name at runtime so a missing drawable degrades to [agentGlyph] /
