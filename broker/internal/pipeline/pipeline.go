@@ -112,6 +112,15 @@ type Step struct {
 	// flattened form (see spliceBranchAt's doc comment for the recovery
 	// invariant this implies).
 	SplicedFrom string `json:"spliced_from,omitempty"`
+	// Output is this step's harvested last-assistant text, captured at the
+	// same point (afterStepSuccess) the orchestrator already reads it for
+	// {{prev}}/gate-preview handoff — i.e. BEFORE the step's session is
+	// reaped (see terminateStepSession). Truncated defensively via
+	// truncateOutput so pipeline.json cannot balloon on a chatty step.
+	// For a fanout step this is the WINNER's output (set via Pick ->
+	// afterStepSuccess); for a loop step it is the adopted final body
+	// step's output (via advanceLoop -> afterStepSuccess).
+	Output string `json:"output,omitempty"`
 }
 
 // IsFanout returns true when this step is a fanout step.
@@ -131,6 +140,35 @@ type GatePreview struct {
 	Output string `json:"output,omitempty"` // step k's last assistant text
 }
 
+// PipelineResult is the end-of-run summary populated once a pipeline reaches
+// PipelineComplete (owner feature: a completed pipeline should show its end
+// result). Nil for a pipeline that has not completed (running/failed/
+// cancelled/awaiting-*) — apps must gate the result card on both State ==
+// "complete" AND Result != nil (an older broker, or a pipeline completed
+// before this feature shipped, has no Result even though State is complete).
+type PipelineResult struct {
+	// Output is the final step's harvested last-assistant text (same value
+	// as that step's Step.Output).
+	Output string `json:"output"`
+	// Finished is the RFC3339 completion timestamp.
+	Finished string `json:"finished"`
+	// FilesChanged/Insertions/Deletions are `git diff --stat <base>...HEAD`
+	// counts for the final step's worktree against the pipeline's base
+	// branch, via session.DiffSummary — the same helper the fan-out compare
+	// endpoint uses (internal/ws/fanout.go). Best-effort: a git error (e.g.
+	// empty Base, missing worktree) leaves these at zero rather than
+	// blocking completion.
+	FilesChanged int `json:"files_changed"`
+	Insertions   int `json:"insertions"`
+	Deletions    int `json:"deletions"`
+	// Branches lists the pipeline-<id>-step-* branch names that actually
+	// backed the steps that ran, in step order. Best-effort — a step whose
+	// exact backing branch cannot be reconstructed from persisted state
+	// (e.g. an intermediate pass of a loop, superseded by the next pass in
+	// the same reused body slice) is simply omitted rather than guessed.
+	Branches []string `json:"branches,omitempty"`
+}
+
 // Pipeline is the top-level pipeline definition + live state.
 type Pipeline struct {
 	ID          string        `json:"id"`
@@ -146,6 +184,8 @@ type Pipeline struct {
 	// preview the app displays and the pre-computed {{prev}} for the next
 	// step. Nil in all other states.
 	Gate *GatePreview `json:"gate,omitempty"`
+	// Result is populated once State == PipelineComplete. See PipelineResult.
+	Result *PipelineResult `json:"result,omitempty"`
 }
 
 // NewID generates a pipeline ID: "p_" + 8 random hex chars.

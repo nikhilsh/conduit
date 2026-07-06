@@ -109,6 +109,7 @@ func prepareSteps(steps []Step, depth int) error {
 		// Defensive: a create request should never carry live state.
 		s.SessionID, s.Phase, s.Started, s.Ended = "", "", "", ""
 		s.Retries, s.PrevSessionIDs, s.SplicedFrom = 0, nil, ""
+		s.Output = ""
 		if s.AgentType == "" {
 			s.AgentType = "claude"
 		}

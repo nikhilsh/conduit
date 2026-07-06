@@ -437,12 +437,14 @@ func TestCapabilitiesPipelineBlockConfig(t *testing.T) {
 			PipelineBlockConfig bool `json:"pipeline_block_config"`
 			PipelineBranch      bool `json:"pipeline_branch"`
 			PipelineLoop        bool `json:"pipeline_loop"`
+			PipelineResult      bool `json:"pipeline_result"`
 		} `json:"features"`
 		// Root-level mirrors: fielded apps (through v0.0.214) decode the
 		// pipeline_* flags from the JSON root, not features.* — both
-		// locations must advertise true. pipeline_branch/pipeline_loop are
-		// NEW flags (docs/PLAN-HARNESS-BUILDER.md §4.1/§4.2) but the same
-		// root-mirror footgun applies (#891) — they must be mirrored too.
+		// locations must advertise true. pipeline_branch/pipeline_loop/
+		// pipeline_result are NEW flags (docs/PLAN-HARNESS-BUILDER.md
+		// §4.1/§4.2; pipeline result persistence) but the same root-mirror
+		// footgun applies (#891) — they must be mirrored too.
 		Pipeline            bool `json:"pipeline"`
 		PipelineGatePreview bool `json:"pipeline_gate_preview"`
 		PipelineResume      bool `json:"pipeline_resume"`
@@ -451,6 +453,7 @@ func TestCapabilitiesPipelineBlockConfig(t *testing.T) {
 		PipelineBlockConfig bool `json:"pipeline_block_config"`
 		PipelineBranch      bool `json:"pipeline_branch"`
 		PipelineLoop        bool `json:"pipeline_loop"`
+		PipelineResult      bool `json:"pipeline_result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode capabilities: %v", err)
@@ -464,9 +467,12 @@ func TestCapabilitiesPipelineBlockConfig(t *testing.T) {
 	if !body.Features.PipelineLoop {
 		t.Error("features.pipeline_loop is false; want true")
 	}
+	if !body.Features.PipelineResult {
+		t.Error("features.pipeline_result is false; want true")
+	}
 	if !body.Pipeline || !body.PipelineGatePreview || !body.PipelineResume ||
 		!body.PipelineTemplates || !body.PipelineFanout || !body.PipelineBlockConfig ||
-		!body.PipelineBranch || !body.PipelineLoop {
+		!body.PipelineBranch || !body.PipelineLoop || !body.PipelineResult {
 		t.Errorf("root-level pipeline flag mirrors missing: %+v", body)
 	}
 }

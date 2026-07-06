@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // fakeSession holds the state of a session created by the fake manager.
@@ -1468,5 +1470,323 @@ func TestBogusModelStillReachesRunning(t *testing.T) {
 	ov := sm.created[0].ov
 	if ov.Model != "totally-bogus-model-xyz" {
 		t.Errorf("ov.Model=%q, want the bogus value passed through unchanged", ov.Model)
+	}
+}
+
+// ── Pipeline result persistence (owner feature: a completed pipeline should
+// show its end result) ──────────────────────────────────────────────────────
+
+// TestStepOutputPopulatedAfterSuccess verifies Step.Output is harvested from
+// the session's last-assistant text as soon as a (non-final) step succeeds,
+// before the next step is spawned.
+func TestStepOutputPopulatedAfterSuccess(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone},
+		{Index: 1, AgentType: "claude", PromptTemplate: "step 1", InputFromPrev: InputNone},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep(0): %v", err)
+	}
+	sessID := p.Steps[0].SessionID
+	sm.sessions[sessID].lastText = "step 0 said this"
+
+	if err := orch.Advance(p, 0, "exited(0)"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	if p.Steps[0].Output != "step 0 said this" {
+		t.Errorf("Steps[0].Output=%q, want %q", p.Steps[0].Output, "step 0 said this")
+	}
+	if p.State != PipelineRunning || p.CurrentStep != 1 {
+		t.Fatalf("state=%s current_step=%d, want running/1", p.State, p.CurrentStep)
+	}
+}
+
+// TestFinalStepOutputAndResultAtComplete verifies that the final step's
+// Output and the pipeline-level Result are both populated at the COMPLETE
+// transition, including the reconstructed branch name and (best-effort,
+// since no Base is configured here) zero-value diff stats.
+func TestFinalStepOutputAndResultAtComplete(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep(0): %v", err)
+	}
+	sessID := p.Steps[0].SessionID
+	sm.sessions[sessID].lastText = "the final answer"
+
+	if err := orch.Advance(p, 0, "exited(0)"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	if p.State != PipelineComplete {
+		t.Fatalf("state=%s, want complete", p.State)
+	}
+	if p.Steps[0].Output != "the final answer" {
+		t.Errorf("Steps[0].Output=%q, want %q", p.Steps[0].Output, "the final answer")
+	}
+	if p.Result == nil {
+		t.Fatal("Result is nil at COMPLETE")
+	}
+	if p.Result.Output != "the final answer" {
+		t.Errorf("Result.Output=%q, want %q", p.Result.Output, "the final answer")
+	}
+	if p.Result.Finished == "" {
+		t.Error("Result.Finished is empty")
+	}
+	wantBranch := "pipeline-" + p.ID + "-step-0"
+	if len(p.Result.Branches) != 1 || p.Result.Branches[0] != wantBranch {
+		t.Errorf("Result.Branches=%v, want [%q]", p.Result.Branches, wantBranch)
+	}
+	// No Base configured on this pipeline — diff stats are best-effort zero,
+	// never an error that would block completion.
+	if p.Result.FilesChanged != 0 || p.Result.Insertions != 0 || p.Result.Deletions != 0 {
+		t.Errorf("expected zero-value diff stats with no base configured, got %+v", p.Result)
+	}
+}
+
+// TestBuildPipelineResultGitStats verifies the Result's git diff stats are
+// populated (non-zero) when the final step's worktree is a real git repo
+// and Pipeline.Base is set — the same session.DiffSummary helper the
+// fan-out compare endpoint uses (internal/ws/fanout.go).
+func TestBuildPipelineResultGitStats(t *testing.T) {
+	repo := t.TempDir()
+	run := func(name string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(name, args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+		}
+	}
+	run("git", "init", "-b", "main")
+	run("git", "config", "user.email", "test@test.com")
+	run("git", "config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+	run("git", "checkout", "-b", "pipeline-work")
+	if err := os.WriteFile(filepath.Join(repo, "b.txt"), []byte("line1\nline2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("git", "add", ".")
+	run("git", "commit", "-m", "add b")
+
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone},
+	})
+	p.Base = "main"
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep(0): %v", err)
+	}
+	sessID := p.Steps[0].SessionID
+	sm.sessions[sessID].lastText = "done"
+	sm.sessions[sessID].worktree = repo
+
+	if err := orch.Advance(p, 0, "exited(0)"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	if p.Result == nil {
+		t.Fatal("Result is nil")
+	}
+	if p.Result.FilesChanged == 0 {
+		t.Errorf("FilesChanged=0, want > 0 (result=%+v)", p.Result)
+	}
+	if p.Result.Insertions == 0 {
+		t.Errorf("Insertions=0, want > 0 (result=%+v)", p.Result)
+	}
+}
+
+// TestOutputTruncation verifies truncateOutput is a no-op on short text,
+// caps long text at maxStepOutputBytes + the marker, appends
+// truncatedOutputMarker, and never splits a multi-byte UTF-8 rune at the
+// cut boundary.
+func TestOutputTruncation(t *testing.T) {
+	short := "hello world"
+	if got := truncateOutput(short); got != short {
+		t.Errorf("truncateOutput(short)=%q, want unchanged", got)
+	}
+
+	long := strings.Repeat("a", maxStepOutputBytes+500)
+	got := truncateOutput(long)
+	if !strings.HasSuffix(got, truncatedOutputMarker) {
+		t.Errorf("truncated output missing marker suffix: %q", got[len(got)-40:])
+	}
+	if len(got) > maxStepOutputBytes+len(truncatedOutputMarker) {
+		t.Errorf("truncated output too long: %d bytes", len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Error("truncated output is not valid UTF-8")
+	}
+
+	// A multi-byte rune sitting right at the cut boundary must not be split.
+	multibyte := strings.Repeat("a", maxStepOutputBytes-1) + "€€€" // € is 3 bytes each
+	got2 := truncateOutput(multibyte)
+	if !utf8.ValidString(got2) {
+		t.Error("truncated multi-byte output is not valid UTF-8")
+	}
+}
+
+// TestFanoutPickWinnerOutputCaptured verifies that Pick harvests the WINNER
+// run's output (not any loser's) into Step.Output, and — since this is a
+// single-step pipeline — into the pipeline Result at COMPLETE.
+func TestFanoutPickWinnerOutputCaptured(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{
+			Index: 0, AgentType: "claude",
+			PromptTemplate: "do: {{task}}",
+			InputFromPrev:  InputNone,
+			Fanout:         &FanoutConfig{Count: 2},
+		},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep: %v", err)
+	}
+
+	run0SessID := p.Steps[0].Fanout.Runs[0].SessionID
+	run1SessID := p.Steps[0].Fanout.Runs[1].SessionID
+	sm.sessions[run0SessID].lastText = "winner output"
+	sm.sessions[run1SessID].lastText = "loser output"
+
+	p.Steps[0].Fanout.Runs[0].Phase = "exited(0)"
+	p.Steps[0].Fanout.Runs[1].Phase = "exited(0)"
+	p.State = PipelineAwaitingPick
+
+	if err := orch.Pick(p, 0); err != nil {
+		t.Fatalf("Pick(0): %v", err)
+	}
+
+	if p.Steps[0].Output != "winner output" {
+		t.Errorf("Steps[0].Output=%q, want %q", p.Steps[0].Output, "winner output")
+	}
+	if p.State != PipelineComplete {
+		t.Fatalf("state=%s, want complete (single-step fanout pipeline)", p.State)
+	}
+	if p.Result == nil || p.Result.Output != "winner output" {
+		t.Errorf("Result=%+v, want Output=%q", p.Result, "winner output")
+	}
+	wantBranch := p.Steps[0].Fanout.Runs[0].Branch
+	if len(p.Result.Branches) != 1 || p.Result.Branches[0] != wantBranch {
+		t.Errorf("Result.Branches=%v, want [%q] (winner's branch)", p.Result.Branches, wantBranch)
+	}
+}
+
+// TestResultAbsentOnFailed verifies Pipeline.Result stays nil when a step
+// fails — apps must not show a result card for a failed pipeline.
+func TestResultAbsentOnFailed(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep(0): %v", err)
+	}
+
+	if err := orch.Advance(p, 0, "exited(1)"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	if p.State != PipelineFailed {
+		t.Fatalf("state=%s, want failed", p.State)
+	}
+	if p.Result != nil {
+		t.Errorf("Result=%+v, want nil on FAILED", p.Result)
+	}
+}
+
+// TestPipelineResultJSONRoundtrip verifies Step.Output and Pipeline.Result
+// survive a Save/Load cycle, and that both omitempty (step "output" and
+// pipeline "result") are honored when unset.
+func TestPipelineResultJSONRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	p := &Pipeline{
+		ID:    "p_test02",
+		Title: "result roundtrip",
+		State: PipelineComplete,
+		Steps: []Step{{Index: 0, Output: "step output text"}},
+		Result: &PipelineResult{
+			Output:       "final result text",
+			Finished:     "2026-07-06T00:00:00Z",
+			FilesChanged: 3,
+			Insertions:   10,
+			Deletions:    2,
+			Branches:     []string{"pipeline-p_test02-step-0"},
+		},
+	}
+	if err := p.Save(dir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := Load(dir, p.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Steps[0].Output != "step output text" {
+		t.Errorf("Steps[0].Output=%q, want %q", got.Steps[0].Output, "step output text")
+	}
+	if got.Result == nil {
+		t.Fatal("Result nil after Load")
+	}
+	if got.Result.Output != "final result text" || got.Result.FilesChanged != 3 ||
+		got.Result.Insertions != 10 || got.Result.Deletions != 2 ||
+		len(got.Result.Branches) != 1 || got.Result.Branches[0] != "pipeline-p_test02-step-0" {
+		t.Errorf("Result mismatch: %+v", got.Result)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "pipelines", p.ID, "pipeline.json"))
+	if err != nil {
+		t.Fatalf("read pipeline.json: %v", err)
+	}
+	if !strings.Contains(string(raw), `"result"`) {
+		t.Error(`expected "result" key present in pipeline.json when Result is set`)
+	}
+
+	// A pipeline with no result / a step with no output must omit both keys
+	// entirely (omitempty) — this is what keeps pre-existing pipeline.json
+	// files (and every non-final step) byte-compatible with this feature.
+	p2 := &Pipeline{ID: "p_test03", Title: "no result", State: PipelineRunning, Steps: []Step{{Index: 0}}}
+	if err := p2.Save(dir); err != nil {
+		t.Fatalf("Save p2: %v", err)
+	}
+	raw2, err := os.ReadFile(filepath.Join(dir, "pipelines", p2.ID, "pipeline.json"))
+	if err != nil {
+		t.Fatalf("read pipeline.json p2: %v", err)
+	}
+	if strings.Contains(string(raw2), `"result"`) {
+		t.Error(`expected "result" key absent when Result is nil (omitempty)`)
+	}
+	if strings.Contains(string(raw2), `"output"`) {
+		t.Error(`expected step "output" key absent when empty (omitempty)`)
 	}
 }
