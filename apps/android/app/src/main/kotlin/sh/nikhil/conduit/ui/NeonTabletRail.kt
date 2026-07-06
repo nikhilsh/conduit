@@ -1,8 +1,10 @@
 package sh.nikhil.conduit.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,7 +21,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.DropdownMenu
@@ -55,6 +59,7 @@ import sh.nikhil.conduit.firstUserMessageOf
  * session lists, and a full-width "New session" button pinned at the bottom.
  * Home is the center empty-state when no session is selected.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun NeonTabletRail(
     store: SessionStore,
@@ -65,6 +70,11 @@ fun NeonTabletRail(
     onOpenBoxes: () -> Unit,
     onOpenTranscript: (SavedSession) -> Unit,
     onHome: () -> Unit,
+    // "+" long-press quick-action menu (mirrors HomeScreen's bottom-bar FAB).
+    // Plain tap still calls [onNewSession] unchanged. Defaults are no-ops so
+    // existing call sites compile without change.
+    onNewPipeline: () -> Unit = {},
+    onFanOut: () -> Unit = {},
 ) {
     val neon = LocalNeonTheme.current
     val sessions by store.sessions.collectAsState()
@@ -74,6 +84,7 @@ fun NeonTabletRail(
     val harness by store.harness.collectAsState()
     val endpoint by store.endpoint.collectAsState()
     val displayNames by store.displayNames.collectAsState()
+    val pipelinesEnabled by store.pipelinesEnabled.collectAsState()
     val conversationLog by store.conversationLog.collectAsState()
 
     val savedAll by store.savedSessions.collectAsState()
@@ -206,13 +217,19 @@ fun NeonTabletRail(
         }
 
         // ── new session ──
+        var newSessionMenuExpanded by remember { mutableStateOf(false) }
         Box(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
                     .background(if (neon.glow) neon.accent else neon.accent)
-                    .clickable { onNewSession() }
+                    // Plain tap unchanged; long-press reveals the quick-action
+                    // menu (New session / New pipeline / Fan out).
+                    .combinedClickable(
+                        onClick = { onNewSession() },
+                        onLongClick = { newSessionMenuExpanded = true },
+                    )
                     .padding(vertical = 11.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
@@ -220,6 +237,25 @@ fun NeonTabletRail(
                 Icon(Icons.Filled.Add, contentDescription = null, tint = neon.accentText, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.size(8.dp))
                 Text("New session", fontFamily = neon.sans, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, color = neon.accentText)
+            }
+            DropdownMenu(expanded = newSessionMenuExpanded, onDismissRequest = { newSessionMenuExpanded = false }) {
+                DropdownMenuItem(
+                    text = { Text("New session") },
+                    leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                    onClick = { newSessionMenuExpanded = false; onNewSession() },
+                )
+                if (pipelinesEnabled) {
+                    DropdownMenuItem(
+                        text = { Text("New pipeline") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.CallSplit, contentDescription = null) },
+                        onClick = { newSessionMenuExpanded = false; onNewPipeline() },
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text("Fan out") },
+                    leadingIcon = { Icon(Icons.Filled.GridView, contentDescription = null) },
+                    onClick = { newSessionMenuExpanded = false; onFanOut() },
+                )
             }
         }
     }

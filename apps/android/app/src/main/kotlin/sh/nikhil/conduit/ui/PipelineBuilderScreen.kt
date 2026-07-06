@@ -76,6 +76,10 @@ import sh.nikhil.conduit.AgentDescriptor
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.descriptorFor
+import sh.nikhil.conduit.ui.components.ActionPillVariant
+import sh.nikhil.conduit.ui.components.ButtonVariant
+import sh.nikhil.conduit.ui.components.ConduitActionPill
+import sh.nikhil.conduit.ui.components.ConduitButton
 import sh.nikhil.conduit.ui.components.ConduitCard
 import sh.nikhil.conduit.ui.components.ConduitChip
 import sh.nikhil.conduit.ui.components.PipelineTopologyItem
@@ -1101,31 +1105,12 @@ private fun AddStepRow(
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .border(1.dp, neon.border, RoundedCornerShape(12.dp))
-                .clickable(onClick = { if (showBranch || showLoop) expanded = true else onClick() })
-                .padding(vertical = 12.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.Default.Add,
-                contentDescription = "Add step",
-                tint = neon.accent,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                "Add step",
-                fontFamily = neon.sans,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 14.sp,
-                color = neon.accent,
-            )
-        }
+        ConduitActionPill(
+            label = "Add step",
+            leadingIcon = Icons.Default.Add,
+            variant = ActionPillVariant.Soft,
+            onClick = { if (showBranch || showLoop) expanded = true else onClick() },
+        )
         if (showBranch || showLoop) {
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 DropdownMenuItem(
@@ -1151,57 +1136,46 @@ private fun AddStepRow(
 
 @Composable
 private fun SaveTemplateButton(neon: NeonTheme, enabled: Boolean, isSaving: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(neon.accent.copy(alpha = 0.10f))
-            .border(1.dp, neon.accent.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(vertical = 11.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (isSaving) {
+    ConduitButton(
+        title = if (isSaving) "Saving..." else "Save as template",
+        onClick = onClick,
+        variant = ButtonVariant.Secondary,
+        tint = neon.accent,
+        enabled = enabled,
+        leadingContent = if (isSaving) {
+            {
                 CircularProgressIndicator(
                     modifier = Modifier.size(14.dp),
                     color = neon.accent,
                     strokeWidth = 2.dp,
                 )
             }
-            Text(
-                if (isSaving) "Saving..." else "Save as template",
-                fontFamily = neon.sans,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 13.sp,
-                color = if (enabled) neon.accent else neon.textFaint,
-            )
-        }
-    }
+        } else {
+            null
+        },
+    )
 }
 
 @Composable
 private fun StartPipelineButton(neon: NeonTheme, enabled: Boolean, isCreating: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (enabled) neon.accent else neon.surface2)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(vertical = 14.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            if (isCreating) "Starting..." else "Start pipeline",
-            fontFamily = neon.sans,
-            fontWeight = FontWeight.Bold,
-            fontSize = 15.sp,
-            color = if (enabled) neon.accentText else neon.textFaint,
-        )
-    }
+    ConduitButton(
+        title = if (isCreating) "Starting..." else "Start pipeline",
+        onClick = onClick,
+        variant = ButtonVariant.Primary,
+        tint = neon.accent,
+        enabled = enabled,
+        leadingContent = if (isCreating) {
+            {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    color = neon.accentText,
+                    strokeWidth = 2.dp,
+                )
+            }
+        } else {
+            null
+        },
+    )
 }
 
 // MARK: Phone layout -- stacked block-card list + config dialog
@@ -1615,10 +1589,9 @@ private fun BlockCard(
                     Modifier
                 },
             ),
-        pad = 12.dp,
     ) {
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            AgentAvatar(assistant = step.agentType, size = 32.dp)
+            AgentGlyph(assistant = step.agentType, size = 32.dp)
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
@@ -1710,7 +1683,6 @@ private fun ControlFlowBlockCard(
                     Modifier
                 },
             ),
-        pad = 12.dp,
     ) {
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Icon(
@@ -2223,16 +2195,13 @@ private fun SubStackEditor(
                 )
             }
         }
-        Row(
-            modifier = Modifier
-                .padding(start = 10.dp)
-                .clickable(onClick = onAdd),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Icon(Icons.Default.Add, contentDescription = "Add step", tint = neon.accent, modifier = Modifier.size(13.dp))
-            Text("Add step", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = neon.accent)
-        }
+        ConduitActionPill(
+            label = "Add step",
+            modifier = Modifier.padding(start = 10.dp),
+            leadingIcon = Icons.Default.Add,
+            variant = ActionPillVariant.Soft,
+            onClick = onAdd,
+        )
     }
 }
 
@@ -2257,7 +2226,7 @@ private fun SubStepRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        AgentAvatar(assistant = sub.agentType, size = 22.dp)
+        AgentGlyph(assistant = sub.agentType, size = 22.dp)
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 "${index + 1}. ${sub.role.replaceFirstChar { it.uppercase() }}",

@@ -578,27 +578,32 @@ extension ConduitUI {
             List {
                 Section {
                     metadataSection
-                        .listRowInsets(EdgeInsets())
+                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 }
 
                 Section {
                     stepsHeader
-                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
+                        .listRowInsets(EdgeInsets(top: 0, leading: 14, bottom: 4, trailing: 14))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
 
                     if viewModel.steps.count > 1 {
                         topologyPreview
-                            .listRowInsets(EdgeInsets(top: 0, leading: 2, bottom: 8, trailing: 2))
+                            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                     }
 
                     ForEach(Array(viewModel.steps.enumerated()), id: \.element.id) { index, step in
                         blockCard(step: step, index: index)
-                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                            // Leading matches metadataSection's card; trailing
+                            // gets extra room so the system's edit-mode drag
+                            // handle (rendered past the row's trailing edge)
+                            // has breathing space instead of crowding the
+                            // card's rounded corner (owner device feedback).
+                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 14))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                             .swipeActions(edge: .trailing, allowsFullSwipe: viewModel.canDeleteStep) {
@@ -617,7 +622,7 @@ extension ConduitUI {
                     }
 
                     addStepRow
-                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 0, trailing: 0))
+                        .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 0, trailing: 14))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 }
@@ -625,7 +630,7 @@ extension ConduitUI {
                 if store.pipelineTemplates {
                     Section {
                         saveTemplateButton
-                            .listRowInsets(EdgeInsets())
+                            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                     }
@@ -633,7 +638,7 @@ extension ConduitUI {
 
                 Section {
                     startButton
-                        .listRowInsets(EdgeInsets())
+                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 }
@@ -842,7 +847,7 @@ extension ConduitUI {
         // MARK: Save as template button
 
         private var saveTemplateButton: some View {
-            Button {
+            ConduitUI.ActionButton(variant: .secondary, tint: neon.accent) {
                 saveAsTemplate()
             } label: {
                 HStack(spacing: 6) {
@@ -856,23 +861,10 @@ extension ConduitUI {
                             .font(.system(size: 13, weight: .semibold))
                     }
                     Text(isSavingTemplate ? "Saving..." : "Save as template")
-                        .font(neon.sans(13).weight(.semibold))
                 }
-                .foregroundStyle(neon.accent)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 11)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(neon.accent.opacity(0.10))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(neon.accent.opacity(0.30), lineWidth: 1)
-                )
             }
-            .buttonStyle(.plain)
             .disabled(isSavingTemplate || startDisabled)
-            .opacity((isSavingTemplate || startDisabled) ? 0.4 : 1)
+            .opacity((isSavingTemplate || startDisabled) ? 0.45 : 1)
         }
 
         // MARK: Metadata section
@@ -972,27 +964,12 @@ extension ConduitUI {
                         }
                     }
                 } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 12, weight: .bold))
-                        Text("Add step")
-                            .font(neon.sans(12).weight(.semibold))
-                    }
-                    .foregroundStyle(neon.accent)
+                    ConduitUI.ActionPill(label: "Add step", systemImage: "plus", variant: .soft)
                 }
             } else {
-                Button {
+                ConduitUI.ActionPill(label: "Add step", systemImage: "plus", variant: .soft) {
                     viewModel.addStep()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 12, weight: .bold))
-                        Text("Add step")
-                            .font(neon.sans(12).weight(.semibold))
-                    }
-                    .foregroundStyle(neon.accent)
                 }
-                .buttonStyle(.plain)
             }
         }
 
@@ -1009,11 +986,11 @@ extension ConduitUI {
 
         private func agentBlockCard(step: PipelineStep, index: Int, isSelected: Bool) -> some View {
             ConduitUI.Card(
-                padding: 12,
                 tint: isSelected ? neon.accent : nil
             ) {
                 HStack(alignment: .top, spacing: 12) {
-                    AgentAvatar(assistant: step.agentType, size: 32)
+                    AgentGlyph(assistant: step.agentType, size: 26)
+                        .frame(width: 32, height: 32)
 
                     VStack(alignment: .leading, spacing: 5) {
                         HStack(spacing: 6) {
@@ -1060,7 +1037,6 @@ extension ConduitUI {
         /// by tapping this card, same precedent as the fanout toggle today.
         private func controlFlowBlockCard(step: PipelineStep, index: Int, isSelected: Bool) -> some View {
             ConduitUI.Card(
-                padding: 12,
                 tint: isSelected ? neon.accent : nil
             ) {
                 HStack(alignment: .top, spacing: 12) {
@@ -1432,18 +1408,9 @@ extension ConduitUI {
                     Rectangle().fill(neon.border.opacity(0.5)).frame(width: 1)
                 }
 
-                Button {
+                ConduitUI.ActionPill(label: "Add step", systemImage: "plus", variant: .soft) {
                     viewModel.addSubStep(stepID: stepID, arm: arm)
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .bold))
-                        Text("Add step")
-                            .font(neon.sans(11).weight(.semibold))
-                    }
-                    .foregroundStyle(neon.accent)
                 }
-                .buttonStyle(.plain)
                 .padding(.leading, 10)
             }
         }
@@ -1456,7 +1423,8 @@ extension ConduitUI {
             arm: PipelineSubStepArm
         ) -> some View {
             HStack(spacing: 8) {
-                AgentAvatar(assistant: sub.agentType, size: 22)
+                AgentGlyph(assistant: sub.agentType, size: 20)
+                    .frame(width: 22, height: 22)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(index + 1). \(sub.role.capitalized)")
                         .font(neon.sans(12).weight(.semibold))
@@ -2001,17 +1969,11 @@ extension ConduitUI {
                 }
             }
             .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(step.wrappedValue.fanoutEnabled
-                          ? neon.accent.opacity(0.06)
-                          : neon.surface2.opacity(0.5))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(step.wrappedValue.fanoutEnabled
-                            ? neon.accent.opacity(0.25)
-                            : neon.border.opacity(0.5), lineWidth: 1)
+            .neonCardSurface(
+                neon,
+                fill: step.wrappedValue.fanoutEnabled ? neon.accent.opacity(0.06) : neon.surface2.opacity(0.5),
+                cornerRadius: 10,
+                border: step.wrappedValue.fanoutEnabled ? neon.accent.opacity(0.25) : neon.border.opacity(0.5)
             )
         }
 
@@ -2107,7 +2069,7 @@ extension ConduitUI {
         // MARK: Start button
 
         private var startButton: some View {
-            Button {
+            ConduitUI.ActionButton(variant: .primary, tint: neon.accent) {
                 submitPipeline()
             } label: {
                 HStack(spacing: 8) {
@@ -2121,20 +2083,10 @@ extension ConduitUI {
                             .font(.system(size: 14, weight: .bold))
                     }
                     Text(isSubmitting ? "Starting..." : "Start pipeline")
-                        .font(neon.sans(15).weight(.bold))
                 }
-                .foregroundStyle(neon.accentText)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(neon.accent)
-                )
-                .neonGlowBox(neon.glow && !isSubmitting ? neon.glowBox : nil)
             }
-            .buttonStyle(.plain)
             .disabled(isSubmitting || startDisabled)
-            .opacity((isSubmitting || startDisabled) ? 0.4 : 1)
+            .opacity((isSubmitting || startDisabled) ? 0.45 : 1)
         }
 
         private var startDisabled: Bool {

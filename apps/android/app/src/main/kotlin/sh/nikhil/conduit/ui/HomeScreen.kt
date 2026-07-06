@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
@@ -121,6 +122,13 @@ fun HomeScreen(
     // Active-pipeline affordance tap -- opens `PipelineListScreen`. Default
     // no-op so existing call sites compile without change.
     onOpenPipelines: () -> Unit = {},
+    // "+" long-press quick-action menu (device feedback: a pipeline / fan-out
+    // was only reachable via the command palette). Plain tap still calls
+    // [onNewSession] unchanged. Defaults are no-ops so existing call sites
+    // compile without change; the menu's "New pipeline" row self-gates on
+    // `store.pipelinesEnabled` regardless of what the caller wires here.
+    onNewPipeline: () -> Unit = {},
+    onFanOut: () -> Unit = {},
     // On the 3-pane tablet the rail header already owns the Settings gear,
     // so the center home screen must not render a second one (two gears on
     // the tablet home — device feedback 2026-06-02). Phone keeps it: the
@@ -943,21 +951,50 @@ fun HomeScreen(
             horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
         ) {
             CircleActionButton(Icons.Default.Mic, "Voice", size = 44.dp, onClick = onVoice)
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .then(neon.glowBox?.let { Modifier.neonGlowBox(it, CircleShape) } ?: Modifier)
-                    .clip(CircleShape)
-                    .background(neon.accent, CircleShape)
-                    .clickable(onClick = onNewSession),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = "New session",
-                    tint = neon.accentText,
-                    modifier = Modifier.size(22.dp),
-                )
+            var plusMenuExpanded by remember { mutableStateOf(false) }
+            Box {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .then(neon.glowBox?.let { Modifier.neonGlowBox(it, CircleShape) } ?: Modifier)
+                        .clip(CircleShape)
+                        .background(neon.accent, CircleShape)
+                        // Plain tap is unchanged (onNewSession); long-press
+                        // reveals the quick-action menu (device feedback: a
+                        // pipeline / fan-out was only reachable via the
+                        // command palette).
+                        .combinedClickable(
+                            onClick = onNewSession,
+                            onLongClick = { plusMenuExpanded = true },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = "New session",
+                        tint = neon.accentText,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                DropdownMenu(expanded = plusMenuExpanded, onDismissRequest = { plusMenuExpanded = false }) {
+                    DropdownMenuItem(
+                        text = { Text("New session") },
+                        leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                        onClick = { plusMenuExpanded = false; onNewSession() },
+                    )
+                    if (pipelinesEnabled) {
+                        DropdownMenuItem(
+                            text = { Text("New pipeline") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.CallSplit, contentDescription = null) },
+                            onClick = { plusMenuExpanded = false; onNewPipeline() },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("Fan out") },
+                        leadingIcon = { Icon(Icons.Default.GridView, contentDescription = null) },
+                        onClick = { plusMenuExpanded = false; onFanOut() },
+                    )
+                }
             }
             CircleActionButton(Icons.Default.Search, "Search", size = 44.dp, onClick = onSearch)
         }

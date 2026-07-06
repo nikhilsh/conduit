@@ -482,6 +482,10 @@ fun ConduitButton(
     variant: ButtonVariant = ButtonVariant.Primary,
     tint: Color? = null,
     enabled: Boolean = true,
+    // Optional leading slot (e.g. a spinner while a request is in flight,
+    // or a static glyph) rendered before the title. Additive/nil-default so
+    // every existing title-only call site is unaffected.
+    leadingContent: (@Composable () -> Unit)? = null,
 ) {
     val neon = LocalNeonTheme.current
     val accent = tint ?: if (variant == ButtonVariant.Primary) neon.green else neon.accent
@@ -509,13 +513,29 @@ fun ConduitButton(
         .clickable(enabled = enabled, onClick = onClick)
         .padding(vertical = 14.dp)
     Box(base, contentAlignment = Alignment.Center) {
-        Text(
-            title,
-            fontFamily = neon.sans,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-            color = fg,
-        )
+        if (leadingContent != null) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                leadingContent()
+                Text(
+                    title,
+                    fontFamily = neon.sans,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = fg,
+                )
+            }
+        } else {
+            Text(
+                title,
+                fontFamily = neon.sans,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = fg,
+            )
+        }
     }
 }
 

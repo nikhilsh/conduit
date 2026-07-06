@@ -54,6 +54,10 @@ extension ConduitUI {
         /// we can defer presenting the agent picker until AFTER the palette
         /// sheet fully dismisses (avoids the iOS double-sheet race).
         @State private var pendingRunOnBox = false
+        /// Set when the new-session sheet's "Multi-step pipeline" row is
+        /// tapped, so we present the Builder AFTER the agent picker sheet
+        /// fully dismisses (same double-sheet-race avoidance as pendingRunOnBox).
+        @State private var pendingOpenPipelineBuilder = false
         @State private var selectedSessionID: String?
         /// Confirmation alert state for the session-row swipe-to-delete.
         /// `.alert(item:)` needs an Identifiable, so we wrap the target
@@ -107,8 +111,17 @@ extension ConduitUI {
                     ConduitUI.AddServerSheet()
                         .presentationDetents([.medium, .large])
                 }
-                .sheet(isPresented: $showAgentPicker, onDismiss: { voicePrompt = nil }) {
-                    ConduitUI.AgentPickerSheet(initialPrompt: voicePrompt)
+                .sheet(isPresented: $showAgentPicker, onDismiss: {
+                    voicePrompt = nil
+                    if pendingOpenPipelineBuilder {
+                        pendingOpenPipelineBuilder = false
+                        showPipelineBuilder = true
+                    }
+                }) {
+                    ConduitUI.AgentPickerSheet(
+                        initialPrompt: voicePrompt,
+                        onOpenPipelineBuilder: { pendingOpenPipelineBuilder = true }
+                    )
                 }
                 .sheet(isPresented: $showVoiceDictation, onDismiss: {
                     // Chain into the agent picker (seeded with the transcript)
@@ -939,6 +952,35 @@ extension ConduitUI {
             .padding(.vertical, 24)
         }
 
+        /// Long-press quick-action menu for the bottom bar's "+" FAB
+        /// (device feedback: the plain tap always opens new-session, but a
+        /// pipeline/fan-out was only reachable via the command palette).
+        /// Plain tap behavior is unchanged; this is purely additive.
+        @ViewBuilder
+        private var plusButtonMenu: some View {
+            Button {
+                if store.harness.canIssueCommands {
+                    showAgentPicker = true
+                } else {
+                    showAddServer = true
+                }
+            } label: {
+                Label("New session", systemImage: "plus.square")
+            }
+            if store.pipelinesEnabled {
+                Button {
+                    showPipelineBuilder = true
+                } label: {
+                    Label("New pipeline", systemImage: "arrow.triangle.merge")
+                }
+            }
+            Button {
+                showFanOut = true
+            } label: {
+                Label("Fan out", systemImage: "square.grid.2x2")
+            }
+        }
+
         private var bottomBar: some View {
             // PLAN-CONDUIT-VISUAL-PARITY PR 3, audit §A.1.5: upstream wraps
             // the bottom bar in TWO `GlassMorphContainer`s so the `+`
@@ -965,6 +1007,11 @@ extension ConduitUI {
                         } else {
                             showAddServer = true
                         }
+                    }
+                    // Long-press quick-action menu (plain tap is unchanged --
+                    // a context menu never intercepts the primary tap).
+                    .contextMenu {
+                        plusButtonMenu
                     }
                 }
                 Spacer()
