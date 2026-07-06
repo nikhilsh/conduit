@@ -24,6 +24,43 @@ _(empty)_
 
 ---
 
+## v0.0.217
+
+**Pipeline result: end-result on completed pipelines — broker + apps. PRs #906 + #907.**
+
+- **Broker (#906)** — every step's last assistant text is harvested at the
+  shared success point (before reap) into `steps[].output` (16KB rune-safe
+  truncation); COMPLETE builds `result: {output, finished, files_changed,
+  insertions, deletions, branches[]}` via DiffSummary (best-effort). Flag
+  `pipeline_result` (features.* + root). [broker, **redeploy required**]
+- **Apps (#907)** — completed Monitor leads with a Result card (final output
+  as markdown, collapse >12 lines, git chips, branch line); step rows gain an
+  expandable output preview; dead-code tablet Home views also wired (note:
+  `ConduitTabletHome`/`NeonTabletHome` are instantiated nowhere — real iPad
+  path is the split view; cleanup candidate). iOS footgun fixed en route:
+  `let field: T? = nil` is silently skipped by synthesized Decodable — use
+  `var`. [iOS + Android, **needs on-device verify**: run a pipeline to
+  completion, check Result card + step output disclosures]
+
+**Pipeline monitor/home UX fixes (4 owner-reported bugs) — iOS + Android. PR #905.**
+
+- Completed steps no longer show QUEUED: step phase `turn_complete` mapped
+  (root cause: broker's TurnComplete signal was unmapped) + canonical
+  fallback chain (ended/complete/behind-current → done; failed-at-current →
+  failed) unit-tested identically on both platforms.
+- Step tap no longer opens a blank sheet: non-live sessions open the
+  persisted transcript read-only, themed empty-state if truly gone (was:
+  iOS rendered Color.clear; Android opened chat with no data).
+- Home shows pipelines: banner card now also covers pipelines
+  completed/failed within 24h (dim, state chip), tap → list.
+- Monitor step rows re-themed: bare tinted agent glyphs (new shared
+  AgentGlyph/AgentAvatar) replacing white filled brand-logo circles; mono
+  state chips. [iOS + Android, **needs on-device verify**: reopen a
+  completed pipeline — states correct, step tap shows transcript, Home
+  banner visible, rows on-theme]
+
+---
+
 ## v0.0.216
 
 **Harness builder Phase 3: If/Else + Loop blocks — broker + apps. PRs #901 + #902.**
