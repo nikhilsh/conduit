@@ -1522,12 +1522,19 @@ private fun PipelineResultCard(
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
 ) {
+    // #920 hang parity note: iOS's Result card was recomputing
+    // needsCollapse/collapsed (a String.split over up to 16KB) inside
+    // SwiftUI `body` on every render pass, causing a fully-blocked
+    // main-thread hang under 5s polling + observable-store churn (Sentry:
+    // "App Hang Fully Blocked" 3.2-4.0s, release 0.0.218+246). Android
+    // already gates both computed values behind remember(result.output),
+    // so recomposition only re-splits when the output string itself
+    // changes -- hoisted the collapsed() call out of the conditional
+    // branch so toggling `expanded` never disposes/recreates its
+    // remember slot and forces a redundant recompute.
     val needsCollapse = remember(result.output) { PipelineResultViewModel.needsCollapse(result.output) }
-    val displayText = if (needsCollapse && !expanded) {
-        remember(result.output) { PipelineResultViewModel.collapsed(result.output) }
-    } else {
-        result.output
-    }
+    val collapsedText = remember(result.output) { PipelineResultViewModel.collapsed(result.output) }
+    val displayText = if (needsCollapse && !expanded) collapsedText else result.output
     val hasGitOutcome = result.filesChanged > 0 || result.insertions > 0 || result.deletions > 0
 
     Box(
