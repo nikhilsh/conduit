@@ -69,6 +69,7 @@ struct AgentAvatar: View {
         switch assistant.lowercased() {
         case "claude":    name = "ClaudeMark"
         case "codex":     name = "CodexMark"
+        case "gemini":    name = "GeminiMark"
         case "opencode":  name = "OpencodeMark"
         default:          return nil
         }

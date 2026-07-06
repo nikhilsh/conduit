@@ -173,6 +173,7 @@ private fun agentLogoRes(assistant: String): Int? {
     val name = when (assistant.lowercase()) {
         "claude"   -> "claude_mark"
         "codex"    -> "codex_mark"
+        "gemini"   -> "gemini_mark"
         "opencode" -> "opencode_mark"
         else       -> return null
     }
