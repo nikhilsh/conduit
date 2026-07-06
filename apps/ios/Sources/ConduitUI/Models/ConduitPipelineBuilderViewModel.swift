@@ -34,7 +34,12 @@ extension ConduitUI {
         var canDeleteStep: Bool { steps.count > 1 }
 
         func addStep() {
-            let s = PipelineStep()
+            var s = PipelineStep()
+            // Task-2a fix: a step after the first defaults to "output" so
+            // the previous step's reply actually reaches it -- the plain
+            // "none" default was a silent no-handoff bug the owner hit
+            // directly. Step 0 keeps "none" (there is no previous step).
+            if !steps.isEmpty { s.inputFromPrev = "output" }
             steps.append(s)
             selectedStepID = s.id
         }
@@ -48,6 +53,7 @@ extension ConduitUI {
         func addControlFlowStep(kind: String) {
             var s = PipelineStep()
             s.kind = kind
+            if !steps.isEmpty { s.inputFromPrev = "output" }
             steps.append(s)
             selectedStepID = s.id
         }
@@ -82,7 +88,12 @@ extension ConduitUI {
         func addSubStep(stepID: PipelineStep.ID, arm: PipelineSubStepArm) {
             guard let idx = index(for: stepID) else { return }
             var arr = subStepArray(arm, in: steps[idx])
-            arr.append(PipelineSubStep())
+            var sub = PipelineSubStep()
+            // Task-2a fix: same "output after the first" default within a
+            // Then/Else/body sub-stack -- the arm's own first step keeps
+            // "none".
+            if !arr.isEmpty { sub.inputFromPrev = "output" }
+            arr.append(sub)
             setSubStepArray(arm, arr, in: idx)
         }
 

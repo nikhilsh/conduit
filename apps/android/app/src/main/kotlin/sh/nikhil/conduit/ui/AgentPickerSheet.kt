@@ -684,7 +684,7 @@ private fun DirectoryStep(
                     )
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        SectionLabel("Reasoning effort")
+                        ModelPickerSectionLabel("Reasoning effort")
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             effortOptions.forEach { level ->
                                 ConduitChip(
@@ -699,7 +699,7 @@ private fun DirectoryStep(
             }
             val modeBlock: @Composable () -> Unit = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SectionLabel("Mode")
+                    ModelPickerSectionLabel("Mode")
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         ConduitChip(
                             label = "Auto",
@@ -733,7 +733,7 @@ private fun DirectoryStep(
             }
 
             if (recent.isNotEmpty()) {
-                SectionLabel("Recent")
+                ModelPickerSectionLabel("Recent")
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     recent.take(3).forEach { path ->
                         RecentRow(path = path, onTap = { onCreate(path, selectedModel, selectedEffort, selectedMode, selectedFastMode, null) })
@@ -741,7 +741,7 @@ private fun DirectoryStep(
                 }
             }
 
-            SectionLabel("Browse")
+            ModelPickerSectionLabel("Browse")
             Breadcrumb(
                 listing = listing,
                 onUp = { parent -> currentPath = parent },
@@ -931,213 +931,6 @@ private fun HarnessChip(
                 .padding(6.dp),
         )
     }
-}
-
-/**
- * Model picker for the new-session flow. Mirrors the fork chooser's model
- * dropdown (`SessionInfoScreen.kt`) and the iOS new-session model menu.
- * Reuses the shared per-assistant option/label helpers so the broker never
- * gets an alias it would drop. The default selection is the inherit
- * sentinel → no `--model` override.
- */
-@Composable
-private fun ModelPicker(
-    assistant: String,
-    model: String,
-    catalog: List<sh.nikhil.conduit.SessionStore.AgentModel>?,
-    onSelect: (String) -> Unit,
-    fastMode: Boolean,
-    onFastModeChange: (Boolean) -> Unit,
-) {
-    val neon = LocalNeonTheme.current
-    var showSheet by remember { mutableStateOf(false) }
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        SectionLabel("Model")
-        // Trigger row — Conduit-styled, opens the model sheet (round-3: the
-        // system DropdownMenu read as off-brand and clipped the captions).
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface)
-                .clickable { showSheet = true },
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp).fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    modelCleanName(model, catalog),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = neon.sans,
-                    color = neon.text,
-                )
-                Icon(Icons.Filled.ArrowDropDown, contentDescription = "Choose model", tint = neon.textDim)
-            }
-        }
-        // The agent's own description of the (resolved) selection — e.g.
-        // "Sonnet 4.6 · Efficient for routine tasks". Only when the live
-        // catalog is in; the static fallback has none.
-        forkModelDetail(model, catalog)?.let { detail ->
-            Text(detail, fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textFaint)
-        }
-        // Fast-mode toggle — actionable when the selected model supports it.
-        if (forkModelSupportsFastMode(model, catalog)) {
-            FastModeToggle(checked = fastMode, onCheckedChange = onFastModeChange)
-        }
-    }
-    if (showSheet) {
-        ModelPickerSheet(
-            assistant = assistant,
-            selected = model,
-            catalog = catalog,
-            onSelect = {
-                onSelect(it)
-                showSheet = false
-            },
-            onDismiss = { showSheet = false },
-        )
-    }
-}
-
-/**
- * Clean display name for a model option, with the " (recommended)" suffix
- * [forkModelLabel] appends stripped — the sheet shows that as a badge, not
- * inline text.
- */
-internal fun modelCleanName(option: String, catalog: List<sh.nikhil.conduit.SessionStore.AgentModel>?): String =
-    forkModelLabel(option, catalog).removeSuffix(" (recommended)")
-
-/** True when [option] is the catalog's recommended/default row. */
-internal fun isRecommendedModel(option: String, catalog: List<sh.nikhil.conduit.SessionStore.AgentModel>?): Boolean {
-    val entry = catalogEntryFor(option, catalog)
-    return option == forkModelInherit ||
-        entry?.isDefault == true ||
-        entry?.displayName?.lowercase()?.startsWith("default") == true
-}
-
-/**
- * Conduit-styled model picker (round-3 fix 7): a ModalBottomSheet list
- * replacing the off-brand system DropdownMenu. Each row carries the clean
- * model name, a structured caption (the agent's own "·"-separated detail),
- * a RECOMMENDED badge on the default, and a checkmark on the selection.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ModelPickerSheet(
-    assistant: String,
-    selected: String,
-    catalog: List<sh.nikhil.conduit.SessionStore.AgentModel>?,
-    onSelect: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val neon = LocalNeonTheme.current
-    val tint = neonAgentColor(assistant, neon)
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val options = forkModelOptions(assistant, catalog)
-    val agentName = assistant.replaceFirstChar { it.uppercaseChar() }
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = neon.surfaceSolid,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            // Agent header — which agent these models belong to.
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AgentAvatar(assistant = assistant, size = 22.dp)
-                Text(
-                    "$agentName models",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontFamily = neon.sans,
-                    fontWeight = FontWeight.SemiBold,
-                    color = neon.text,
-                )
-            }
-            options.forEach { option ->
-                ModelRow(
-                    name = modelCleanName(option, catalog),
-                    caption = forkModelDetail(option, catalog),
-                    recommended = isRecommendedModel(option, catalog),
-                    selected = option == selected,
-                    tint = tint,
-                    onTap = { onSelect(option) },
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-    }
-}
-
-@Composable
-private fun ModelRow(
-    name: String,
-    caption: String?,
-    recommended: Boolean,
-    selected: Boolean,
-    tint: Color,
-    onTap: () -> Unit,
-) {
-    val neon = LocalNeonTheme.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .neonCardSurface(
-                neon = neon,
-                shape = RoundedCornerShape(13.dp),
-                fill = if (selected) tint.copy(alpha = 0.12f) else neon.surface,
-                borderColor = if (selected) tint else neon.border,
-            )
-            .clickable(onClick = onTap)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text(
-                    name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontFamily = neon.sans,
-                    fontWeight = FontWeight.SemiBold,
-                    color = neon.text,
-                )
-                if (recommended) {
-                    ConduitChip(
-                        label = "RECOMMENDED",
-                        tint = tint,
-                        selected = true,
-                    )
-                }
-            }
-            if (!caption.isNullOrEmpty()) {
-                Text(caption, fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textFaint)
-            }
-        }
-        if (selected) {
-            Icon(Icons.Filled.CheckCircle, contentDescription = "Selected", tint = tint, modifier = Modifier.size(20.dp))
-        } else {
-            Box(Modifier.size(20.dp).clip(CircleShape).border(1.5.dp, neon.border, CircleShape))
-        }
-    }
-}
-
-@Composable
-private fun SectionLabel(text: String) {
-    val neon = LocalNeonTheme.current
-    Text(
-        text.uppercase(),
-        style = MaterialTheme.typography.labelSmall,
-        fontFamily = neon.mono,
-        fontWeight = FontWeight.Bold,
-        color = neon.textDim,
-    )
 }
 
 @Composable
@@ -1408,78 +1201,6 @@ private fun BoxRow(
                 tint = if (selected) neon.accent else neon.textFaint.copy(alpha = 0.35f),
                 modifier = Modifier.size(20.dp),
             )
-        }
-    }
-}
-
-/**
- * Reasoning-effort dial (§3, `03-ns`): one stop per effort level the
- * selected model supports — Fast/Balanced/Deep for the classic three,
- * growing to X-High/Max when the agent's catalog offers them. The track
- * fills up to (and including) the selected stop in the agent tint; a
- * consequence line + the raw API value chip sit beneath. Mirrors iOS
- * `effortDialSection`.
- */
-@Composable
-private fun EffortDial(
-    options: List<String>,
-    effort: String,
-    tint: Color,
-    onSelect: (String) -> Unit,
-) {
-    val neon = LocalNeonTheme.current
-    data class Stop(val label: String, val value: String, val desc: String)
-    val stops = options.map { Stop(effortLabel(it), it, effortDescription(it)) }
-    if (stops.isEmpty()) return
-    val idx = stops.indexOfFirst { it.value == effort }
-        .let { if (it < 0) minOf(1, stops.size - 1) else it }
-    val cur = stops[idx]
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionLabel("Reasoning effort")
-        Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
-            stops.forEachIndexed { i, stop ->
-                Column(
-                    modifier = Modifier.weight(1f).clickable { onSelect(stop.value) },
-                    verticalArrangement = Arrangement.spacedBy(9.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(8.dp)
-                            .clip(RoundedCornerShape(99.dp))
-                            .background(if (i <= idx) tint else neon.textFaint.copy(alpha = 0.25f)),
-                    )
-                    Text(
-                        stop.label,
-                        fontFamily = neon.sans,
-                        fontSize = 13.sp,
-                        fontWeight = if (i == idx) FontWeight.Bold else FontWeight.Medium,
-                        color = if (i == idx) neon.text else neon.textFaint,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth()
-                .neonCardSurface(neon = neon, shape = RoundedCornerShape(12.dp), fill = neon.surface)
-                .padding(horizontal = 13.dp, vertical = 11.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(9.dp),
-        ) {
-            Text(
-                cur.value,
-                fontFamily = neon.mono,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = tint,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(99.dp))
-                    .background(tint.copy(alpha = 0.12f))
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
-            )
-            Text(cur.desc, fontFamily = neon.sans, fontSize = 13.sp, color = neon.textDim)
         }
     }
 }

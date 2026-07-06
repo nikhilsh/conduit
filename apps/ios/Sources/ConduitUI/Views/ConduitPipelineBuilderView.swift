@@ -471,6 +471,129 @@ extension ConduitUI {
 
         private var isTablet: Bool { horizontalSizeClass == .regular }
 
+        // MARK: Themed capsule controls (config-sheet redesign)
+        //
+        // Replaces the stock gray `.pickerStyle(.segmented)` used throughout
+        // the step config sheet/inspector with the same capsule-segment
+        // idiom as the new-session Auto/Plan mode picker -- owner ask: "make
+        // it look like the rest of the app". A trailing per-option glyph
+        // (used for the Agent segment's `AgentGlyph`) is optional.
+
+        @ViewBuilder
+        private func capsuleSegments(
+            _ options: [String],
+            selection: Binding<String>,
+            label: @escaping (String) -> String = { $0 },
+            glyph: ((String) -> AgentGlyph)? = nil
+        ) -> some View {
+            HStack(spacing: 6) {
+                ForEach(options, id: \.self) { opt in
+                    let selected = selection.wrappedValue == opt
+                    Button {
+                        selection.wrappedValue = opt
+                    } label: {
+                        HStack(spacing: 5) {
+                            if let glyph {
+                                glyph(opt)
+                                    .frame(width: 14, height: 14)
+                            }
+                            Text(label(opt))
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(selected ? neon.accentText : neon.textDim)
+                        .conduitGlassCapsule(tint: selected ? neon.accent : nil)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+
+        /// Filled-bar reasoning-effort dial matching the new-session
+        /// `DirectoryPicker.effortDialSection`, extended with a leading
+        /// "Default" stop (pipeline blocks can opt out of an override
+        /// entirely, unlike new-session where an effort is always chosen).
+        private func effortDialRow(effort: Binding<String>, options: [String], tint: Color) -> some View {
+            struct Stop { let label: String; let value: String; let desc: String }
+            let stops = [Stop(label: "Default", value: "", desc: "Inherits the pipeline's default reasoning effort.")]
+                + options.map { Stop(label: ConduitUI.ForkOptions.effortLabel($0), value: $0, desc: ConduitUI.ForkOptions.effortDescription($0)) }
+            let idx = max(0, stops.firstIndex(where: { $0.value == effort.wrappedValue }) ?? 0)
+            let cur = stops[idx]
+            return VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 7) {
+                    ForEach(Array(stops.enumerated()), id: \.offset) { i, stop in
+                        Button {
+                            effort.wrappedValue = stop.value
+                        } label: {
+                            VStack(spacing: 7) {
+                                Capsule()
+                                    .fill(i <= idx && idx > 0 ? tint : neon.textFaint.opacity(0.25))
+                                    .frame(height: 7)
+                                Text(stop.label)
+                                    .font(neon.sans(11).weight(i == idx ? .bold : .medium))
+                                    .foregroundStyle(i == idx ? neon.text : neon.textFaint)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+                Text(cur.desc)
+                    .font(neon.sans(11.5))
+                    .foregroundStyle(neon.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .animation(.easeInOut(duration: 0.15), value: effort.wrappedValue)
+        }
+
+        /// Auto/Plan capsule + helper caption -- identical copy to the
+        /// new-session `modeSection`.
+        private func modeCapsuleRow(mode: Binding<String>) -> some View {
+            VStack(alignment: .leading, spacing: 8) {
+                capsuleSegments(
+                    ConduitUI.ForkOptions.permissionModes,
+                    selection: mode,
+                    label: { ConduitUI.ForkOptions.permissionModeLabel($0) }
+                )
+                Text("Plan = read-only; agent explores and proposes without editing.")
+                    .font(neon.mono(10.5))
+                    .foregroundStyle(neon.textFaint)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+
+        /// Caption explaining the "input from prev" segments -- device
+        /// feedback: the control's meaning wasn't obvious (owner-hit silent
+        /// no-handoff bug, task 2b).
+        private var inputFromPrevCaption: some View {
+            Text("output = the previous step's reply is included in this step's prompt")
+                .font(neon.mono(10.5))
+                .foregroundStyle(neon.textFaint)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        /// Glass rounded-rect text field matching the new-session sheet's
+        /// fields (`conduitGlassRoundedRect`) -- replaces the ad hoc
+        /// `RoundedRectangle().fill(neon.surface2)` box.
+        private func glassField(_ placeholder: String, text: Binding<String>, mono: Bool = false) -> some View {
+            TextField(placeholder, text: text, axis: .vertical)
+                .font(mono ? neon.mono(13) : neon.sans(13))
+                .foregroundStyle(neon.text)
+                .lineLimit(2...5)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .conduitGlassRoundedRect(cornerRadius: 13)
+                .tint(neon.accent)
+        }
+
         var body: some View {
             NavigationStack {
                 ZStack {
@@ -1120,19 +1243,11 @@ extension ConduitUI {
         @ViewBuilder
         private func agentStepConfigEditor(step: Binding<PipelineStep>, index: Int) -> some View {
             VStack(alignment: .leading, spacing: 14) {
-                // Agent type picker
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Agent")
-                        .font(neon.mono(10).weight(.semibold))
-                        .foregroundStyle(neon.textFaint)
-                        .textCase(.uppercase)
-                    Picker("Agent", selection: step.agentType) {
-                        ForEach(agentOptions, id: \.self) { opt in
-                            Text(opt).tag(opt)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .tint(neon.accent)
+                // Agent type picker -- themed capsule segments + AgentGlyph,
+                // matching the new-session agent picker's per-agent tinting.
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel("Agent")
+                    capsuleSegments(agentOptions, selection: step.agentType) { AgentGlyph(assistant: $0, size: 14) }
                 }
 
                 // Per-block config (model / effort / permission mode /
@@ -1143,69 +1258,36 @@ extension ConduitUI {
                 }
 
                 // Role picker
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Role")
-                        .font(neon.mono(10).weight(.semibold))
-                        .foregroundStyle(neon.textFaint)
-                        .textCase(.uppercase)
-                    Picker("Role", selection: step.role) {
-                        ForEach(roleOptions, id: \.self) { opt in
-                            Text(opt).tag(opt)
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel("Role")
+                    capsuleSegments(roleOptions, selection: step.role)
+                        .onChange(of: step.wrappedValue.role) { _, newRole in
+                            if newRole != "custom" {
+                                step.wrappedValue.promptTemplate = rolePromptTemplate(newRole)
+                            }
                         }
-                    }
-                    .pickerStyle(.segmented)
-                    .tint(neon.accent)
-                    .onChange(of: step.wrappedValue.role) { _, newRole in
-                        if newRole != "custom" {
-                            step.wrappedValue.promptTemplate = rolePromptTemplate(newRole)
-                        }
-                    }
                 }
 
                 // Prompt template
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Prompt template")
-                        .font(neon.mono(10).weight(.semibold))
-                        .foregroundStyle(neon.textFaint)
-                        .textCase(.uppercase)
-                    TextField("Custom prompt...", text: step.promptTemplate, axis: .vertical)
-                        .font(neon.sans(13))
-                        .foregroundStyle(neon.text)
-                        .lineLimit(2...5)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(neon.surface2)
-                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(neon.border, lineWidth: 1))
-                        )
-                        .tint(neon.accent)
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel("Prompt template")
+                    glassField("Custom prompt...", text: step.promptTemplate)
                 }
 
                 // Input from prev
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Input from prev")
-                        .font(neon.mono(10).weight(.semibold))
-                        .foregroundStyle(neon.textFaint)
-                        .textCase(.uppercase)
-                    Picker("Input from prev", selection: step.inputFromPrev) {
-                        ForEach(inputFromPrevOptions, id: \.self) { opt in
-                            Text(opt).tag(opt)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .tint(neon.accent)
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel("Input from prev")
+                    capsuleSegments(inputFromPrevOptions, selection: step.inputFromPrev)
+                    inputFromPrevCaption
                 }
 
                 // Gate after toggle
-                HStack {
-                    Text("Gate after this step")
-                        .font(neon.sans(13))
-                        .foregroundStyle(neon.text)
-                    Spacer(minLength: 8)
-                    Toggle("", isOn: step.gateAfter)
-                        .tint(neon.accent)
-                }
+                ConduitUI.toggleRow(
+                    icon: "checkmark.shield",
+                    title: "Gate after this step",
+                    isOn: step.gateAfter
+                )
+                .neonCardSurface(neon, fill: neon.surface2.opacity(0.5), cornerRadius: 12)
 
                 // Fan out toggle (gated on pipeline_fanout capability)
                 if store.pipelineFanout {
@@ -1546,84 +1628,42 @@ extension ConduitUI {
         @ViewBuilder
         private func subStepConfigEditor(sub: Binding<PipelineSubStep>) -> some View {
             VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Agent")
-                        .font(neon.mono(10).weight(.semibold))
-                        .foregroundStyle(neon.textFaint)
-                        .textCase(.uppercase)
-                    Picker("Agent", selection: sub.agentType) {
-                        ForEach(agentOptions, id: \.self) { opt in
-                            Text(opt).tag(opt)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .tint(neon.accent)
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel("Agent")
+                    capsuleSegments(agentOptions, selection: sub.agentType) { AgentGlyph(assistant: $0, size: 14) }
                 }
 
                 if store.pipelineBlockConfig {
                     subStepBlockConfigSection(sub: sub)
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Role")
-                        .font(neon.mono(10).weight(.semibold))
-                        .foregroundStyle(neon.textFaint)
-                        .textCase(.uppercase)
-                    Picker("Role", selection: sub.role) {
-                        ForEach(roleOptions, id: \.self) { opt in
-                            Text(opt).tag(opt)
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel("Role")
+                    capsuleSegments(roleOptions, selection: sub.role)
+                        .onChange(of: sub.wrappedValue.role) { _, newRole in
+                            if newRole != "custom" {
+                                sub.wrappedValue.promptTemplate = rolePromptTemplate(newRole)
+                            }
                         }
-                    }
-                    .pickerStyle(.segmented)
-                    .tint(neon.accent)
-                    .onChange(of: sub.wrappedValue.role) { _, newRole in
-                        if newRole != "custom" {
-                            sub.wrappedValue.promptTemplate = rolePromptTemplate(newRole)
-                        }
-                    }
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Prompt template")
-                        .font(neon.mono(10).weight(.semibold))
-                        .foregroundStyle(neon.textFaint)
-                        .textCase(.uppercase)
-                    TextField("Custom prompt...", text: sub.promptTemplate, axis: .vertical)
-                        .font(neon.sans(13))
-                        .foregroundStyle(neon.text)
-                        .lineLimit(2...5)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(neon.surface2)
-                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(neon.border, lineWidth: 1))
-                        )
-                        .tint(neon.accent)
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel("Prompt template")
+                    glassField("Custom prompt...", text: sub.promptTemplate)
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Input from prev")
-                        .font(neon.mono(10).weight(.semibold))
-                        .foregroundStyle(neon.textFaint)
-                        .textCase(.uppercase)
-                    Picker("Input from prev", selection: sub.inputFromPrev) {
-                        ForEach(inputFromPrevOptions, id: \.self) { opt in
-                            Text(opt).tag(opt)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .tint(neon.accent)
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel("Input from prev")
+                    capsuleSegments(inputFromPrevOptions, selection: sub.inputFromPrev)
+                    inputFromPrevCaption
                 }
 
-                HStack {
-                    Text("Gate after this step")
-                        .font(neon.sans(13))
-                        .foregroundStyle(neon.text)
-                    Spacer(minLength: 8)
-                    Toggle("", isOn: sub.gateAfter)
-                        .tint(neon.accent)
-                }
+                ConduitUI.toggleRow(
+                    icon: "checkmark.shield",
+                    title: "Gate after this step",
+                    isOn: sub.gateAfter
+                )
+                .neonCardSurface(neon, fill: neon.surface2.opacity(0.5), cornerRadius: 12)
             }
         }
 
@@ -1635,98 +1675,45 @@ extension ConduitUI {
             let efforts = effortOptions(model: sub.wrappedValue.model, catalog: catalog)
             let showEffort = !efforts.isEmpty
             let showMode = supportsPlanMode(agentType: agentType)
+            let tint = neon.agentTint(forAgent: agentType)
 
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 if showModel {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Model")
-                            .font(neon.mono(10).weight(.semibold))
-                            .foregroundStyle(neon.textFaint)
-                            .textCase(.uppercase)
-                        Menu {
-                            Picker("Model", selection: sub.model) {
-                                Text("Default").tag("")
-                                ForEach(catalog, id: \.id) { m in
-                                    Text(m.displayName.isEmpty ? m.id : m.displayName).tag(m.id)
-                                }
-                            }
-                        } label: {
-                            HStack {
-                                Text(modelLabel(sub.wrappedValue.model, in: catalog))
-                                    .foregroundStyle(neon.text)
-                                Spacer()
-                                Image(systemName: "chevron.up.chevron.down")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(neon.textFaint)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(neon.surface2)
-                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(neon.border, lineWidth: 1))
-                            )
-                        }
-                        .tint(neon.accent)
-                        .onChange(of: sub.wrappedValue.model) { _, _ in
-                            let newEfforts = effortOptions(model: sub.wrappedValue.model, catalog: catalog)
-                            if !newEfforts.contains(sub.wrappedValue.reasoningEffort) {
-                                sub.wrappedValue.reasoningEffort = ""
-                            }
+                    VStack(alignment: .leading, spacing: 6) {
+                        sectionLabel("Model")
+                        ConduitUI.ModelPickerRow(
+                            agentKind: agentType,
+                            catalog: catalog.isEmpty ? nil : catalog,
+                            model: sub.model,
+                            tint: tint,
+                            telemetryContext: "pipeline"
+                        )
+                    }
+                    .onChange(of: sub.wrappedValue.model) { _, _ in
+                        let newEfforts = effortOptions(model: sub.wrappedValue.model, catalog: catalog)
+                        if !newEfforts.contains(sub.wrappedValue.reasoningEffort) {
+                            sub.wrappedValue.reasoningEffort = ""
                         }
                     }
                 }
 
                 if showEffort {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Reasoning effort")
-                            .font(neon.mono(10).weight(.semibold))
-                            .foregroundStyle(neon.textFaint)
-                            .textCase(.uppercase)
-                        Picker("Reasoning effort", selection: sub.reasoningEffort) {
-                            Text("Default").tag("")
-                            ForEach(efforts, id: \.self) { level in
-                                Text(ConduitUI.ForkOptions.effortLabel(level)).tag(level)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .tint(neon.accent)
+                    VStack(alignment: .leading, spacing: 6) {
+                        sectionLabel("Reasoning effort")
+                        effortDialRow(effort: sub.reasoningEffort, options: efforts, tint: tint)
                     }
                 }
 
                 if showMode {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Permission mode")
-                            .font(neon.mono(10).weight(.semibold))
-                            .foregroundStyle(neon.textFaint)
-                            .textCase(.uppercase)
-                        Picker("Permission mode", selection: sub.permissionMode) {
-                            ForEach(ConduitUI.ForkOptions.permissionModes, id: \.self) { mode in
-                                Text(ConduitUI.ForkOptions.permissionModeLabel(mode)).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .tint(neon.accent)
+                    VStack(alignment: .leading, spacing: 6) {
+                        sectionLabel("Permission mode")
+                        modeCapsuleRow(mode: sub.permissionMode)
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Instructions for this block")
-                        .font(neon.mono(10).weight(.semibold))
-                        .foregroundStyle(neon.textFaint)
-                        .textCase(.uppercase)
-                    TextField("Optional standing guidance...", text: sub.instructions, axis: .vertical)
-                        .font(neon.sans(13))
-                        .foregroundStyle(neon.text)
-                        .lineLimit(2...5)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(neon.surface2)
-                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(neon.border, lineWidth: 1))
-                        )
-                        .tint(neon.accent)
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel("Instructions for this block")
+                    glassField("Optional standing guidance...", text: sub.instructions)
                 }
             }
         }
@@ -1741,105 +1728,55 @@ extension ConduitUI {
             let efforts = effortOptions(model: step.wrappedValue.model, catalog: catalog)
             let showEffort = !efforts.isEmpty
             let showMode = supportsPlanMode(agentType: agentType)
+            let tint = neon.agentTint(forAgent: agentType)
 
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 if showModel {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Model")
-                            .font(neon.mono(10).weight(.semibold))
-                            .foregroundStyle(neon.textFaint)
-                            .textCase(.uppercase)
-                        Menu {
-                            Picker("Model", selection: step.model) {
-                                Text("Default").tag("")
-                                ForEach(catalog, id: \.id) { m in
-                                    Text(m.displayName.isEmpty ? m.id : m.displayName).tag(m.id)
-                                }
-                            }
-                        } label: {
-                            HStack {
-                                Text(modelLabel(step.wrappedValue.model, in: catalog))
-                                    .foregroundStyle(neon.text)
-                                Spacer()
-                                Image(systemName: "chevron.up.chevron.down")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(neon.textFaint)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(neon.surface2)
-                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(neon.border, lineWidth: 1))
-                            )
-                        }
-                        .tint(neon.accent)
-                        .onChange(of: step.wrappedValue.model) { _, _ in
-                            // A model switch can change the supported effort
-                            // range; snap back to Default rather than carry
-                            // a stale level the new model doesn't offer.
-                            let newEfforts = effortOptions(model: step.wrappedValue.model, catalog: catalog)
-                            if !newEfforts.contains(step.wrappedValue.reasoningEffort) {
-                                step.wrappedValue.reasoningEffort = ""
-                            }
+                    VStack(alignment: .leading, spacing: 6) {
+                        sectionLabel("Model")
+                        ConduitUI.ModelPickerRow(
+                            agentKind: agentType,
+                            catalog: catalog.isEmpty ? nil : catalog,
+                            model: step.model,
+                            tint: tint,
+                            telemetryContext: "pipeline"
+                        )
+                    }
+                    .onChange(of: step.wrappedValue.model) { _, _ in
+                        // A model switch can change the supported effort
+                        // range; snap back to Default rather than carry
+                        // a stale level the new model doesn't offer.
+                        let newEfforts = effortOptions(model: step.wrappedValue.model, catalog: catalog)
+                        if !newEfforts.contains(step.wrappedValue.reasoningEffort) {
+                            step.wrappedValue.reasoningEffort = ""
                         }
                     }
                 }
 
                 if showEffort {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Reasoning effort")
-                            .font(neon.mono(10).weight(.semibold))
-                            .foregroundStyle(neon.textFaint)
-                            .textCase(.uppercase)
-                        Picker("Reasoning effort", selection: step.reasoningEffort) {
-                            Text("Default").tag("")
-                            ForEach(efforts, id: \.self) { level in
-                                Text(ConduitUI.ForkOptions.effortLabel(level)).tag(level)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .tint(neon.accent)
+                    VStack(alignment: .leading, spacing: 6) {
+                        sectionLabel("Reasoning effort")
+                        effortDialRow(effort: step.reasoningEffort, options: efforts, tint: tint)
                     }
                 }
 
                 if showMode {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Permission mode")
-                            .font(neon.mono(10).weight(.semibold))
-                            .foregroundStyle(neon.textFaint)
-                            .textCase(.uppercase)
-                        Picker("Permission mode", selection: step.permissionMode) {
-                            ForEach(ConduitUI.ForkOptions.permissionModes, id: \.self) { mode in
-                                Text(ConduitUI.ForkOptions.permissionModeLabel(mode)).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .tint(neon.accent)
+                    VStack(alignment: .leading, spacing: 6) {
+                        sectionLabel("Permission mode")
+                        modeCapsuleRow(mode: step.permissionMode)
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Instructions for this block")
-                        .font(neon.mono(10).weight(.semibold))
-                        .foregroundStyle(neon.textFaint)
-                        .textCase(.uppercase)
-                    TextField("Optional standing guidance for this block...", text: step.instructions, axis: .vertical)
-                        .font(neon.sans(13))
-                        .foregroundStyle(neon.text)
-                        .lineLimit(2...5)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(neon.surface2)
-                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(neon.border, lineWidth: 1))
-                        )
-                        .tint(neon.accent)
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel("Instructions for this block")
+                    glassField("Optional standing guidance for this block...", text: step.instructions)
                 }
             }
         }
 
+        /// Compact model label for the collapsed block-card summary chip and
+        /// the sub-step row detail line -- non-optional catalog, no
+        /// "(recommended)" suffix (that's the picker sheet's job).
         private func modelLabel(_ id: String, in catalog: [ConduitUI.AgentModel]) -> String {
             if id.isEmpty { return "Default" }
             if let m = catalog.first(where: { $0.id == id }), !m.displayName.isEmpty { return m.displayName }
@@ -1849,23 +1786,17 @@ extension ConduitUI {
         @ViewBuilder
         private func fanoutSection(step: Binding<PipelineStep>) -> some View {
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Image(systemName: "arrow.branch")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(step.wrappedValue.fanoutEnabled ? neon.accent : neon.textFaint)
-                    Text("Fan out this step")
-                        .font(neon.sans(13))
-                        .foregroundStyle(neon.text)
-                    Spacer(minLength: 8)
-                    Toggle("", isOn: step.fanoutEnabled)
-                        .tint(neon.accent)
-                        .onChange(of: step.wrappedValue.fanoutEnabled) { _, newVal in
-                            Telemetry.breadcrumb("pipeline", "fanout toggle",
-                                data: ["enabled": newVal ? "true" : "false"])
-                            if newVal && step.wrappedValue.fanoutCount < 1 {
-                                step.wrappedValue.fanoutCount = 2
-                            }
-                        }
+                ConduitUI.toggleRow(
+                    icon: "arrow.branch",
+                    title: "Fan out this step",
+                    isOn: step.fanoutEnabled
+                )
+                .onChange(of: step.wrappedValue.fanoutEnabled) { _, newVal in
+                    Telemetry.breadcrumb("pipeline", "fanout toggle",
+                        data: ["enabled": newVal ? "true" : "false"])
+                    if newVal && step.wrappedValue.fanoutCount < 1 {
+                        step.wrappedValue.fanoutCount = 2
+                    }
                 }
 
                 if step.wrappedValue.fanoutEnabled {
@@ -1933,33 +1864,31 @@ extension ConduitUI {
                             .fixedSize(horizontal: false, vertical: true)
 
                         ForEach(0..<step.wrappedValue.fanoutCount, id: \.self) { runIdx in
-                            HStack(spacing: 8) {
+                            HStack(alignment: .top, spacing: 8) {
                                 Text("Run \(runIdx + 1)")
                                     .font(neon.mono(11))
                                     .foregroundStyle(neon.textFaint)
                                     .frame(width: 44, alignment: .leading)
-                                Picker("Run \(runIdx + 1)", selection: Binding(
-                                    get: {
-                                        step.wrappedValue.fanoutAgentTypes.indices.contains(runIdx)
-                                            ? step.wrappedValue.fanoutAgentTypes[runIdx]
-                                            : step.wrappedValue.agentType
-                                    },
-                                    set: { newAgent in
-                                        var arr = step.wrappedValue.fanoutAgentTypes
-                                        // Pad if needed
-                                        while arr.count <= runIdx {
-                                            arr.append(step.wrappedValue.agentType)
+                                    .padding(.top, 7)
+                                capsuleSegments(
+                                    agentOptions,
+                                    selection: Binding(
+                                        get: {
+                                            step.wrappedValue.fanoutAgentTypes.indices.contains(runIdx)
+                                                ? step.wrappedValue.fanoutAgentTypes[runIdx]
+                                                : step.wrappedValue.agentType
+                                        },
+                                        set: { newAgent in
+                                            var arr = step.wrappedValue.fanoutAgentTypes
+                                            // Pad if needed
+                                            while arr.count <= runIdx {
+                                                arr.append(step.wrappedValue.agentType)
+                                            }
+                                            arr[runIdx] = newAgent
+                                            step.wrappedValue.fanoutAgentTypes = arr
                                         }
-                                        arr[runIdx] = newAgent
-                                        step.wrappedValue.fanoutAgentTypes = arr
-                                    }
-                                )) {
-                                    ForEach(agentOptions, id: \.self) { opt in
-                                        Text(opt).tag(opt)
-                                    }
-                                }
-                                .pickerStyle(.segmented)
-                                .tint(neon.accent)
+                                    )
+                                ) { AgentGlyph(assistant: $0, size: 14) }
                             }
                             if store.pipelineBlockConfig {
                                 runConfigRow(step: step, runIdx: runIdx)
@@ -2021,45 +1950,32 @@ extension ConduitUI {
             let showMode = supportsPlanMode(agentType: runAgent)
 
             if showModel || showEffort || showMode {
+                let tint = neon.agentTint(forAgent: runAgent)
                 HStack(alignment: .top, spacing: 8) {
                     Spacer().frame(width: 44)
                     VStack(alignment: .leading, spacing: 6) {
                         if showModel {
-                            Menu {
-                                Picker("Model", selection: modelBinding) {
-                                    Text("Default").tag("")
-                                    ForEach(catalog, id: \.id) { m in
-                                        Text(m.displayName.isEmpty ? m.id : m.displayName).tag(m.id)
-                                    }
-                                }
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text("Model: \(modelLabel(modelBinding.wrappedValue, in: catalog))")
-                                        .font(neon.mono(11))
-                                    Image(systemName: "chevron.up.chevron.down")
-                                        .font(.system(size: 9, weight: .semibold))
-                                }
-                                .foregroundStyle(neon.textDim)
-                            }
+                            ConduitUI.ModelPickerRow(
+                                agentKind: runAgent,
+                                catalog: catalog.isEmpty ? nil : catalog,
+                                model: modelBinding,
+                                tint: tint,
+                                telemetryContext: "pipeline_fanout"
+                            )
                         }
                         if showEffort {
-                            Picker("Effort", selection: effortBinding) {
-                                Text("Default").tag("")
-                                ForEach(efforts, id: \.self) { level in
-                                    Text(ConduitUI.ForkOptions.effortLabel(level)).tag(level)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .tint(neon.accent)
+                            capsuleSegments(
+                                [""] + efforts,
+                                selection: effortBinding,
+                                label: { $0.isEmpty ? "Default" : ConduitUI.ForkOptions.effortLabel($0) }
+                            )
                         }
                         if showMode {
-                            Picker("Mode", selection: modeBinding) {
-                                ForEach(ConduitUI.ForkOptions.permissionModes, id: \.self) { mode in
-                                    Text(ConduitUI.ForkOptions.permissionModeLabel(mode)).tag(mode)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .tint(neon.accent)
+                            capsuleSegments(
+                                ConduitUI.ForkOptions.permissionModes,
+                                selection: modeBinding,
+                                label: { ConduitUI.ForkOptions.permissionModeLabel($0) }
+                            )
                         }
                     }
                 }
