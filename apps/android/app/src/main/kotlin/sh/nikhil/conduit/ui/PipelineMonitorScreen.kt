@@ -1640,15 +1640,21 @@ private fun PipelineStepRow(
     }
     val isTappable = step.sessionId != null
 
+    // The tap-to-transcript click is scoped to the main info Row below,
+    // not the whole card: the disclosure IconButton lives inside that Row
+    // (Compose's own click consumption keeps it a reliable, separate hit
+    // target), while the expanded output preview and fanout sub-run lines
+    // sit outside the Row and must never navigate on tap (#918).
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .neonCardSurface(neon = neon, shape = RoundedCornerShape(12.dp), fill = neon.surface)
-            .then(if (isTappable) Modifier.clickable(onClick = onTap) else Modifier),
+            .neonCardSurface(neon = neon, shape = RoundedCornerShape(12.dp), fill = neon.surface),
     ) {
         Column(modifier = Modifier.padding(12.dp).fillMaxWidth()) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(if (isTappable) Modifier.clickable(onClick = onTap) else Modifier),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -1771,7 +1777,7 @@ private fun PipelineStepRow(
                 // inline preview of this step's harvested output. The
                 // transcript stays the deep-dive path.
                 if (!step.output.isNullOrEmpty()) {
-                    IconButton(onClick = onToggleOutput, modifier = Modifier.size(22.dp)) {
+                    IconButton(onClick = onToggleOutput, modifier = Modifier.size(44.dp)) {
                         Icon(
                             if (outputExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
                             contentDescription = if (outputExpanded) "Hide output preview" else "Show output preview",
