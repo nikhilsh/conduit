@@ -89,8 +89,11 @@ extension ConduitUI {
         /// that hasn't produced output yet. Drives the per-step output
         /// disclosure in `stepRow` -- the transcript stays the deep-dive
         /// path, this is just a preview. Defaulted so existing
-        /// memberwise-init call sites (tests) don't need updating.
-        let output: String? = nil
+        /// memberwise-init call sites (tests) don't need updating. Must be
+        /// `var`, not `let`: a `let` with an initial value is silently
+        /// EXCLUDED from the compiler-synthesized `init(from:)` (Swift
+        /// decodes it as the default and never reads the JSON key at all).
+        var output: String? = nil
 
         var isRunning: Bool {
             guard let p = phase else { return false }
@@ -280,8 +283,11 @@ extension ConduitUI {
         let gate: PipelineGate?
         /// Present only when state == "complete" and broker supports
         /// `pipeline_result`. Defaulted so existing memberwise-init call
-        /// sites (tests) don't need updating.
-        let result: PipelineResult? = nil
+        /// sites (tests) don't need updating. Must be `var`, not `let`: a
+        /// `let` with an initial value is silently EXCLUDED from the
+        /// compiler-synthesized `init(from:)` (Swift decodes it as the
+        /// default and never reads the JSON key at all).
+        var result: PipelineResult? = nil
 
         var isTerminal: Bool {
             state == "complete" || state == "failed" || state == "cancelled"
