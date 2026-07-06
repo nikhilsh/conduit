@@ -82,8 +82,12 @@ class PipelineStepDisplayViewModelTest {
 
     @Test
     fun noPhaseYetIsQueued() {
+        // Step is at (not behind) the pipeline's currentStep -- a
+        // phaseless step behind currentStep is DONE (fallback rule c), so
+        // this fixture must keep index >= currentStep to actually
+        // exercise "hasn't started yet".
         val s = step(sessionId = null, phase = null, started = null)
-        val p = pipeline(state = "running", currentStep = 1, steps = listOf(s))
+        val p = pipeline(state = "running", currentStep = 0, steps = listOf(s))
         assertEquals(PipelineStepDisplayViewModel.State.QUEUED, PipelineStepDisplayViewModel.state(s, p))
     }
 
@@ -115,6 +119,16 @@ class PipelineStepDisplayViewModelTest {
         val s = step(index = 2, sessionId = null, phase = null, started = null)
         val p = pipeline(state = "running", currentStep = 0, steps = listOf(s))
         assertEquals(PipelineStepDisplayViewModel.State.QUEUED, PipelineStepDisplayViewModel.state(s, p))
+    }
+
+    @Test
+    fun unknownPhaseOnFailedPipelineAtCurrentStepIsFailed() {
+        // Fallback rule (d): a phaseless/unmapped step AT the pipeline's
+        // currentStep, when the pipeline itself failed, must render as
+        // FAILED -- not DONE (rules b/c don't apply) and not QUEUED.
+        val s = step(index = 1, phase = "some_future_phase", ended = null)
+        val p = pipeline(state = "failed", currentStep = 1, steps = listOf(s))
+        assertEquals(PipelineStepDisplayViewModel.State.FAILED, PipelineStepDisplayViewModel.state(s, p))
     }
 
     // ---- Loop-in-progress carve-out (pre-existing, must survive the fix) ---

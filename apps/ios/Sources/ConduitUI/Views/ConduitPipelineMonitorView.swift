@@ -104,15 +104,25 @@ extension ConduitUI {
             return p.hasPrefix("exited") && !isDone
         }
 
-        /// True when this step has unambiguously finished (by whatever
-        /// signal is available) even if its `phase` is something this build
-        /// doesn't recognize -- an unmapped future phase, a step index
-        /// already behind the pipeline's current step, or the pipeline
-        /// itself having reached a terminal state. Used as the display
-        /// fallback so an unrecognized phase never renders as "queued" for
-        /// a step that plainly already ran.
-        func hasClearlyFinished(pipeline: PipelineStatus) -> Bool {
-            ended != nil || index < pipeline.current_step || pipeline.isTerminal
+        /// Display-state fallback for a step whose `phase` doesn't map to a
+        /// known bucket (nil/empty or an unmapped future value). Inferred
+        /// from surrounding pipeline context, in precedence order, so an
+        /// unrecognized phase never misrepresents a step that has plainly
+        /// already run (or hasn't started):
+        ///   a. `ended` is set                              -> done
+        ///   b. the pipeline itself completed successfully  -> done
+        ///   c. this step's index is behind current_step    -> done
+        ///   d. the pipeline failed AND this is the current
+        ///      step (the one that failed)                  -> failed
+        ///   e. otherwise                                   -> nil (queued)
+        /// Returns nil to mean "no fallback signal applies" -- the caller
+        /// renders `.queued` in that case.
+        func fallbackState(pipeline: PipelineStatus) -> PipelineStepDisplayViewModel.State? {
+            if ended != nil { return .done }
+            if pipeline.state == "complete" { return .done }
+            if index < pipeline.current_step { return .done }
+            if pipeline.state == "failed" && index == pipeline.current_step { return .failed }
+            return nil
         }
 
         var isFanout: Bool { fanout != nil }
@@ -140,8 +150,7 @@ extension ConduitUI {
                 if step.isLoop && step.index == pipeline.current_step && !pipeline.isTerminal {
                     return .running
                 }
-                if step.hasClearlyFinished(pipeline: pipeline) { return .done }
-                return .queued
+                return step.fallbackState(pipeline: pipeline) ?? .queued
             }
             if step.isDone { return .done }
             if step.isFailed { return .failed }
@@ -158,11 +167,9 @@ extension ConduitUI {
             if step.isFanout, let runs = step.fanout?.runs, !runs.isEmpty {
                 return .running
             }
-            // Unmapped/unknown future phase (see `hasClearlyFinished` docs)
-            // -- never render "queued" for a step that has plainly already
-            // run.
-            if step.hasClearlyFinished(pipeline: pipeline) { return .done }
-            return .queued
+            // Unmapped/unknown future phase (see `fallbackState` docs) --
+            // never render "queued" for a step that has plainly already run.
+            return step.fallbackState(pipeline: pipeline) ?? .queued
         }
     }
 

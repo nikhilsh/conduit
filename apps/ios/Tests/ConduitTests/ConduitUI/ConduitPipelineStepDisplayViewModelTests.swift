@@ -81,8 +81,12 @@ struct ConduitPipelineStepDisplayViewModelTests {
     }
 
     @Test func noPhaseYetIsQueued() {
+        // Step is at (not behind) the pipeline's current_step -- a
+        // phaseless step behind current_step is DONE (fallback rule c),
+        // so this fixture must keep index >= current_step to actually
+        // exercise "hasn't started yet".
         let s = step(sessionID: nil, phase: nil, started: nil)
-        let p = pipeline(state: "running", currentStep: 1, steps: [s])
+        let p = pipeline(state: "running", currentStep: 0, steps: [s])
         #expect(ConduitUI.PipelineStepDisplayViewModel.state(for: s, pipeline: p) == .queued)
     }
 
@@ -115,6 +119,15 @@ struct ConduitPipelineStepDisplayViewModelTests {
         let s = step(index: 2, sessionID: nil, phase: nil, started: nil)
         let p = pipeline(state: "running", currentStep: 0, steps: [s])
         #expect(ConduitUI.PipelineStepDisplayViewModel.state(for: s, pipeline: p) == .queued)
+    }
+
+    @Test func unknownPhaseOnFailedPipelineAtCurrentStepIsFailed() {
+        // Fallback rule (d): a phaseless/unmapped step AT the pipeline's
+        // current_step, when the pipeline itself failed, must render as
+        // failed -- not done (rules b/c don't apply) and not queued.
+        let s = step(index: 1, phase: "some_future_phase", ended: nil)
+        let p = pipeline(state: "failed", currentStep: 1, steps: [s])
+        #expect(ConduitUI.PipelineStepDisplayViewModel.state(for: s, pipeline: p) == .failed)
     }
 
     // MARK: - Loop-in-progress carve-out (pre-existing, must survive the fix)

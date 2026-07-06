@@ -136,15 +136,29 @@ data class PipelineStep(
     val isLoop: Boolean get() = kind == "loop"
     val wasSpliced: Boolean get() = !splicedFrom.isNullOrEmpty()
 
-    /** True when this step has unambiguously finished (by whatever signal
-     * is available) even if its `phase` is something this build doesn't
-     * recognize -- an unmapped future phase, a step index already behind
-     * the pipeline's current step, or the pipeline itself having reached a
-     * terminal state. Used as the display fallback so an unrecognized
-     * phase never renders as "queued" for a step that plainly already ran.
-     * Mirror of iOS `PipelineStepStatus.hasClearlyFinished`. */
-    fun hasClearlyFinished(pipeline: Pipeline): Boolean =
-        ended != null || index < pipeline.currentStep || pipeline.state in TERMINAL_STATES
+    /** Display-state fallback for a step whose `phase` doesn't map to a
+     * known bucket (null/empty or an unmapped future value). Inferred from
+     * surrounding pipeline context, in precedence order, so an unrecognized
+     * phase never misrepresents a step that has plainly already run (or
+     * hasn't started):
+     *   a. `ended` is set                             -> DONE
+     *   b. the pipeline itself completed successfully -> DONE
+     *   c. this step's index is behind currentStep    -> DONE
+     *   d. the pipeline failed AND this is the current
+     *      step (the one that failed)                 -> FAILED
+     *   e. otherwise                                   -> null (queued)
+     * Returns null to mean "no fallback signal applies" -- the caller
+     * renders QUEUED in that case. Mirror of iOS
+     * `PipelineStepStatus.fallbackState`. */
+    fun fallbackState(pipeline: Pipeline): PipelineStepDisplayViewModel.State? {
+        if (ended != null) return PipelineStepDisplayViewModel.State.DONE
+        if (pipeline.state == "complete") return PipelineStepDisplayViewModel.State.DONE
+        if (index < pipeline.currentStep) return PipelineStepDisplayViewModel.State.DONE
+        if (pipeline.state == "failed" && index == pipeline.currentStep) {
+            return PipelineStepDisplayViewModel.State.FAILED
+        }
+        return null
+    }
 }
 
 /**
@@ -1313,38 +1327,33 @@ object PipelineStepDisplayViewModel {
             return State.AWAITING_PICK
         }
         val phase = step.phase
-        if (phase.isNullOrEmpty()) {
-            // Fanout step with runs but no step-level session is "running"
-            if (step.isFanout && step.fanout?.runs?.isNotEmpty() == true) return State.RUNNING
-            // A loop step's own SessionID/Phase is only adopted once the loop is
-            // DONE (orchestrator.advanceLoop) -- while iterating both stay null,
-            // so without this check an in-progress loop would misleadingly show
-            // "queued" (PLAN-HARNESS-BUILDER Phase 3).
-            if (step.isLoop && step.index == pipeline.currentStep && pipeline.state !in TERMINAL_STATES) return State.RUNNING
-            // Unmapped/unknown future phase (or no phase at all) on a step
-            // that's otherwise clearly finished -- never render "queued"
-            // for a step that has plainly already run.
-            if (step.hasClearlyFinished(pipeline)) return State.DONE
-            return State.QUEUED
-        }
         // "turn_complete" is the structured-chat (claude/codex) completion
         // signal -- those backends never exit the process between turns,
         // so there is no "exited(0)" to observe. It counts as done,
         // mirroring exitCodeFromPhase in broker/internal/pipeline/orchestrator.go.
-        if (phase == "turn_complete") return State.DONE
-        if (!phase.startsWith("exited")) {
+        if (phase == "turn_complete" || phase == "exited(0)" || phase == "exited") return State.DONE
+        if (phase != null && phase.startsWith("exited")) return State.FAILED
+        // Only explicitly-live phases map to running/awaiting-gate -- any
+        // other non-null phase is an unmapped/future value and must fall
+        // through to the same fallback chain as a null/empty phase below,
+        // never straight to "running".
+        if (phase == "running" || phase == "ready") {
             if (pipeline.state == "awaiting_gate" && step.index == pipeline.currentStep) {
                 return State.AWAITING_GATE
             }
             return State.RUNNING
         }
-        val open = phase.indexOf('(')
-        val close = phase.indexOf(')')
-        if (open in 0 until close) {
-            val code = phase.substring(open + 1, close).toIntOrNull()
-            if (code != null) return if (code == 0) State.DONE else State.FAILED
-        }
-        return State.DONE
+        // Fanout step with runs but no step-level session is "running"
+        if (step.isFanout && step.fanout?.runs?.isNotEmpty() == true) return State.RUNNING
+        // A loop step's own SessionID/Phase is only adopted once the loop is
+        // DONE (orchestrator.advanceLoop) -- while iterating both stay null,
+        // so without this check an in-progress loop would misleadingly show
+        // "queued" (PLAN-HARNESS-BUILDER Phase 3).
+        if (step.isLoop && step.index == pipeline.currentStep && pipeline.state !in TERMINAL_STATES) return State.RUNNING
+        // Unmapped/unknown future phase (or no phase at all) -- never
+        // render "queued" for a step that has plainly already run (see
+        // `PipelineStep.fallbackState` docs).
+        return step.fallbackState(pipeline) ?: State.QUEUED
     }
 }
 
