@@ -24,6 +24,53 @@ _(empty)_
 
 ---
 
+## v0.0.219
+
+**Chain-steps guardrail at Start — iOS + Android. PR #917.**
+
+- Starting a pipeline where any step > 0 has `input_from_prev: none` shows a
+  confirm ("Steps aren't chained") with Chain steps / Start anyway / Cancel —
+  catches templates and old drafts carrying `none` (root cause of both owner
+  runs where step 2 ignored step 1). Breadcrumbed. [iOS + Android, **needs
+  on-device verify**: start the saved "Recheck recent work" template — the
+  confirm appears; Chain steps → step 2 consumes step 1's output]
+
+**Result-card render hang fix — iOS (+ Android hardening). PR #916.**
+
+- Sentry "App Hang Fully Blocked 3.2–4.0s" (0.0.218+246): the Result card's
+  collapse check split the ≤16KB output string on every SwiftUI body pass.
+  Now memoized per decoded result (body does zero content-sized work);
+  Android already remember-gated, minor hoist. [iOS, **verify**: completed
+  Monitor scrolls smoothly; watch Sentry for recurrence]
+
+**Builder insets + capsule contrast — iOS + Android. PR #915.**
+
+- Root cause of the edge-to-edge steps section: permanently-active List edit
+  mode ignores listRowInsets — phone body now uses the ScrollView+VStack
+  pattern (16pt insets like the details card) with long-press drag reorder
+  (mirrors Android; same tested view-model move logic); delete is an inline
+  trash icon. Selected capsule segments now solid-accent with readable text
+  (fixed at the shared component — also fixes Android's new-session sheet).
+  [iOS + Android, **needs on-device verify**: builder margins, drag feel,
+  selected options readable]
+
+**Step-row tap targets — iOS + Android. PR #914.**
+
+- The disclosure chevron is tappable (row-wide tap gesture no longer swallows
+  it): navigate / disclose / chevron are separate 44pt buttons; expanded
+  output preview no longer navigates. [iOS + Android, **needs on-device
+  verify**: expand a step's output inline without being pushed to transcript]
+
+**Real agent brand marks in AgentGlyph — iOS + Android. PR #913.**
+
+- The canonical AgentGlyph now renders the actual brand marks (Claude
+  starburst / Codex knot / opencode mark) as bare tinted templates from the
+  existing assets; monogram fallback for agents without marks (gemini).
+  [iOS + Android, **needs on-device verify**: Monitor/Builder rows show real
+  marks, tinted, no white discs]
+
+---
+
 ## v0.0.218
 
 **Step config sheet redesign + handoff defaults — iOS + Android. PR #911.**
