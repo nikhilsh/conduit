@@ -24,6 +24,43 @@ _(empty)_
 
 ---
 
+## v0.0.218
+
+**Step config sheet redesign + handoff defaults — iOS + Android. PR #911.**
+
+- Config sheet restyled to the new-session picker idiom: shared extracted
+  model picker (one implementation for new-session AND builder — also fixes
+  the duplicate-"Default" menu entry), segmented effort dial + description
+  caption, Auto/Plan capsule with helper text, glass fields, themed capsule
+  segments for agent/role/input-from-prev.
+- **Handoff default fixed**: new steps after the first default
+  `input_from_prev` to `output` (was `none` — the silent no-handoff the
+  owner hit); caption explains the selector. [iOS + Android, **needs
+  on-device verify**: open step config — themed like new-session picker,
+  model list has ONE Default entry; add step 2 — input defaults to output]
+
+**Handoff auto-append when template lacks {{prev}} — broker. PR #910.**
+
+- Selecting an input mode now ALWAYS delivers the previous step's content:
+  templates without the literal `{{prev}}` placeholder get it appended as an
+  explicit "## Input from previous step" block (sequential, fanout, loop
+  paths; placeholder path unchanged). Root cause of "agent 2 ignored agent
+  1's work". [broker, **redeploy required**; verify: 2-step pipeline,
+  plain-language prompts, step 2 actually consumes step 1's output]
+
+**Builder theming + pipeline from the + button — iOS + Android. PR #909.**
+
+- Builder block cards on the canonical AgentGlyph (no white brand-logo
+  tiles), glass surfaces, aligned insets, shared ActionButton/PillButton
+  CTAs; long-press on Home "+" (and tablet rail "+") → New session / New
+  pipeline / Fan out; "Multi-step pipeline" row in the new-session sheet.
+  [iOS + Android, **needs on-device verify**: long-press + menu on phone
+  and tablet; builder cards on-theme]
+
+---
+
+---
+
 ## v0.0.217
 
 **Pipeline result: end-result on completed pipelines — broker + apps. PRs #906 + #907.**
