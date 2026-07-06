@@ -1844,7 +1844,10 @@ private struct ConduitEventRow: View, Equatable {
     }
 }
 
-private enum ConduitRole {
+// Made non-private (was file-private) so ConduitPipelineMonitorView's
+// Result card can reuse the same structured markdown renderer for the
+// final step output (#907, pairs with #906).
+enum ConduitRole {
     case user, assistant, system, tool
 
     init(_ raw: String) {
@@ -2328,7 +2331,7 @@ private struct ConduitMarkdownBlock: View {
 // piece is interpreted per-segment via `AttributedString(markdown:)`,
 // looked up through `MessageRenderCache` so a recycled row doesn't
 // re-parse.
-private struct ConduitStructuredMarkdownView: View {
+struct ConduitStructuredMarkdownView: View {
     let pieces: [ConduitMarkdownPiece]
     let role: ConduitRole
     let basePointSize: CGFloat

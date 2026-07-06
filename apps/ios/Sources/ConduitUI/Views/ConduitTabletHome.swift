@@ -20,6 +20,21 @@ extension ConduitUI {
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
 
+        // Pipeline affordance (#907, tablet-parity fix for the gap #905
+        // flagged): mirrors ConduitHomeView's phone-only banner -- refresh
+        // on appear / box switch only (no polling loop while Home sits
+        // idle), gated on the broker's `pipeline` capability.
+        @State private var pipelineSummaries: [ConduitUI.PipelineSummary] = []
+        @State private var showPipelineList = false
+
+        private var activePipelines: [ConduitUI.PipelineSummary] {
+            pipelineSummaries.filter { ConduitUI.PipelineListViewModel.isActiveForHomeAffordance($0.state) }
+        }
+
+        private var recentTerminalPipelines: [ConduitUI.PipelineSummary] {
+            pipelineSummaries.filter { ConduitUI.PipelineListViewModel.isRecentTerminal($0) }
+        }
+
         private let columns = [
             GridItem(.flexible(), spacing: 14),
             GridItem(.flexible(), spacing: 14),
@@ -30,6 +45,15 @@ extension ConduitUI {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     header
+                    // Same slot as phone Home: above "Active sessions",
+                    // below the header. Never a fabricated count -- hidden
+                    // when no pipeline is active or recently terminal.
+                    if !activePipelines.isEmpty || !recentTerminalPipelines.isEmpty {
+                        PipelinesBannerCard(active: activePipelines, recentTerminal: recentTerminalPipelines) {
+                            showPipelineList = true
+                        }
+                        .padding(.bottom, 16)
+                    }
                     if rows.isEmpty {
                         emptyState
                     } else {
@@ -54,6 +78,15 @@ extension ConduitUI {
                 .padding(.vertical, 18)
             }
             .scrollIndicators(.hidden)
+            .task(id: store.endpoint.displayHost) {
+                guard store.pipelinesEnabled, store.endpoint.isComplete else { return }
+                pipelineSummaries = await store.refreshPipelines()
+            }
+            .sheet(isPresented: $showPipelineList) {
+                ConduitUI.PipelineListView()
+                    .environment(store)
+                    .presentationDetents([.large])
+            }
         }
 
         // MARK: Header

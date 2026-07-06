@@ -1250,7 +1250,10 @@ private fun NeedsYouBannerCard(
  * pipeline feed. Mirror of iOS `PipelinesBannerCard`.
  */
 @Composable
-private fun ActivePipelinesBannerCard(
+// Made non-private (was file-private) so NeonTabletHome's Result-card
+// tablet parity fix (#907, pairs with #905's flagged gap) can reuse the
+// same banner instead of forking a variant.
+fun ActivePipelinesBannerCard(
     neon: NeonTheme,
     active: List<PipelineSummary>,
     recentTerminal: List<PipelineSummary>,

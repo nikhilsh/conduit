@@ -2214,6 +2214,13 @@ final class SessionStore {
     /// builder control hides when false.
     private(set) var pipelineLoop: Bool = false
 
+    /// Whether the broker populates a `result` field on
+    /// `GET /api/pipeline/{id}` once a pipeline completes
+    /// (`GET /api/capabilities` -> `"pipeline_result": true`, #906/#907).
+    /// False on old brokers; the Monitor's Result card hides when false
+    /// even if the pipeline is complete.
+    private(set) var pipelineResult: Bool = false
+
     /// Single-flight + at-most-once-per-(box,version) guard for the
     /// post-connect broker auto-update (Fix: broker auto-update on reconnect).
     /// `reconnect()`/`selectSavedServer()` short-circuit to a WS-only bounce
@@ -2257,6 +2264,7 @@ final class SessionStore {
             let pipeline: Bool?
             let pipeline_branch: Bool?
             let pipeline_loop: Bool?
+            let pipeline_result: Bool?
         }
         Telemetry.breadcrumb(
             "model_catalog", "refresh start",
@@ -2313,6 +2321,8 @@ final class SessionStore {
         // (PLAN-HARNESS-BUILDER Phase 3); default false on old brokers.
         pipelineBranch = caps.pipeline_branch ?? false
         pipelineLoop = caps.pipeline_loop ?? false
+        // pipeline_result: Monitor Result card on completion; default false on old brokers.
+        pipelineResult = caps.pipeline_result ?? false
 
         // WS-H.1: parse the readiness block; nil on old brokers → consumers treat as unknown.
         if let r = caps.readiness {

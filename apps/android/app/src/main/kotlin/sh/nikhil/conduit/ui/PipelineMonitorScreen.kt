@@ -18,9 +18,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -54,6 +59,7 @@ import sh.nikhil.conduit.SavedSession
 import sh.nikhil.conduit.SavedSessionStatus
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
+import sh.nikhil.conduit.ui.components.ConduitChip
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -131,6 +137,14 @@ data class PipelineStep(
     val splicedFrom: String? = null,
     /** Live loop state. Present only when kind == "loop". */
     val loop: PipelineLoopStatus? = null,
+    /**
+     * This step's harvested last-assistant text (broker `Step.Output`,
+     * #906). Null/empty on older brokers or a step that hasn't produced
+     * output yet. Drives the per-step output disclosure in
+     * [PipelineStepRow] -- the transcript stays the deep-dive path, this
+     * is just a preview.
+     */
+    val output: String? = null,
 ) {
     val isFanout: Boolean get() = fanout != null
     val isLoop: Boolean get() = kind == "loop"
@@ -175,6 +189,35 @@ data class PipelineGate(
     val output: String?,
 )
 
+/**
+ * End-of-run summary populated once a pipeline reaches "complete" (broker
+ * `pipeline.PipelineResult`, #906/#907). The Monitor gates the Result card
+ * on BOTH `state == "complete"` AND this being non-null AND the
+ * `pipeline_result` capability -- an older broker, or a pipeline
+ * completed before this feature shipped, has no result even though state
+ * is complete.
+ */
+data class PipelineResult(
+    /** Final step's harvested last-assistant text. */
+    val output: String,
+    /** RFC3339 completion timestamp. */
+    val finished: String,
+    /**
+     * `git diff --stat` counts for the final step's worktree against the
+     * pipeline's base branch. Best-effort: a git error leaves these at
+     * zero rather than blocking completion.
+     */
+    val filesChanged: Int,
+    val insertions: Int,
+    val deletions: Int,
+    /**
+     * The `pipeline-<id>-step-*` branch names that actually backed the
+     * steps that ran, in step order. Best-effort -- a step whose exact
+     * backing branch can't be reconstructed is omitted.
+     */
+    val branches: List<String> = emptyList(),
+)
+
 data class Pipeline(
     val id: String,
     val title: String,
@@ -186,9 +229,15 @@ data class Pipeline(
     val steps: List<PipelineStep>,
     /** Present only when state == "awaiting_gate" and broker supports pipeline_gate_preview. */
     val gate: PipelineGate? = null,
-)
+    /** Present only when state == "complete" and broker supports pipeline_result. */
+    val result: PipelineResult? = null,
+) {
+    val isComplete: Boolean get() = state == "complete"
+}
 
-private fun parsePipeline(json: JSONObject): Pipeline {
+// Made non-private (was file-private) so PipelineResultViewModelTest
+// can decode-test the real parser instead of duplicating its logic.
+fun parsePipeline(json: JSONObject): Pipeline {
     val stepsArr = json.optJSONArray("steps")
     val steps = mutableListOf<PipelineStep>()
     if (stepsArr != null) {
@@ -263,6 +312,7 @@ private fun parsePipeline(json: JSONObject): Pipeline {
                     kind = s.optString("kind", ""),
                     splicedFrom = s.optString("spliced_from", "").takeIf { it.isNotEmpty() },
                     loop = loop,
+                    output = s.optString("output", "").takeIf { it.isNotEmpty() },
                 ),
             )
         }
@@ -276,6 +326,27 @@ private fun parsePipeline(json: JSONObject): Pipeline {
             output = g.optString("output", "").takeIf { it.isNotEmpty() },
         )
     }
+    // Parse optional result block (present when state == "complete" and
+    // broker supports pipeline_result, #906/#907).
+    val result = json.optJSONObject("result")?.let { r ->
+        val branchesArr = r.optJSONArray("branches")
+        val branches = buildList {
+            if (branchesArr != null) {
+                for (b in 0 until branchesArr.length()) {
+                    val branch = branchesArr.optString(b, "")
+                    if (branch.isNotEmpty()) add(branch)
+                }
+            }
+        }
+        PipelineResult(
+            output = r.optString("output", ""),
+            finished = r.optString("finished", ""),
+            filesChanged = r.optInt("files_changed", 0),
+            insertions = r.optInt("insertions", 0),
+            deletions = r.optInt("deletions", 0),
+            branches = branches,
+        )
+    }
     return Pipeline(
         id = json.optString("id", ""),
         title = json.optString("title", ""),
@@ -286,6 +357,7 @@ private fun parsePipeline(json: JSONObject): Pipeline {
         currentStep = json.optInt("current_step", 0),
         steps = steps,
         gate = gate,
+        result = result,
     )
 }
 
@@ -310,6 +382,7 @@ fun PipelineMonitorScreen(
     val pipelineGatePreview by store.pipelineGatePreview.collectAsState()
     val pipelineResume by store.pipelineResume.collectAsState()
     val pipelineFanout by store.pipelineFanout.collectAsState()
+    val pipelineResultCapability by store.pipelineResult.collectAsState()
     val scope = rememberCoroutineScope()
 
     var pipeline by remember { mutableStateOf<Pipeline?>(null) }
@@ -330,6 +403,13 @@ fun PipelineMonitorScreen(
     var isLoadingCompare by remember { mutableStateOf(false) }
     var isPicking by remember { mutableStateOf(false) }
     var pickLoadedForId by remember { mutableStateOf("") }
+    // Result card (#907): collapsed by default when the final output is
+    // long; "Show more" reveals the rest.
+    var resultExpanded by remember { mutableStateOf(false) }
+    // Per-step output disclosure (#907): indices of steps whose inline
+    // output preview is expanded. Tapping the row itself still opens the
+    // transcript -- this is a separate, subtle affordance.
+    var expandedStepOutputs by remember { mutableStateOf<Set<Int>>(emptySet()) }
     // Read-only transcript fallback (bug 2): a completed step's agent
     // process is reaped (#881), so it's usually gone from `store.sessions`
     // by the time its row is tapped. Rather than a blank screen, we show
@@ -559,6 +639,27 @@ fun PipelineMonitorScreen(
                     }
                 }
 
+                // Result card (#907): leads when the pipeline is complete
+                // and the broker supports pipeline_result -- an older
+                // broker, or a pipeline that finished before this shipped,
+                // has state == "complete" but no result.
+                val pipelineResult = p.result
+                if (p.isComplete && pipelineResult != null && pipelineResultCapability) {
+                    PipelineResultCard(
+                        neon = neon,
+                        result = pipelineResult,
+                        expanded = resultExpanded,
+                        onToggleExpanded = {
+                            resultExpanded = !resultExpanded
+                            Telemetry.breadcrumb(
+                                "pipeline",
+                                "result_output_expand_toggled",
+                                mapOf("pipeline_id" to pipelineId, "expanded" to resultExpanded.toString()),
+                            )
+                        },
+                    )
+                }
+
                 // Step rows
                 Text(
                     "STEPS",
@@ -574,6 +675,19 @@ fun PipelineMonitorScreen(
                         step = step,
                         stepState = stepState,
                         neon = neon,
+                        outputExpanded = expandedStepOutputs.contains(step.index),
+                        onToggleOutput = {
+                            expandedStepOutputs = if (expandedStepOutputs.contains(step.index)) {
+                                expandedStepOutputs - step.index
+                            } else {
+                                Telemetry.breadcrumb(
+                                    "pipeline",
+                                    "step_output_preview_expanded",
+                                    mapOf("pipeline_id" to pipelineId, "step" to step.index.toString()),
+                                )
+                                expandedStepOutputs + step.index
+                            }
+                        },
                         onTap = {
                             step.sessionId?.let { sid ->
                                 Telemetry.breadcrumb(
@@ -1368,6 +1482,116 @@ private fun resolveStepState(step: PipelineStep, pipeline: Pipeline): String =
         PipelineStepDisplayViewModel.State.AWAITING_PICK -> "pick"
     }
 
+/**
+ * Pure view-model for the Result card's "collapse long output" behavior
+ * (#907) -- kept off Compose so it's directly unit-testable, mirroring
+ * [PipelineStepDisplayViewModel]. Mirror of iOS
+ * `ConduitUI.PipelineResultViewModel`.
+ */
+object PipelineResultViewModel {
+    /** Lines beyond which the Result card's output collapses behind "Show more". */
+    const val COLLAPSE_LINE_THRESHOLD = 12
+
+    /** Whether [text] has enough lines to warrant the collapsed / "Show more" treatment. */
+    fun needsCollapse(text: String, threshold: Int = COLLAPSE_LINE_THRESHOLD): Boolean =
+        text.split('\n').size > threshold
+
+    /**
+     * The first [threshold] lines of [text], joined back with newlines --
+     * what renders while collapsed. Returns [text] unchanged when it
+     * doesn't need collapsing.
+     */
+    fun collapsed(text: String, threshold: Int = COLLAPSE_LINE_THRESHOLD): String {
+        val lines = text.split('\n')
+        if (lines.size <= threshold) return text
+        return lines.take(threshold).joinToString("\n")
+    }
+}
+
+/**
+ * Leads the Monitor when the pipeline is complete and the broker supports
+ * `pipeline_result` (#906/#907): the final step's output rendered as
+ * markdown, git-outcome chips, and the backing branch(es). Collapsed to
+ * [PipelineResultViewModel.COLLAPSE_LINE_THRESHOLD] lines with a "Show
+ * more" expand when the output is long. Mirror of iOS `resultCard`.
+ */
+@Composable
+private fun PipelineResultCard(
+    neon: NeonTheme,
+    result: PipelineResult,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+) {
+    val needsCollapse = remember(result.output) { PipelineResultViewModel.needsCollapse(result.output) }
+    val displayText = if (needsCollapse && !expanded) {
+        remember(result.output) { PipelineResultViewModel.collapsed(result.output) }
+    } else {
+        result.output
+    }
+    val hasGitOutcome = result.filesChanged > 0 || result.insertions > 0 || result.deletions > 0
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(
+                neon = neon,
+                shape = RoundedCornerShape(14.dp),
+                fill = neon.green.copy(alpha = 0.05f),
+                borderColor = neon.green.copy(alpha = 0.22f),
+            ),
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                "RESULT",
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp,
+                color = neon.textDim,
+            )
+
+            if (result.output.isNotEmpty()) {
+                MarkdownBlock(displayText, ConversationRole.Assistant)
+
+                if (needsCollapse) {
+                    Text(
+                        if (expanded) "Show less" else "Show more",
+                        fontFamily = neon.mono,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 11.sp,
+                        color = neon.accent,
+                        modifier = Modifier.clickable(onClick = onToggleExpanded),
+                    )
+                }
+            }
+
+            if (hasGitOutcome) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (result.filesChanged > 0) {
+                        ConduitChip(label = "${result.filesChanged} files", tint = neon.textDim)
+                    }
+                    if (result.insertions > 0) {
+                        ConduitChip(label = "+${result.insertions}", tint = neon.green)
+                    }
+                    if (result.deletions > 0) {
+                        ConduitChip(label = "-${result.deletions}", tint = neon.red)
+                    }
+                }
+            }
+
+            if (result.branches.isNotEmpty()) {
+                Text(
+                    result.branches.joinToString(", "),
+                    fontFamily = neon.mono,
+                    fontSize = 10.sp,
+                    color = neon.textFaint,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun PipelineStateChip(state: String, neon: NeonTheme) {
     val color = when (state) {
@@ -1403,6 +1627,8 @@ private fun PipelineStepRow(
     neon: NeonTheme,
     onTap: () -> Unit,
     onTapRun: (String) -> Unit = {},
+    outputExpanded: Boolean = false,
+    onToggleOutput: () -> Unit = {},
 ) {
     val stateColor = when (stepState) {
         "running" -> neon.accent
@@ -1540,6 +1766,34 @@ private fun PipelineStepRow(
                         strokeWidth = 1.5.dp,
                     )
                 }
+                // Output disclosure (#907): a subtle affordance, separate
+                // from the row's tap-to-transcript click, that expands an
+                // inline preview of this step's harvested output. The
+                // transcript stays the deep-dive path.
+                if (!step.output.isNullOrEmpty()) {
+                    IconButton(onClick = onToggleOutput, modifier = Modifier.size(22.dp)) {
+                        Icon(
+                            if (outputExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                            contentDescription = if (outputExpanded) "Hide output preview" else "Show output preview",
+                            tint = neon.textFaint,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+            }
+
+            // Inline output preview (#907): shown only while this step's
+            // disclosure is expanded.
+            if (!step.output.isNullOrEmpty() && outputExpanded) {
+                Text(
+                    step.output,
+                    fontFamily = neon.mono,
+                    fontSize = 11.sp,
+                    color = neon.textDim,
+                    maxLines = 6,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 8.dp).fillMaxWidth(),
+                )
             }
 
             // Fanout sub-run cluster

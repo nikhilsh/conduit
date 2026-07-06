@@ -1061,7 +1061,10 @@ private struct NeedsYouBannerCard: View {
 /// instead. One compact card regardless of how many pipelines qualify --
 /// extras collapse into a "N more" trailer rather than growing Home into a
 /// pipeline feed.
-private struct PipelinesBannerCard: View {
+// Made non-private (was file-private) so ConduitTabletHome's Result-card
+// tablet parity fix (#907, pairs with #905's flagged gap) can reuse the
+// same banner instead of forking a variant.
+struct PipelinesBannerCard: View {
     let active: [ConduitUI.PipelineSummary]
     let recentTerminal: [ConduitUI.PipelineSummary]
     let onOpen: () -> Void
