@@ -325,7 +325,14 @@ private fun CapsuleSegments(
     }
 }
 
-/** Agent segment with a leading [AgentGlyph] per option. */
+/**
+ * Agent segment with a leading [AgentGlyph] per option. Selected renders a
+ * SOLID accent-filled capsule (same convention as [ConduitChip]'s selected
+ * state) rather than `glassCapsule(tint = ...)`, which only recolors the
+ * border/glow and keeps the background at the plain dark `neon.surface` --
+ * that read as near-invisible `accentText` on a dark surface (owner:
+ * "selected options cannot be read", pipeline Builder #911 follow-up).
+ */
 @Composable
 private fun AgentCapsuleSegments(
     options: List<String>,
@@ -333,12 +340,19 @@ private fun AgentCapsuleSegments(
     onSelect: (String) -> Unit,
 ) {
     val neon = LocalNeonTheme.current
+    val chipShape = RoundedCornerShape(percent = 50)
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         options.forEach { opt ->
             val isSelected = selected == opt
+            val base = if (isSelected) {
+                Modifier
+                    .clip(chipShape)
+                    .background(color = neon.accent, shape = chipShape)
+            } else {
+                Modifier.glassCapsule(tint = null)
+            }
             Row(
-                modifier = Modifier
-                    .glassCapsule(tint = if (isSelected) neon.accent else null)
+                modifier = base
                     .clickable { onSelect(opt) }
                     .padding(horizontal = 10.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
