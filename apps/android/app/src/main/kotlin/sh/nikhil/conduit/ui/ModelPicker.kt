@@ -71,7 +71,7 @@ internal fun ModelPicker(
     val neon = LocalNeonTheme.current
     var showSheet by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        SectionLabel("Model")
+        ModelPickerSectionLabel("Model")
         // Trigger row — Conduit-styled, opens the model sheet (round-3: the
         // system DropdownMenu read as off-brand and clipped the captions).
         Box(
@@ -298,7 +298,7 @@ internal fun ModelRow(
 }
 
 @Composable
-internal fun SectionLabel(text: String) {
+internal fun ModelPickerSectionLabel(text: String) {
     val neon = LocalNeonTheme.current
     Text(
         text.uppercase(),
@@ -340,7 +340,7 @@ internal fun EffortDial(
         .let { if (it < 0) minOf(1, stops.size - 1) else it }
     val cur = stops[idx]
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionLabel("Reasoning effort")
+        ModelPickerSectionLabel("Reasoning effort")
         Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
             stops.forEachIndexed { i, stop ->
                 Column(

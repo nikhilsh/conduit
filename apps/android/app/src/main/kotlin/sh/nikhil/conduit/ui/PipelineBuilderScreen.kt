@@ -1886,7 +1886,7 @@ private fun StepConfigEditor(
     // Agent type -- themed capsule segments + AgentGlyph, matching the
     // new-session agent picker's per-agent tinting.
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        SectionLabel("Agent")
+        ModelPickerSectionLabel("Agent")
         AgentCapsuleSegments(
             options = agentOptions,
             selected = step.agentType,
@@ -1913,7 +1913,7 @@ private fun StepConfigEditor(
 
     // Role preset
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        SectionLabel("Role")
+        ModelPickerSectionLabel("Role")
         CapsuleSegments(
             options = ROLE_PRESETS,
             selected = step.role,
@@ -1935,7 +1935,7 @@ private fun StepConfigEditor(
 
     // Input from prev
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        SectionLabel("Input from prev")
+        ModelPickerSectionLabel("Input from prev")
         CapsuleSegments(
             options = INPUT_OPTIONS,
             selected = step.inputFromPrev,
@@ -2322,7 +2322,7 @@ private fun SubStepConfigEditor(
     onUpdate: (PipelineSubStepDraft) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        SectionLabel("Agent")
+        ModelPickerSectionLabel("Agent")
         AgentCapsuleSegments(
             options = agentOptions,
             selected = sub.agentType,
@@ -2348,7 +2348,7 @@ private fun SubStepConfigEditor(
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        SectionLabel("Role")
+        ModelPickerSectionLabel("Role")
         CapsuleSegments(
             options = ROLE_PRESETS,
             selected = sub.role,
@@ -2368,7 +2368,7 @@ private fun SubStepConfigEditor(
     )
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        SectionLabel("Input from prev")
+        ModelPickerSectionLabel("Input from prev")
         CapsuleSegments(
             options = INPUT_OPTIONS,
             selected = sub.inputFromPrev,
@@ -2409,7 +2409,7 @@ private fun BlockConfigSection(
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (showModel) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                SectionLabel("Model")
+                ModelPickerSectionLabel("Model")
                 ModelPickerRow(
                     assistant = agentType,
                     model = model,
@@ -2431,7 +2431,7 @@ private fun BlockConfigSection(
 
         if (showMode) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                SectionLabel("Permission mode")
+                ModelPickerSectionLabel("Permission mode")
                 ModeCapsuleRow(mode = permissionMode, onChange = onModeChange)
             }
         }

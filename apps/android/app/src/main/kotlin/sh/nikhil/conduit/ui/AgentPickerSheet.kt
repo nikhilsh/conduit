@@ -684,7 +684,7 @@ private fun DirectoryStep(
                     )
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        SectionLabel("Reasoning effort")
+                        ModelPickerSectionLabel("Reasoning effort")
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             effortOptions.forEach { level ->
                                 ConduitChip(
@@ -699,7 +699,7 @@ private fun DirectoryStep(
             }
             val modeBlock: @Composable () -> Unit = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SectionLabel("Mode")
+                    ModelPickerSectionLabel("Mode")
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         ConduitChip(
                             label = "Auto",
@@ -733,7 +733,7 @@ private fun DirectoryStep(
             }
 
             if (recent.isNotEmpty()) {
-                SectionLabel("Recent")
+                ModelPickerSectionLabel("Recent")
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     recent.take(3).forEach { path ->
                         RecentRow(path = path, onTap = { onCreate(path, selectedModel, selectedEffort, selectedMode, selectedFastMode, null) })
@@ -741,7 +741,7 @@ private fun DirectoryStep(
                 }
             }
 
-            SectionLabel("Browse")
+            ModelPickerSectionLabel("Browse")
             Breadcrumb(
                 listing = listing,
                 onUp = { parent -> currentPath = parent },
