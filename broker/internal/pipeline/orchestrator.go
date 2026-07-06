@@ -509,7 +509,17 @@ func (o *Orchestrator) spawnStepOpts(p *Pipeline, k int, overridePrompt string) 
 				}
 				prevText = BuildPrev(workdir, transcriptText, step.InputFromPrev)
 			}
-			prompt = strings.ReplaceAll(prompt, "{{prev}}", prevText)
+			if strings.Contains(prompt, "{{prev}}") {
+				prompt = strings.ReplaceAll(prompt, "{{prev}}", prevText)
+			} else if prevText != "" {
+				// The user selected an input mode but the template has no
+				// {{prev}} placeholder — a phone user shouldn't need to know
+				// template syntax for the handoff to happen. Append the prev
+				// content explicitly so choosing a mode ALWAYS delivers it
+				// (this exact silent no-handoff bit the owner: step 2 re-did
+				// step 1's work from scratch).
+				prompt = prompt + "\n\n## Input from previous step\n\n" + prevText
+			}
 			// Save the text actually used to input.md (overwrites the audit file
 			// written at gate entry if an amendment was applied).
 			if saveErr := SaveInput(o.conduitRoot, p.ID, k, prevText); saveErr != nil {
@@ -682,7 +692,13 @@ func (o *Orchestrator) buildFanoutBasePrompt(p *Pipeline, k int) (prompt, prevTe
 			}
 			prevText = BuildPrev(workdir, transcriptText, step.InputFromPrev)
 		}
-		prompt = strings.ReplaceAll(prompt, "{{prev}}", prevText)
+		if strings.Contains(prompt, "{{prev}}") {
+			prompt = strings.ReplaceAll(prompt, "{{prev}}", prevText)
+		} else if prevText != "" {
+			// Same auto-append rule as spawnStepOpts: a selected input mode
+			// must deliver the content even without a {{prev}} placeholder.
+			prompt = prompt + "\n\n## Input from previous step\n\n" + prevText
+		}
 	} else {
 		prompt = strings.ReplaceAll(prompt, "{{prev}}", "")
 	}
@@ -1309,7 +1325,12 @@ func (o *Orchestrator) spawnLoopBodyStep(p *Pipeline, k, iteration, bodyIdx int)
 			text := o.sessions.GetLastAssistantText(prevSessID)
 			prevText = BuildPrev(workdir, text, body.InputFromPrev)
 		}
-		prompt = strings.ReplaceAll(prompt, "{{prev}}", prevText)
+		if strings.Contains(prompt, "{{prev}}") {
+			prompt = strings.ReplaceAll(prompt, "{{prev}}", prevText)
+		} else if prevText != "" {
+			// Same auto-append rule as spawnStepOpts (see there for why).
+			prompt = prompt + "\n\n## Input from previous step\n\n" + prevText
+		}
 	} else {
 		prompt = strings.ReplaceAll(prompt, "{{prev}}", "")
 	}

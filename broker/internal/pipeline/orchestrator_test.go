@@ -1790,3 +1790,53 @@ func TestPipelineResultJSONRoundtrip(t *testing.T) {
 		t.Error(`expected step "output" key absent when empty (omitempty)`)
 	}
 }
+
+// TestPrevAutoAppendedWithoutPlaceholder pins the no-{{prev}}-placeholder rule:
+// a step whose InputFromPrev is set but whose template lacks {{prev}} still
+// receives the previous step's content, appended as an explicit block. (The
+// silent no-handoff this prevents bit the owner: step 2 re-did step 1's work.)
+func TestPrevAutoAppendedWithoutPlaceholder(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "list the last 10 commits", InputFromPrev: InputNone},
+		{Index: 1, AgentType: "claude", PromptTemplate: "summarize the commits", InputFromPrev: InputOutput},
+	})
+
+	if err := orch.spawnStep(p, 0); err != nil {
+		t.Fatalf("spawnStep(0): %v", err)
+	}
+	sm.sessions[p.Steps[0].SessionID].lastText = "commit A\ncommit B"
+	if err := orch.Advance(p, 0, "exited(0)"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	step1 := sm.sessions[p.Steps[1].SessionID]
+	if step1 == nil {
+		t.Fatal("step 1 not spawned")
+	}
+	if !strings.Contains(step1.prompt, "summarize the commits") {
+		t.Errorf("step 1 prompt lost its template text: %q", step1.prompt)
+	}
+	if !strings.Contains(step1.prompt, "## Input from previous step") ||
+		!strings.Contains(step1.prompt, "commit A\ncommit B") {
+		t.Errorf("prev content not auto-appended without placeholder; got %q", step1.prompt)
+	}
+	// A template WITH the placeholder must not get the appended block too.
+	p2 := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone},
+		{Index: 1, AgentType: "claude", PromptTemplate: "use: {{prev}}", InputFromPrev: InputOutput},
+	})
+	if err := orch.spawnStep(p2, 0); err != nil {
+		t.Fatalf("p2 spawnStep(0): %v", err)
+	}
+	sm.sessions[p2.Steps[0].SessionID].lastText = "xyz"
+	if err := orch.Advance(p2, 0, "exited(0)"); err != nil {
+		t.Fatalf("p2 Advance: %v", err)
+	}
+	got := sm.sessions[p2.Steps[1].SessionID].prompt
+	if !strings.Contains(got, "use: xyz") || strings.Contains(got, "## Input from previous step") {
+		t.Errorf("placeholder path changed; got %q", got)
+	}
+}
