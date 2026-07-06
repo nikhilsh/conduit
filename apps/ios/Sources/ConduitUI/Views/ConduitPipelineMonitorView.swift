@@ -578,83 +578,103 @@ extension ConduitUI {
             let (stateLabel, stateColor) = stepStateDisplay(stepState)
             let isCurrentStep = step.index == pipeline.current_step && !pipeline.isTerminal
 
+            // Navigation to the step's transcript. Shared by every tap
+            // target that should open it (the leading content and the
+            // trailing chevron) -- kept as its own Button rather than a
+            // row-wide `.onTapGesture` so the sibling output-disclosure
+            // Button below gets a reliable, non-swallowed hit target
+            // (#918: onTapGesture on an ancestor was eating the disclosure
+            // Button's taps and always navigating instead).
+            func openTranscript() {
+                if let sid = step.session_id {
+                    Telemetry.breadcrumb("pipeline", "monitor step open",
+                        data: ["id": pipelineID, "step": "\(step.index)", "session": sid])
+                    selectedSessionID = sid
+                }
+            }
+
             return VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 12) {
-                    AgentGlyph(assistant: step.agent_type, size: 28)
+                    Button(action: openTranscript) {
+                        HStack(spacing: 12) {
+                            AgentGlyph(assistant: step.agent_type, size: 28)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(step.role.capitalized)
-                                .font(neon.sans(13).weight(.semibold))
-                                .foregroundStyle(neon.text)
-                            Text("#\(step.index + 1)")
-                                .font(neon.mono(11))
-                                .foregroundStyle(neon.textFaint)
-                            // Fanout badge
-                            if step.isFanout, let fo = step.fanout {
-                                Text("\(fo.count)x")
-                                    .font(neon.mono(10).weight(.bold))
-                                    .foregroundStyle(neon.accent)
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 2)
-                                    .background(Capsule().fill(neon.accent.opacity(0.14)))
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(step.role.capitalized)
+                                        .font(neon.sans(13).weight(.semibold))
+                                        .foregroundStyle(neon.text)
+                                    Text("#\(step.index + 1)")
+                                        .font(neon.mono(11))
+                                        .foregroundStyle(neon.textFaint)
+                                    // Fanout badge
+                                    if step.isFanout, let fo = step.fanout {
+                                        Text("\(fo.count)x")
+                                            .font(neon.mono(10).weight(.bold))
+                                            .foregroundStyle(neon.accent)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 2)
+                                            .background(Capsule().fill(neon.accent.opacity(0.14)))
+                                    }
+                                    // Loop iteration badge (PLAN-HARNESS-BUILDER Phase 3,
+                                    // §4.2): "iteration k/N" -- k = current pass
+                                    // (1-indexed: iteration+1 while a pass is in flight).
+                                    if step.isLoop, let lp = step.loop {
+                                        Text("iteration \((lp.iteration ?? 0) + 1)/\(lp.max_iterations)")
+                                            .font(neon.mono(10).weight(.bold))
+                                            .foregroundStyle(neon.accent)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Capsule().fill(neon.accent.opacity(0.14)))
+                                    }
+                                    // Retry chip
+                                    if let retries = step.retries, retries > 0 {
+                                        Text("retry \(retries)")
+                                            .font(neon.mono(10).weight(.semibold))
+                                            .foregroundStyle(neon.yellow)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Capsule().fill(neon.yellow.opacity(0.15)))
+                                            .overlay(Capsule().stroke(neon.yellow.opacity(0.35), lineWidth: 1))
+                                    }
+                                }
+                                Text(step.agent_type)
+                                    .font(neon.mono(10))
+                                    .foregroundStyle(neon.textFaint)
+                                // Spliced-from-branch provenance annotation
+                                // (PLAN-HARNESS-BUILDER Phase 3, §4.1): set when the
+                                // orchestrator resolved a branch's condition and
+                                // spliced this step in from the chosen arm.
+                                if step.wasSpliced, let from = step.spliced_from {
+                                    HStack(spacing: 3) {
+                                        Image(systemName: "arrow.triangle.branch")
+                                            .font(.system(size: 8, weight: .semibold))
+                                        Text("from \(from)")
+                                            .font(neon.mono(9))
+                                    }
+                                    .foregroundStyle(neon.textFaint)
+                                }
                             }
-                            // Loop iteration badge (PLAN-HARNESS-BUILDER Phase 3,
-                            // §4.2): "iteration k/N" -- k = current pass
-                            // (1-indexed: iteration+1 while a pass is in flight).
-                            if step.isLoop, let lp = step.loop {
-                                Text("iteration \((lp.iteration ?? 0) + 1)/\(lp.max_iterations)")
-                                    .font(neon.mono(10).weight(.bold))
-                                    .foregroundStyle(neon.accent)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Capsule().fill(neon.accent.opacity(0.14)))
-                            }
-                            // Retry chip
-                            if let retries = step.retries, retries > 0 {
-                                Text("retry \(retries)")
-                                    .font(neon.mono(10).weight(.semibold))
-                                    .foregroundStyle(neon.yellow)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Capsule().fill(neon.yellow.opacity(0.15)))
-                                    .overlay(Capsule().stroke(neon.yellow.opacity(0.35), lineWidth: 1))
-                            }
+
+                            Spacer(minLength: 6)
+
+                            // State chip
+                            Text(stateLabel)
+                                .font(neon.mono(10).weight(.bold))
+                                .textCase(.uppercase)
+                                .foregroundStyle(stateColor)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(stateColor.opacity(0.14)))
                         }
-                        Text(step.agent_type)
-                            .font(neon.mono(10))
-                            .foregroundStyle(neon.textFaint)
-                        // Spliced-from-branch provenance annotation
-                        // (PLAN-HARNESS-BUILDER Phase 3, §4.1): set when the
-                        // orchestrator resolved a branch's condition and
-                        // spliced this step in from the chosen arm.
-                        if step.wasSpliced, let from = step.spliced_from {
-                            HStack(spacing: 3) {
-                                Image(systemName: "arrow.triangle.branch")
-                                    .font(.system(size: 8, weight: .semibold))
-                                Text("from \(from)")
-                                    .font(neon.mono(9))
-                            }
-                            .foregroundStyle(neon.textFaint)
-                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
 
-                    Spacer(minLength: 6)
-
-                    // State chip
-                    Text(stateLabel)
-                        .font(neon.mono(10).weight(.bold))
-                        .textCase(.uppercase)
-                        .foregroundStyle(stateColor)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(stateColor.opacity(0.14)))
-
-                    // Output disclosure (#907): a subtle affordance,
-                    // separate from the row's tap-to-transcript gesture,
-                    // that expands an inline preview of this step's
-                    // harvested output. The transcript stays the
-                    // deep-dive path.
+                    // Output disclosure (#907): a separate Button, sibling
+                    // to (never nested inside) the navigation Button above,
+                    // so it gets its own hit-testing and expanding it never
+                    // navigates to the transcript.
                     if let output = step.output, !output.isEmpty {
                         Button {
                             toggleStepOutput(step.index)
@@ -662,21 +682,30 @@ extension ConduitUI {
                             Image(systemName: expandedStepOutputs.contains(step.index) ? "chevron.up" : "chevron.down")
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(neon.textFaint)
-                                .frame(width: 22, height: 22)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }
 
-                    // Chevron if session is available
+                    // Chevron if session is available -- part of the same
+                    // navigation action, its own small Button so it stays
+                    // a sibling (not nested) alongside the disclosure Button.
                     if step.session_id != nil {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(neon.textFaint)
+                        Button(action: openTranscript) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(neon.textFaint)
+                                .frame(width: 22, height: 22)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
 
                 // Inline output preview (#907): shown only while this
-                // step's disclosure is expanded.
+                // step's disclosure is expanded. Plain text -- no tap
+                // gesture, so it never navigates.
                 if let output = step.output, !output.isEmpty, expandedStepOutputs.contains(step.index) {
                     Text(output)
                         .font(neon.mono(11))
@@ -714,14 +743,6 @@ extension ConduitUI {
                 cornerRadius: 12,
                 glowTint: isCurrentStep && neon.glow ? neon.accent : nil
             )
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .onTapGesture {
-                if let sid = step.session_id {
-                    Telemetry.breadcrumb("pipeline", "monitor step open",
-                        data: ["id": pipelineID, "step": "\(step.index)", "session": sid])
-                    selectedSessionID = sid
-                }
-            }
         }
 
         private func fanoutRunLine(run: FanoutRunStatus, winner: Int?) -> some View {
