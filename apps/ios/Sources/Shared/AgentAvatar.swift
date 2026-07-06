@@ -110,13 +110,14 @@ struct AgentAvatar: View {
     }
 }
 
-/// Bare tinted per-agent glyph -- no background disc/tile, just the SF
-/// Symbol brand glyph (or monogram letter fallback) tinted with the
-/// agent's theme color. This is the ConduitUI list-row idiom ("rows lead
-/// with a bare tinted symbol, not a filled tile" -- see `ConduitListRow`).
-/// Use this instead of `AgentAvatar` in any row-leading position; reserve
-/// `AgentAvatar`'s filled disc (incl. real brand-logo artwork) for picker /
-/// hero contexts that want a heavier visual anchor.
+/// Bare tinted per-agent glyph -- no background disc/tile, just the real
+/// brand mark (Claude starburst / Codex knot / opencode mark), or an SF
+/// Symbol / monogram letter fallback when no mark is bundled, tinted with
+/// the agent's theme color. This is the ConduitUI list-row idiom ("rows
+/// lead with a bare tinted symbol, not a filled tile" -- see
+/// `ConduitListRow`). Use this instead of `AgentAvatar` in any row-leading
+/// position; reserve `AgentAvatar`'s filled disc for picker / hero contexts
+/// that want a heavier visual anchor.
 struct AgentGlyph: View {
     let assistant: String
     var size: CGFloat = 20
@@ -125,7 +126,16 @@ struct AgentGlyph: View {
     var body: some View {
         let tint = neon.agentTint(forAgent: assistant)
         return Group {
-            if let symbol = AgentAvatar.symbol(forAgent: assistant) {
+            if let asset = AgentAvatar.logoAsset(forAgent: assistant) {
+                // Real brand mark, rendered as a template (alpha-mask) image
+                // so it tints exactly like the SF Symbol fallback below --
+                // bare mark, no white tile/disc behind it.
+                Image(asset)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: size * 0.62, height: size * 0.62)
+            } else if let symbol = AgentAvatar.symbol(forAgent: assistant) {
                 Image(systemName: symbol)
                     .font(.system(size: size * 0.62, weight: .semibold))
             } else {

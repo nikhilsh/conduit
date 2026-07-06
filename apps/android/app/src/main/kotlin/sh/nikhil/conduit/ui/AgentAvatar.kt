@@ -102,12 +102,13 @@ fun AgentAvatar(
 }
 
 /**
- * Bare tinted per-agent glyph -- no background disc/tile, just the icon
- * (or monogram letter fallback) tinted with the agent's theme color. This
- * is the ConduitUI list-row idiom ("rows lead with a bare tinted symbol,
- * not a filled tile" -- see [ConduitNavRow] / iOS `ConduitListRow`). Use
- * this instead of [AgentAvatar] in any row-leading position; reserve
- * [AgentAvatar]'s filled disc (incl. real brand-logo artwork) for picker /
+ * Bare tinted per-agent glyph -- no background disc/tile, just the real
+ * brand mark (Claude starburst / Codex knot / opencode mark), or the icon
+ * / monogram letter fallback when no mark is bundled, tinted with the
+ * agent's theme color. This is the ConduitUI list-row idiom ("rows lead
+ * with a bare tinted symbol, not a filled tile" -- see [ConduitNavRow] /
+ * iOS `ConduitListRow`). Use this instead of [AgentAvatar] in any
+ * row-leading position; reserve [AgentAvatar]'s filled disc for picker /
  * hero contexts that want a heavier visual anchor. Mirror of iOS
  * `AgentGlyph` (`apps/ios/Sources/Shared/AgentAvatar.swift`).
  */
@@ -118,6 +119,7 @@ fun AgentGlyph(
     size: Dp = 20.dp,
 ) {
     val tint = agentAccent(assistant)
+    val logoRes = agentLogoRes(assistant)
     val glyph = agentGlyph(assistant)
     val label = assistant.replaceFirstChar { it.uppercaseChar() }
 
@@ -127,15 +129,24 @@ fun AgentGlyph(
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
-        if (glyph != null) {
-            Icon(
+        when {
+            logoRes != null -> Icon(
+                // Real brand mark, tinted -- Icon's default ColorFilter
+                // (BlendMode.SrcIn) replaces the source color entirely
+                // using only the drawable's alpha, so this tints cleanly
+                // even though the source PNG isn't a pure single color.
+                painter = painterResource(logoRes),
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(size * 0.62f),
+            )
+            glyph != null -> Icon(
                 imageVector = glyph,
                 contentDescription = null,
                 tint = tint,
                 modifier = Modifier.size(size * 0.62f),
             )
-        } else {
-            Text(
+            else -> Text(
                 text = monogramFor(assistant),
                 color = tint,
                 style = TextStyle(
