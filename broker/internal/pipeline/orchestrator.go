@@ -29,6 +29,10 @@ var ErrNotAtPick = errors.New("pipeline is not awaiting pick")
 // ErrRunFailed is returned by Pick when the selected run did not exit(0).
 var ErrRunFailed = errors.New("selected run failed")
 
+// ErrNotTerminal is returned by Archive when the pipeline has not reached a
+// terminal state (complete/failed/cancelled).
+var ErrNotTerminal = errors.New("pipeline is not in a terminal state")
+
 // StepOverride carries the resolved per-block model/reasoning-effort/
 // permission-mode/instructions for a single CreateSession call. It lives in
 // the pipeline package (not session) so the SessionManager interface below
@@ -214,6 +218,42 @@ func (o *Orchestrator) Cancel(p *Pipeline) error {
 		return fmt.Errorf("pipeline %s: save after cancel: %w", p.ID, err)
 	}
 	log.Printf("pipeline %s: cancelled", p.ID)
+	return nil
+}
+
+// Archive marks p archived, hiding it from the default GET /api/pipelines
+// list. Only permitted once the pipeline has reached a terminal state
+// (complete/failed/cancelled) — archiving a live pipeline would hide it from
+// the list while its child keeps running, with no way for the app to notice
+// a failure. Returns ErrNotTerminal otherwise. Idempotent: archiving an
+// already-archived pipeline is a no-op success (no redundant Save).
+func (o *Orchestrator) Archive(p *Pipeline) error {
+	if p.State != PipelineComplete && p.State != PipelineFailed && p.State != PipelineCancelled {
+		return ErrNotTerminal
+	}
+	if p.Archived {
+		return nil
+	}
+	p.Archived = true
+	if err := p.Save(o.conduitRoot); err != nil {
+		return fmt.Errorf("pipeline %s: save after archive: %w", p.ID, err)
+	}
+	log.Printf("pipeline %s: archived", p.ID)
+	return nil
+}
+
+// Unarchive clears the archived flag, restoring p to the default list. Not
+// state-gated (an archived pipeline is always terminal already) — always
+// allowed. Idempotent: unarchiving a non-archived pipeline is a no-op success.
+func (o *Orchestrator) Unarchive(p *Pipeline) error {
+	if !p.Archived {
+		return nil
+	}
+	p.Archived = false
+	if err := p.Save(o.conduitRoot); err != nil {
+		return fmt.Errorf("pipeline %s: save after unarchive: %w", p.ID, err)
+	}
+	log.Printf("pipeline %s: unarchived", p.ID)
 	return nil
 }
 

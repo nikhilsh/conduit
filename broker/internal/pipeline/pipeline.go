@@ -186,6 +186,13 @@ type Pipeline struct {
 	Gate *GatePreview `json:"gate,omitempty"`
 	// Result is populated once State == PipelineComplete. See PipelineResult.
 	Result *PipelineResult `json:"result,omitempty"`
+	// Archived hides this pipeline from the default GET /api/pipelines list
+	// (the Flow home UI shows "non-archived" flows). Set only via
+	// Orchestrator.Archive, which requires a terminal state (complete/
+	// failed/cancelled) — a live pipeline cannot be archived out from under
+	// its running child. omitempty keeps pre-existing pipeline.json files
+	// (and their unarchived siblings) byte-for-byte unchanged.
+	Archived bool `json:"archived,omitempty"`
 }
 
 // NewID generates a pipeline ID: "p_" + 8 random hex chars.

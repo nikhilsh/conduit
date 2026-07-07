@@ -181,6 +181,13 @@ type capabilitiesResponse struct {
 		// to prevent; see the pipeline_block_config comment above, #891
 		// pattern).
 		PipelineResult bool `json:"pipeline_result"`
+		// PipelineArchive: POST /api/pipeline/{id}/archive + /unarchive are
+		// available, and GET /api/pipelines excludes archived pipelines by
+		// default (?include_archived=1 includes them, each item then
+		// carrying archived:true). Archive is 409 "not_terminal" unless the
+		// pipeline is complete/failed/cancelled. Apps gate the archive
+		// action + archived-flow filter on this flag.
+		PipelineArchive bool `json:"pipeline_archive"`
 	} `json:"features"`
 	// Pipeline flags mirrored at the JSON ROOT. Fielded app builds (through
 	// v0.0.214) decode all pipeline_* capability flags from the root — not
@@ -198,6 +205,7 @@ type capabilitiesResponse struct {
 	TopPipelineBranch      bool `json:"pipeline_branch"`
 	TopPipelineLoop        bool `json:"pipeline_loop"`
 	TopPipelineResult      bool `json:"pipeline_result"`
+	TopPipelineArchive     bool `json:"pipeline_archive"`
 	// Models is the per-assistant model+effort catalog discovered live from
 	// the agent CLIs (claude control-protocol initialize, codex app-server
 	// model/list). Omitted while discovery hasn't completed (or on older
@@ -261,6 +269,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.PipelineBranch = true      // step.kind=="branch" (If/Else)
 	resp.Features.PipelineLoop = true        // step.kind=="loop" (bounded Loop-until)
 	resp.Features.PipelineResult = true      // GET /api/pipeline/{id} result field on COMPLETE
+	resp.Features.PipelineArchive = true     // /archive + /unarchive; GET /api/pipelines excludes archived by default
 	// Root-level mirrors for fielded apps that decode pipeline_* from the JSON
 	// root (see the struct comment).
 	resp.TopPipeline = true
@@ -272,6 +281,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.TopPipelineBranch = true
 	resp.TopPipelineLoop = true
 	resp.TopPipelineResult = true
+	resp.TopPipelineArchive = true
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
 	// Pass the pushed-credential store as a nil INTERFACE when unset:
