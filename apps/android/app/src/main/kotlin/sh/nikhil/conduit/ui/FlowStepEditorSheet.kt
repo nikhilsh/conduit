@@ -23,7 +23,6 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -46,7 +45,6 @@ import androidx.compose.ui.window.DialogProperties
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.ui.components.ConduitCard
 import sh.nikhil.conduit.ui.components.ConduitChip
-import sh.nikhil.conduit.ui.components.ConduitToggleRow
 
 /**
  * Compose mirror of `apps/ios/Sources/ConduitUI/Views/ConduitFlowStepEditorSheet.swift`.
@@ -175,14 +173,11 @@ fun FlowStepEditorSheet(
 
                     // Gate
                     ConduitCard {
-                        ConduitToggleRow(
-                            icon = Icons.Default.Notifications,
+                        sh.nikhil.conduit.ui.components.FlowGateToggleRow(
                             title = "Pause for my approval",
                             subtitle = "pings your phone to continue",
                             checked = step.gateAfter,
                             onCheckedChange = { checked -> update { it.copy(gateAfter = checked) } },
-                            iconTint = neon.yellow,
-                            switchTint = neon.yellow,
                         )
                     }
 

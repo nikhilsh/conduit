@@ -111,6 +111,42 @@ extension ConduitUI {
         }
     }
 
+    /// Gate toggle row: leading amber `GateGlyph` (the shared two-bar pause
+    /// glyph, not a generic SF Symbol) + title/subtitle + trailing amber
+    /// switch. Layout mirrors `ListRow` so it drops into a
+    /// `neonCardSurface` exactly like `toggleRow(...)` --
+    /// design_handoff_flow "StepEditSheet" gate row (IconTile + `GateGlyph`,
+    /// amber). Android mirror: `FlowAtoms.kt` `FlowGateToggleRow`.
+    struct GateToggleRow: View {
+        let title: String
+        var subtitle: String? = nil
+        let isOn: Binding<Bool>
+        @Environment(\.neonTheme) private var neon
+
+        var body: some View {
+            HStack(spacing: 12) {
+                GateGlyph(color: neon.yellow, size: 16)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(ConduitUI.Palette.textPrimary.color)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 12))
+                            .foregroundStyle(ConduitUI.Palette.textMuted.color)
+                            .lineLimit(2)
+                    }
+                }
+                Spacer(minLength: 6)
+                NeonTintedToggle(isOn: isOn, switchTint: neon.yellow)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+    }
+
     /// One step in a `TopoMini` strip. Deliberately minimal -- callers that
     /// only have step-count/current-step data (no per-step agent identity)
     /// pass `agent: nil` and `gateAfter: false` to degrade gracefully

@@ -483,6 +483,10 @@ extension ConduitUI {
                 .buttonStyle(.plain)
                 .padding(.vertical, -13)
                 .padding(.horizontal, -8)
+                // Image+Text label otherwise synthesizes a combined
+                // accessibility label (e.g. "plus, New flow") that exact-text
+                // taps can't match.
+                .accessibilityLabel(actionLabel)
             }
             .textCase(nil)
             .listRowInsets(EdgeInsets(top: 14, leading: 14, bottom: 6, trailing: 14))
@@ -530,6 +534,10 @@ extension ConduitUI {
                 .buttonStyle(.plain)
                 .padding(.vertical, -13)
                 .padding(.horizontal, -8)
+                // Image+Text label otherwise synthesizes a combined
+                // accessibility label ("plus, New flow") that the screenshot
+                // tour's exact-text tap on "New flow" can't match.
+                .accessibilityLabel("New flow")
             }
             .textCase(nil)
             .listRowInsets(EdgeInsets(top: 14, leading: 14, bottom: 6, trailing: 14))

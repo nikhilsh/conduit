@@ -230,13 +230,10 @@ extension ConduitUI {
         // MARK: Gate
 
         private var gateRow: some View {
-            ConduitUI.toggleRow(
-                icon: "pause.circle",
+            ConduitUI.GateToggleRow(
                 title: "Pause for my approval",
                 subtitle: "pings your phone to continue",
-                isOn: step.gateAfter,
-                iconTint: neon.yellow,
-                switchTint: neon.yellow
+                isOn: step.gateAfter
             )
             .neonCardSurface(neon, fill: neon.surface2.opacity(0.5), cornerRadius: 12)
         }
