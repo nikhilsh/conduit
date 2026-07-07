@@ -20,6 +20,42 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+---
+
+## v0.0.221
+
+**Flow polish round — design-conformance + device feedback + archive. PRs #932,
+#934, #935, #936, #938, #941 (+ broker redeployed at v0.0.221).**
+
+- Device-feedback fixes (#934): home FLOWS list now refreshes on appear /
+  foreground / flow-start / 12s tick (was fetch-once → "why lag"); gemini
+  glyph tint (was gray dot); step-editor selected agent tile per-agent tint +
+  solid-accent selected role chip (was dark-on-dark); glyph optical sizing
+  normalized (Settings avatars / AgentDot / tiles / TopoMini). [iOS + Android,
+  **needs on-device verification**]
+- Design-conformance audit fixes (#936, #938): compact Session tab in the
+  Start sheet (replaces the embedded old picker), neon segmented pill on iOS,
+  single-row agent tiles, amber gate toggle + shared GateGlyph gate row,
+  add-step pill styling, If/Else THEN/ELSE rails + dashed condition input +
+  title/Discard chrome, "+ New flow" 14/600. [iOS + Android, **needs
+  on-device verification**]
+- Pipeline archive (#932 broker + #936 app): `POST /api/pipeline/{id}/archive`
+  + `/unarchive` (terminal-only), list excludes archived by default
+  (`?include_archived=1`), `pipeline_archive` capability; app long-press
+  Archive on terminal flow cards + "Show archived" toggle in the flows list.
+  [**needs on-device verification** + broker redeploy DONE at v0.0.221]
+- Working indicator trimmed to Packets (default) + Breathing mark, single-line
+  compact layout, stale-pref fallback (#935). [iOS + Android, **needs
+  on-device verification**]
+- Demo mode covers ALL Flow surfaces (fixtures, wizard/editors, monitor
+  static seam, no push prompt in demo) + Appetize tour screenshots every Flow
+  screen; screenshots verified against `design_handoff_flow` on both
+  platforms (#930, #937, #939, #940, #941, #942). [verified via Appetize;
+  spot-check on device welcome]
+- iOS push-permission prompt suppressed in demo mode (#939) — App Store
+  reviewer no longer greeted by a system alert. [**needs on-device
+  verification** in demo mode]
+
 **Review fixes: untrack pipeline runtime state + inline task-row mismatch. PR #931.**
 
 - Removed the four accidentally-committed `.conduit/pipelines/p_*/pipeline.json`
