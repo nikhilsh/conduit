@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -48,31 +47,29 @@ import sh.nikhil.conduit.ui.neonAgentColor
 // -- Style + debug setting ---------------------------------------------------------------
 
 /**
- * Six-style pre-output working indicator (design handoff "working-indicator").
+ * Two-style pre-output working indicator (design handoff "working-indicator",
+ * trimmed per owner device feedback: single inline row, no detached bar).
  * Replaces the legacy "WORKING..." label + single pulsing dot.
  *
- * Styles: Spine (breathing mark + flowing rail), Packets (3 flowing packets),
- * Mark (shimmer sweep), Prompt (shell prompt card), PacketsPrompt (packets AS
- * the prompt command line), PipedPrompt (stacked pipe + prompt). Selected via
- * [PREF_KEY] in AppearanceStore (default Spine).
+ * Styles: Packets (avatar + flowing packets + verb, one line), Mark
+ * (breathing mark + shimmer verb, one line). Selected via [PREF_KEY] in
+ * AppearanceStore (default Packets).
  *
  * Animation periods match the iOS mirror:
- *   2.1s breathe  1.4s rail  1.5s packet  2.2s shimmer  1s caret  1.9s verb cycle
+ *   2.1s breathe  1.5s packet  2.2s shimmer  1.9s verb cycle
  */
 enum class ConduitWorkingStyle(val displayName: String) {
-    Spine("A - Conduit spine"),
     Packets("B - Packets"),
-    Mark("C - Breathing mark"),
-    Prompt("D - At the prompt"),
-    PacketsPrompt("E - Packets @ prompt"),
-    PipedPrompt("F - Piped prompt");
+    Mark("C - Breathing mark");
 
     companion object {
         /** SharedPreferences key (matches iOS debug.workingIndicatorStyle). */
         const val PREF_KEY = "debug.workingIndicatorStyle"
 
+        /** Falls back to [Packets] for both an unset key AND a stale name left
+         *  over from a removed style (Spine/Prompt/PacketsPrompt/PipedPrompt). */
         fun from(raw: String?): ConduitWorkingStyle =
-            entries.firstOrNull { it.name == raw } ?: Spine
+            entries.firstOrNull { it.name == raw } ?: Packets
     }
 }
 
@@ -83,7 +80,7 @@ private val VERBS = listOf("thinking", "reading files", "running tests", "writin
 /**
  * Working indicator composable.
  *
- * @param style   Which of the six visual styles to render.
+ * @param style   Which of the two visual styles to render.
  * @param agent   Agent key used for the tint (e.g. "claude", "codex").
  * @param status  Live activity text. null -> cycles VERBS set.
  * @param modifier Optional layout modifier.
@@ -129,71 +126,12 @@ fun ConduitWorkingIndicator(
     val verb = status ?: VERBS[((t / 1.9f).toInt()) % VERBS.size]
 
     when (style) {
-        ConduitWorkingStyle.Spine         -> SpineStyle(modifier, neon, agentTint, agent, verb, t)
         ConduitWorkingStyle.Packets       -> PacketsStyle(modifier, neon, agentTint, agent, verb, t)
         ConduitWorkingStyle.Mark          -> MarkStyle(modifier, neon, agent, t)
-        ConduitWorkingStyle.Prompt        -> PromptStyle(modifier, neon, agentTint, agent, verb, t)
-        ConduitWorkingStyle.PacketsPrompt -> PacketsPromptStyle(modifier, neon, agentTint, agent, verb, t)
-        ConduitWorkingStyle.PipedPrompt   -> PipedPromptStyle(modifier, neon, agentTint, agent, verb, t)
     }
 }
 
-private fun blinkOn(t: Float) = (t % 1f) < 0.52f
-
-// A: spine, warming up
-@Composable
-private fun SpineStyle(
-    modifier: Modifier,
-    neon: NeonTheme,
-    agentTint: Color,
-    agent: String,
-    verb: String,
-    t: Float,
-) {
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Box(
-                Modifier
-                    .size(26.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.White.copy(alpha = 0.03f))
-                    .border(1.dp, neon.border, RoundedCornerShape(8.dp)),
-                contentAlignment = Alignment.Center,
-            ) { ConduitMark(size = 16.dp) }
-            // Flowing rail: cyan->green gradient scrolled by t (matches iOS FlowingRail).
-            Box(
-                Modifier
-                    .width(2.dp)
-                    .heightIn(min = 26.dp)
-                    .weight(1f)
-                    .drawBehind {
-                        val shift = (t / 1.4f) % 1f
-                        drawRect(
-                            Brush.verticalGradient(
-                                0f to neon.accent,
-                                0.35f to neon.green,
-                                0.7f to neon.accent,
-                                1f to neon.green,
-                                startY = -shift * size.height,
-                                endY = (1f - shift) * size.height,
-                            )
-                        )
-                    },
-            )
-        }
-        Row(Modifier.padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(agent, fontFamily = neon.sans, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = agentTint)
-            Text(" is ", fontFamily = neon.sans, fontSize = 15.sp, color = neon.textFaint)
-            Text(verb, fontFamily = neon.mono, fontSize = 13.5.sp, color = neon.text)
-            CaretBox(neon, t)
-        }
-    }
-}
-
-// B: packets through the pipe
+// B: packets through the pipe, single inline row
 @Composable
 private fun PacketsStyle(
     modifier: Modifier,
@@ -203,22 +141,21 @@ private fun PacketsStyle(
     verb: String,
     t: Float,
 ) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(9.dp)) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Box(
-                Modifier
-                    .size(30.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(agentTint.copy(alpha = 0.12f))
-                    .border(1.dp, agentTint.copy(alpha = 0.36f), RoundedCornerShape(8.dp)),
-                contentAlignment = Alignment.Center,
-            ) { AgentAvatar(assistant = agent, size = 16.dp) }
-            PacketPipe(neon = neon, t = t, modifier = Modifier.weight(1f).height(26.dp))
-        }
-        Row(Modifier.padding(start = 40.dp)) {
+    Row(
+        modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            Modifier
+                .size(22.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .background(agentTint.copy(alpha = 0.12f))
+                .border(1.dp, agentTint.copy(alpha = 0.36f), RoundedCornerShape(7.dp)),
+            contentAlignment = Alignment.Center,
+        ) { AgentAvatar(assistant = agent, size = 13.dp) }
+        PacketPipe(neon = neon, t = t, modifier = Modifier.width(34.dp).height(14.dp))
+        Row {
             Text(agent, fontFamily = neon.mono, fontSize = 12.sp, color = agentTint)
             Text("  -  ", fontFamily = neon.mono, fontSize = 12.sp, color = neon.textFaint.copy(alpha = 0.6f))
             Text(verb, fontFamily = neon.mono, fontSize = 12.sp, color = neon.textFaint)
@@ -226,7 +163,7 @@ private fun PacketsStyle(
     }
 }
 
-// C: the mark, breathing
+// C: the mark, breathing -- single inline row
 @Composable
 private fun MarkStyle(
     modifier: Modifier,
@@ -237,16 +174,16 @@ private fun MarkStyle(
     Row(
         modifier,
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Box(
             Modifier
-                .size(32.dp)
-                .clip(RoundedCornerShape(9.dp))
+                .size(22.dp)
+                .clip(RoundedCornerShape(7.dp))
                 .background(Color.White.copy(alpha = 0.03f))
-                .border(1.dp, neon.border, RoundedCornerShape(9.dp)),
+                .border(1.dp, neon.border, RoundedCornerShape(7.dp)),
             contentAlignment = Alignment.Center,
-        ) { ConduitMark(size = 20.dp) }
+        ) { ConduitMark(size = 15.dp) }
         // Shimmer sweep across the label (mask a bright copy over a faint base).
         val x = ((t / 2.2f) % 1f) * 2.2f - 0.6f
         Box {
@@ -274,112 +211,10 @@ private fun MarkStyle(
     }
 }
 
-// D: at the prompt
-@Composable
-private fun PromptStyle(
-    modifier: Modifier,
-    neon: NeonTheme,
-    agentTint: Color,
-    agent: String,
-    verb: String,
-    t: Float,
-) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(neon.codeBg)
-            .border(1.dp, neon.border, RoundedCornerShape(12.dp))
-            .padding(horizontal = 13.dp, vertical = 11.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        PromptHeader(neon = neon, agentTint = agentTint, agent = agent)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("$ ", fontFamily = neon.mono, fontSize = 13.sp, color = neon.green)
-            Text(verb, fontFamily = neon.mono, fontSize = 13.sp, color = neon.text)
-            CaretBox(neon, t)
-        }
-    }
-}
-
-// E: packets AS the prompt command line
-@Composable
-private fun PacketsPromptStyle(
-    modifier: Modifier,
-    neon: NeonTheme,
-    agentTint: Color,
-    agent: String,
-    verb: String,
-    t: Float,
-) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(neon.codeBg)
-            .border(1.dp, neon.border, RoundedCornerShape(12.dp))
-            .padding(horizontal = 13.dp, vertical = 11.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        PromptHeader(neon = neon, agentTint = agentTint, agent = agent)
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("$ ", fontFamily = neon.mono, fontSize = 13.sp, color = neon.green)
-            PacketPipe(neon = neon, t = t, modifier = Modifier.width(96.dp).height(20.dp))
-            Text(verb, fontFamily = neon.mono, fontSize = 12.sp, color = neon.textFaint)
-        }
-    }
-}
-
-// F: stacked pipe + prompt
-@Composable
-private fun PipedPromptStyle(
-    modifier: Modifier,
-    neon: NeonTheme,
-    agentTint: Color,
-    agent: String,
-    verb: String,
-    t: Float,
-) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(neon.codeBg)
-            .border(1.dp, neon.border, RoundedCornerShape(12.dp))
-            .padding(horizontal = 13.dp, vertical = 11.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        PromptHeader(neon = neon, agentTint = agentTint, agent = agent)
-        PacketPipe(neon = neon, t = t, modifier = Modifier.fillMaxWidth().height(22.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("$ ", fontFamily = neon.mono, fontSize = 13.sp, color = neon.green)
-            Text(verb, fontFamily = neon.mono, fontSize = 13.sp, color = neon.text)
-            CaretBox(neon, t)
-        }
-    }
-}
-
 // -- Shared atoms ------------------------------------------------------------------------
 
 /**
- * Shared header line used by D/E/F: agent@prod ~/broker in mono tints.
- * Mirrors iOS PromptHeader().
- */
-@Composable
-private fun PromptHeader(neon: NeonTheme, agentTint: Color, agent: String) {
-    Row {
-        Text(agent, fontFamily = neon.mono, fontSize = 13.sp, color = agentTint)
-        Text("@prod", fontFamily = neon.mono, fontSize = 13.sp, color = neon.textFaint)
-        Text(" ~/broker", fontFamily = neon.mono, fontSize = 13.sp, color = neon.textFaint.copy(alpha = 0.6f))
-    }
-}
-
-/**
- * Capsule pipe with 3 flowing packets. Extracted so B/E/F styles can reuse it
- * at different sizes. Mirrors iOS PacketPipe(t:).
+ * Capsule pipe with 3 flowing packets. Mirrors iOS PacketPipe(t:).
  */
 @Composable
 private fun PacketPipe(neon: NeonTheme, t: Float, modifier: Modifier = Modifier) {
@@ -402,18 +237,6 @@ private fun PacketPipe(neon: NeonTheme, t: Float, modifier: Modifier = Modifier)
                     )
                 }
             },
-    )
-}
-
-@Composable
-private fun CaretBox(neon: NeonTheme, t: Float) {
-    Box(
-        Modifier
-            .padding(start = 4.dp)
-            .width(7.dp)
-            .height(16.dp)
-            .clip(RoundedCornerShape(1.dp))
-            .background(if (blinkOn(t)) neon.accent else Color.Transparent),
     )
 }
 

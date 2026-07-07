@@ -3,16 +3,12 @@ import SwiftUI
 // MARK: - Style + debug setting -----------------------------------------------------------
 
 enum ConduitWorkingStyle: String, CaseIterable, Identifiable, Sendable {
-    case spine, packets, mark, prompt, packetsPrompt, pipedPrompt
+    case packets, mark
     var id: String { rawValue }
     var displayName: String {
         switch self {
-        case .spine:          return "A - Conduit spine"
         case .packets:        return "B - Packets"
         case .mark:           return "C - Breathing mark"
-        case .prompt:         return "D - At the prompt"
-        case .packetsPrompt:  return "E - Packets @ prompt"
-        case .pipedPrompt:    return "F - Piped prompt"
         }
     }
 }
@@ -22,8 +18,10 @@ enum ConduitWorkingDebug {
     /// the same key; no App Group suite is needed (other @AppStorage uses
     /// in the app also bind to standard).
     static let key = "debug.workingIndicatorStyle"
+    /// Falls back to `.packets` for both an unset key AND a stale rawValue
+    /// left over from a removed style (spine/prompt/packetsPrompt/pipedPrompt).
     static var current: ConduitWorkingStyle {
-        ConduitWorkingStyle(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .spine
+        ConduitWorkingStyle(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .packets
     }
 }
 
@@ -31,17 +29,16 @@ enum ConduitWorkingDebug {
 
 extension ConduitUI {
 
-    /// Six-style pre-output working indicator (design handoff "working-indicator").
+    /// Two-style pre-output working indicator (design handoff "working-indicator",
+    /// trimmed per owner device feedback: single inline row, no detached bar).
     /// Replaces the legacy mono `WORKING...` label + single pulsing dot.
     ///
-    /// Styles: `.spine` (breathing mark + flowing rail), `.packets` (3 flowing
-    /// packets), `.mark` (shimmer sweep), `.prompt` (shell prompt card),
-    /// `.packetsPrompt` (packets AS the prompt command), `.pipedPrompt` (stacked
-    /// pipe + prompt). Selected via `debug.workingIndicatorStyle` UserDefaults key
-    /// (default `.spine`).
+    /// Styles: `.packets` (avatar + flowing packets + verb, one line), `.mark`
+    /// (breathing mark + shimmer verb, one line). Selected via
+    /// `debug.workingIndicatorStyle` UserDefaults key (default `.packets`).
     ///
     /// Animation periods are pinned to match the Android mirror:
-    ///   2.1s breathe  1.4s rail  1.5s packet  2.2s shimmer  1s caret  1.9s verb cycle
+    ///   2.1s breathe  1.5s packet  2.2s shimmer  1.9s verb cycle
     struct WorkingIndicator: View {
         let style: ConduitWorkingStyle
         /// Agent key -> tint (e.g. "claude", "codex"). Falls back to accent.
@@ -67,12 +64,8 @@ extension ConduitUI {
                 let t = ctx.date.timeIntervalSinceReferenceDate
                 let verb = status ?? Self.verbs[Int(t / 1.9) % Self.verbs.count]
                 switch style {
-                case .spine:          SpineStyle(t: t, verb: verb)
                 case .packets:        PacketsStyle(t: t, verb: verb)
                 case .mark:           MarkStyle(t: t)
-                case .prompt:         PromptStyle(t: t, verb: verb)
-                case .packetsPrompt:  PacketsPromptStyle(t: t, verb: verb)
-                case .pipedPrompt:    PipedPromptStyle(t: t, verb: verb)
                 }
             }
             .accessibilityElement()
@@ -81,68 +74,35 @@ extension ConduitUI {
 
         private var agentTint: Color { neon.agentTint(forAgent: agent) }
 
-        // A: spine, warming up ------------------------------------------------------------
-        @ViewBuilder private func SpineStyle(t: TimeInterval, verb: String) -> some View {
-            let breathe = 0.5 + 0.5 * sin(t * 2.0 * .pi / 2.1)
-            HStack(alignment: .top, spacing: 13) {
-                VStack(spacing: 6) {
-                    ConduitUI.ConduitMark(size: 16, glow: false)
-                        .frame(width: 26, height: 26)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.white.opacity(0.03))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .strokeBorder(neon.border)
-                                )
-                        )
-                        .shadow(
-                            color: neon.accent.opacity(0.25 + 0.35 * breathe),
-                            radius: 6 + 8 * breathe
-                        )
-                    FlowingRail(t: t).frame(width: 2).frame(minHeight: 26)
-                }
-                (Text(agent).font(neon.sans(15).weight(.bold)).foregroundColor(agentTint)
-                 + Text(" is ").font(neon.sans(15)).foregroundColor(neon.textFaint)
-                 + Text(verb).font(neon.mono(13.5)).foregroundColor(neon.text))
-                    .padding(.top, 3)
-                Caret(t: t)
-                Spacer(minLength: 0)
-            }
-        }
-
-        // B: packets through the pipe -----------------------------------------------------
+        // B: packets through the pipe, single inline row ------------------------------------
         @ViewBuilder private func PacketsStyle(t: TimeInterval, verb: String) -> some View {
-            VStack(alignment: .leading, spacing: 9) {
-                HStack(spacing: 10) {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(agentTint.opacity(0.12))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(agentTint.opacity(0.36))
-                        )
-                        .frame(width: 30, height: 30)
-                        .overlay(AgentAvatar(assistant: agent, size: 16))
-                    PacketPipe(t: t).frame(height: 26)
-                }
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(agentTint.opacity(0.12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(agentTint.opacity(0.36))
+                    )
+                    .frame(width: 22, height: 22)
+                    .overlay(AgentAvatar(assistant: agent, size: 13))
+                PacketPipe(t: t).frame(width: 34, height: 14)
                 (Text(agent).font(neon.mono(12)).foregroundColor(agentTint)
                  + Text("  -  ").font(neon.mono(12)).foregroundColor(neon.textFaint.opacity(0.6))
                  + Text(verb).font(neon.mono(12)).foregroundColor(neon.textFaint))
-                    .padding(.leading, 40)
             }
         }
 
-        // C: the mark, breathing ----------------------------------------------------------
+        // C: the mark, breathing -- single inline row ----------------------------------------
         @ViewBuilder private func MarkStyle(t: TimeInterval) -> some View {
             let breathe = 0.5 + 0.5 * sin(t * 2.0 * .pi / 2.1)
-            HStack(spacing: 12) {
-                ConduitUI.ConduitMark(size: 20, glow: false)
-                    .frame(width: 32, height: 32)
+            HStack(spacing: 10) {
+                ConduitUI.ConduitMark(size: 15, glow: false)
+                    .frame(width: 22, height: 22)
                     .background(
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
                             .fill(Color.white.opacity(0.03))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
                                     .strokeBorder(neon.border)
                             )
                     )
@@ -154,65 +114,9 @@ extension ConduitUI {
             }
         }
 
-        // D: at the prompt ----------------------------------------------------------------
-        @ViewBuilder private func PromptStyle(t: TimeInterval, verb: String) -> some View {
-            VStack(alignment: .leading, spacing: 2) {
-                PromptHeader()
-                HStack(spacing: 0) {
-                    Text("$ ").font(neon.mono(13)).foregroundColor(neon.green)
-                    Text(verb).font(neon.mono(13)).foregroundColor(neon.text)
-                    Caret(t: t)
-                }
-            }
-            .padding(.horizontal, 13).padding(.vertical, 11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .neonCardSurface(neon, fill: neon.codeBg, cornerRadius: 12)
-        }
-
-        // E: packets AS the prompt command ------------------------------------------------
-        @ViewBuilder private func PacketsPromptStyle(t: TimeInterval, verb: String) -> some View {
-            VStack(alignment: .leading, spacing: 6) {
-                PromptHeader()
-                HStack(spacing: 8) {
-                    Text("$ ").font(neon.mono(13)).foregroundColor(neon.green)
-                    PacketPipe(t: t).frame(width: 96, height: 20)
-                    Text(verb).font(neon.mono(12)).foregroundColor(neon.textFaint)
-                    Spacer(minLength: 0)
-                }
-            }
-            .padding(.horizontal, 13).padding(.vertical, 11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .neonCardSurface(neon, fill: neon.codeBg, cornerRadius: 12)
-        }
-
-        // F: stacked pipe + prompt --------------------------------------------------------
-        @ViewBuilder private func PipedPromptStyle(t: TimeInterval, verb: String) -> some View {
-            VStack(alignment: .leading, spacing: 8) {
-                PromptHeader()
-                PacketPipe(t: t).frame(height: 22)
-                HStack(spacing: 0) {
-                    Text("$ ").font(neon.mono(13)).foregroundColor(neon.green)
-                    Text(verb).font(neon.mono(13)).foregroundColor(neon.text)
-                    Caret(t: t)
-                }
-            }
-            .padding(.horizontal, 13).padding(.vertical, 11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .neonCardSurface(neon, fill: neon.codeBg, cornerRadius: 12)
-        }
-
         // Shared atoms --------------------------------------------------------------------
 
-        /// Shared header line used by D/E/F: agent@prod ~/broker in mono tints.
-        @ViewBuilder private func PromptHeader() -> some View {
-            (Text(agent).foregroundColor(agentTint)
-             + Text("@prod").foregroundColor(neon.textFaint)
-             + Text(" ~/broker").foregroundColor(neon.textFaint.opacity(0.6)))
-                .font(neon.mono(13))
-        }
-
-        /// Capsule pipe with 3 flowing packets. Extracted so D/E/F styles can reuse
-        /// it at different frame sizes without duplicating the GeometryReader body.
+        /// Capsule pipe with 3 flowing packets.
         @ViewBuilder private func PacketPipe(t: TimeInterval) -> some View {
             GeometryReader { geo in
                 let w = geo.size.width
@@ -241,31 +145,6 @@ extension ConduitUI {
                     }
                 }
             }
-        }
-
-        @ViewBuilder private func Caret(t: TimeInterval) -> some View {
-            RoundedRectangle(cornerRadius: 1)
-                .fill(neon.accent)
-                .frame(width: 7, height: 16)
-                .shadow(color: neon.accent.opacity(0.7), radius: 8)
-                .opacity(t.truncatingRemainder(dividingBy: 1.0) < 0.52 ? 1 : 0)
-                .padding(.leading, 4)
-        }
-
-        @ViewBuilder private func FlowingRail(t: TimeInterval) -> some View {
-            let shift = (t / 1.4).truncatingRemainder(dividingBy: 1.0)
-            RoundedRectangle(cornerRadius: 2).fill(
-                LinearGradient(
-                    stops: [
-                        .init(color: neon.accent, location: 0),
-                        .init(color: neon.green, location: 0.35),
-                        .init(color: neon.accent, location: 0.7),
-                        .init(color: neon.green, location: 1),
-                    ],
-                    startPoint: UnitPoint(x: 0.5, y: -shift),
-                    endPoint: UnitPoint(x: 0.5, y: 1 - shift)
-                )
-            )
         }
 
         @ViewBuilder private func ShimmerText(_ s: String, t: TimeInterval) -> some View {

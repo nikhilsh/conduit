@@ -285,12 +285,14 @@ class AppearanceStore : ViewModel() {
 
     /**
      * Debug: working-indicator style. One of the [ConduitWorkingStyle] enum
-     * names (e.g. "Spine"). Default "Spine". Persisted under
+     * names (e.g. "Packets"). Default "Packets". Persisted under
      * [KEY_WORKING_INDICATOR_STYLE] (matches iOS `debug.workingIndicatorStyle`).
      * Surfaced in the Debug menu so the team can live-evaluate each style
-     * on-device before picking a winner.
+     * on-device before picking a winner. A stale value left over from a
+     * removed style (e.g. "Spine") is handled by [ConduitWorkingStyle.from]
+     * falling back to Packets, not here.
      */
-    private val _workingIndicatorStyle = MutableStateFlow("Spine")
+    private val _workingIndicatorStyle = MutableStateFlow("Packets")
     val workingIndicatorStyle: StateFlow<String> = _workingIndicatorStyle.asStateFlow()
 
     /**
@@ -347,7 +349,7 @@ class AppearanceStore : ViewModel() {
         _onboardingGuide.value = p.getBoolean(KEY_ONB_GUIDE, true)
         _showSubagentPanel.value = p.getBoolean(KEY_SHOW_SUBAGENT_PANEL, FeatureFlags.showSubagentPanel)
         _commandRunBlock.value = p.getBoolean(KEY_COMMAND_RUN_BLOCK, false)
-        _workingIndicatorStyle.value = p.getString(KEY_WORKING_INDICATOR_STYLE, "Spine") ?: "Spine"
+        _workingIndicatorStyle.value = p.getString(KEY_WORKING_INDICATOR_STYLE, "Packets") ?: "Packets"
         _enabledAgents.value =
             p.getStringSet(KEY_ENABLED_AGENTS, null)?.toSet() ?: FeatureFlags.defaultEnabledAgents.toSet()
 
@@ -429,7 +431,7 @@ class AppearanceStore : ViewModel() {
         prefs?.edit()?.putBoolean(KEY_COMMAND_RUN_BLOCK, value)?.apply()
     }
 
-    /** Set the working-indicator style (debug.workingIndicatorStyle). Default "Spine". */
+    /** Set the working-indicator style (debug.workingIndicatorStyle). Default "Packets". */
     fun setWorkingIndicatorStyle(value: String) {
         _workingIndicatorStyle.value = value
         prefs?.edit()?.putString(KEY_WORKING_INDICATOR_STYLE, value)?.apply()

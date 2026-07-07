@@ -612,7 +612,7 @@ fun ChatPage(
     val showCommandDetail by appearanceStore.showCommandDetail.collectAsState()
     // §10 / §10b command-run Mono block flag (chat.commandRunBlock, default OFF).
     val commandRunBlock by appearanceStore.commandRunBlock.collectAsState()
-    // Working indicator style (debug.workingIndicatorStyle, default "Spine").
+    // Working indicator style (debug.workingIndicatorStyle, default "Packets").
     val workingIndicatorStyleRaw by appearanceStore.workingIndicatorStyle.collectAsState()
     // Fix 10: arm-B (Signature) coalesces consecutive tool turns into clusters.
     val chatStylePref by appearanceStore.chatStylePreference.collectAsState()
@@ -2799,7 +2799,7 @@ private fun SendStatusFooter(ev: ConversationItem) {
  * while the agent is busy (Bug 3 / iOS `isAgentWorking` parity).
  *
  * [turnPhase] drives distinct visual states:
- *   "working"  = pre-output tool execution -> ConduitWorkingIndicator (new 4-style indicator).
+ *   "working"  = pre-output tool execution -> ConduitWorkingIndicator (2-style indicator).
  *   "thinking" = pre-output thinking       -> ConduitWorkingIndicator.
  *   "writing" / null / "" -> three animated bouncing dots (active streaming, unchanged).
  */
@@ -2808,12 +2808,12 @@ private fun TypingIndicatorRow(
     assistant: String,
     @Suppress("UNUSED_PARAMETER") accent: Color,
     turnPhase: String? = null,
-    workingIndicatorStyleRaw: String = "Spine",
+    workingIndicatorStyleRaw: String = "Packets",
     thinkingPeek: String? = null,
 ) {
     val neon = LocalNeonTheme.current
     if (turnPhase == "working" || turnPhase == "thinking") {
-        // Pre-output phases: the new four-style working indicator (debug-toggle driven);
+        // Pre-output phases: the two-style working indicator (debug-toggle driven);
         // supersedes the legacy WORKING.../THINKING... label + single dot.
         // When phase is "thinking" and a live reasoning line is available, pass it as
         // status so ALL styles show the live thinking line instead of the canned verb.

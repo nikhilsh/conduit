@@ -2549,8 +2549,8 @@ private struct ConduitTypingIndicator: View {
         Group {
             switch turnPhase {
             case "working", "thinking":
-                // Pre-output phases: replaced by the new four-style WorkingIndicator.
-                // Style driven by the debug toggle (debug.workingIndicatorStyle, default .spine).
+                // Pre-output phases: replaced by the new two-style WorkingIndicator.
+                // Style driven by the debug toggle (debug.workingIndicatorStyle, default .packets).
                 // When phase is "thinking" and we have a live thinking line, pass it as
                 // status so ALL styles show the live reasoning line instead of the canned verb.
                 ConduitUI.WorkingIndicator(
