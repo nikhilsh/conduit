@@ -148,9 +148,8 @@ extension ConduitUI {
         /// §D 401 handling: present the agent login sheet when the user taps
         /// "Sign in on this box" on the agent-auth-failure banner.
         @State private var showAgentLogin = false
-        /// RunningPill tap target (design handoff session_tasks PR2). No
-        /// sheet is attached yet -- a follow-up PR wires the Tasks sheet;
-        /// this only records the tap so it isn't silently dropped.
+        /// RunningPill tap target (design handoff session_tasks PR2/PR3).
+        /// Presents `ConduitUI.TasksSheet` (see the `.sheet` below).
         @State private var showTasksSheet = false
         /// Consumed by AgentLoginSheet before OAuth starts so a sheet rebuild
         /// after the browser closes cannot launch the provider a second time.
@@ -261,6 +260,13 @@ extension ConduitUI {
                 // so the user lands on the right login flow.
                 .sheet(isPresented: $showAgentLogin) {
                     ConduitUI.AgentLoginSheet(autoStartProvider: $loginAutoStartProvider)
+                }
+                // Tasks sheet (design handoff session_tasks PR3): grouped
+                // view of this session's background tasks, opened from the
+                // RunningPill tap above.
+                .sheet(isPresented: $showTasksSheet) {
+                    ConduitUI.TasksSheet(sessionID: session.id, sessionAgent: session.assistant)
+                        .presentationDetents([.medium, .large])
                 }
                 // chat-shell-v2 (§2): resolve the arm once at the shell and
                 // inject it for the row tree to read. Log the exposure event
