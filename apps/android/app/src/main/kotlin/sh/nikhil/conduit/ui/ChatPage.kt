@@ -2367,11 +2367,12 @@ object ConduitInlineTaskLogic {
 
     /** Best-effort correlation to a LIVE roster entry: no shared id exists
      *  (see the file-header note above), so match candidates by
-     *  name/description substring, then break ties (or pick among all
-     *  entries when nothing matches on text) by nearest `startedAt` to the
-     *  event's own `ts`. */
+     *  name/description substring, then break ties by nearest `startedAt`
+     *  to the event's own `ts`. No text match -> null: binding a historic
+     *  transcript row to whatever unrelated task happens to be live would
+     *  show the wrong status/elapsed, so the caller renders the static
+     *  done/error fallback instead. */
     fun matchingRosterEntry(title: String, eventTs: String, roster: List<SubagentEntry>): SubagentEntry? {
-        if (roster.isEmpty()) return null
         val needle = title.lowercase()
         val candidates = roster.filter { entry ->
             val name = entry.name.lowercase()
@@ -2380,10 +2381,10 @@ object ConduitInlineTaskLogic {
                 ((name.isNotEmpty() && (needle.contains(name) || name.contains(needle))) ||
                     (description.isNotEmpty() && (needle.contains(description) || description.contains(needle))))
         }
-        val pool = candidates.ifEmpty { roster }
-        if (eventTs.isEmpty()) return pool.firstOrNull()
+        if (candidates.isEmpty()) return null
+        if (eventTs.isEmpty()) return candidates.firstOrNull()
         val eventEpochMs = tsEpochMillis(eventTs)
-        return pool.minByOrNull { entry ->
+        return candidates.minByOrNull { entry ->
             if (entry.startedAt.isEmpty()) Long.MAX_VALUE
             else kotlin.math.abs(tsEpochMillis(entry.startedAt) - eventEpochMs)
         }
