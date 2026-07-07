@@ -1208,13 +1208,28 @@ func (o *Orchestrator) sendGatePush(p *Pipeline, stepIndex int) {
 	if o.notifier == nil {
 		return
 	}
-	title := fmt.Sprintf("Pipeline gate: %s", p.Title)
-	body := fmt.Sprintf("Step %d complete. Tap to review and continue.", stepIndex+1)
+	title := fmt.Sprintf("Flow needs you — %s", p.Title)
+	body := fmt.Sprintf("Step %d done · tap to review and continue.", stepIndex+1)
+	if stepIndex >= 0 && stepIndex < len(p.Steps) {
+		if role := strings.TrimSpace(p.Steps[stepIndex].Role); role != "" {
+			body = fmt.Sprintf("%s done · tap to review and continue.", capitalizeFirst(role))
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := o.notifier.Notify(ctx, title, body); err != nil {
 		log.Printf("pipeline %s: gate push notify: %v", p.ID, err)
 	}
+}
+
+// capitalizeFirst upper-cases the first rune of s (ASCII role names only --
+// "researcher"/"architect"/"engineer"/"custom" -- so a byte-wise upper on
+// the first byte is sufficient and avoids the deprecated strings.Title).
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // resolveFanoutStr returns arr[i] when present and non-empty, else fallback.

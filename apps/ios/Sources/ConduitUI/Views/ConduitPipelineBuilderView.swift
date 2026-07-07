@@ -558,7 +558,7 @@ extension ConduitUI {
         /// entirely, unlike new-session where an effort is always chosen).
         private func effortDialRow(effort: Binding<String>, options: [String], tint: Color) -> some View {
             struct Stop { let label: String; let value: String; let desc: String }
-            let stops = [Stop(label: "Default", value: "", desc: "Inherits the pipeline's default reasoning effort.")]
+            let stops = [Stop(label: "Default", value: "", desc: "Inherits the flow's default reasoning effort.")]
                 + options.map { Stop(label: ConduitUI.ForkOptions.effortLabel($0), value: $0, desc: ConduitUI.ForkOptions.effortDescription($0)) }
             let idx = max(0, stops.firstIndex(where: { $0.value == effort.wrappedValue }) ?? 0)
             let cur = stops[idx]
@@ -643,7 +643,7 @@ extension ConduitUI {
                         phoneBody
                     }
                 }
-                .navigationTitle("New pipeline")
+                .navigationTitle("New flow")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
@@ -679,7 +679,7 @@ extension ConduitUI {
                     if let p = createdPipeline {
                         ConduitUI.PipelineMonitorView(
                             pipelineID: p.id,
-                            pipelineTitle: title.isEmpty ? "Pipeline" : title
+                            pipelineTitle: title.isEmpty ? "Flow" : title
                         )
                         .environment(store)
                     }
@@ -1009,7 +1009,7 @@ extension ConduitUI {
                             Text("No templates saved yet")
                                 .font(neon.sans(15))
                                 .foregroundStyle(neon.textDim)
-                            Text("Use \"Save as template\" after filling in a pipeline.")
+                            Text("Use \"Save as template\" after filling in a flow.")
                                 .font(neon.sans(13))
                                 .foregroundStyle(neon.textFaint)
                                 .multilineTextAlignment(.center)
@@ -1101,7 +1101,7 @@ extension ConduitUI {
 
         private var metadataSection: some View {
             VStack(alignment: .leading, spacing: 12) {
-                sectionLabel("Pipeline details")
+                sectionLabel("Flow details")
 
                 labeledField("Title") {
                     TextField("e.g. Refactor auth flow", text: $title)
@@ -2126,7 +2126,7 @@ extension ConduitUI {
                         Image(systemName: "play.fill")
                             .font(.system(size: 14, weight: .bold))
                     }
-                    Text(isSubmitting ? "Starting..." : "Start pipeline")
+                    Text(isSubmitting ? "Starting..." : "Start flow")
                 }
             }
             .disabled(isSubmitting || startDisabled)

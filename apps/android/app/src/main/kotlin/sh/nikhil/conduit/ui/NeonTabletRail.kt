@@ -246,7 +246,7 @@ fun NeonTabletRail(
                 )
                 if (pipelinesEnabled) {
                     DropdownMenuItem(
-                        text = { Text("New pipeline") },
+                        text = { Text("New flow") },
                         leadingIcon = { Icon(Icons.AutoMirrored.Filled.CallSplit, contentDescription = null) },
                         onClick = { newSessionMenuExpanded = false; onNewPipeline() },
                     )

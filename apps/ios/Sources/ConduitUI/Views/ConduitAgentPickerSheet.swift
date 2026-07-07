@@ -399,7 +399,7 @@ extension ConduitUI {
                     Image(systemName: "arrow.triangle.merge")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(neon.accent)
-                    Text("Multi-step pipeline")
+                    Text("Multi-step flow")
                         .font(neon.sans(13).weight(.semibold))
                         .foregroundStyle(neon.text)
                     Spacer(minLength: 8)

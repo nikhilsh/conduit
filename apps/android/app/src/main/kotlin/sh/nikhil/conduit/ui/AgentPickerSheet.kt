@@ -452,7 +452,7 @@ private fun AgentStep(
                     modifier = Modifier.size(16.dp),
                 )
                 Text(
-                    "Multi-step pipeline",
+                    "Multi-step flow",
                     fontFamily = neon.sans,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 13.sp,

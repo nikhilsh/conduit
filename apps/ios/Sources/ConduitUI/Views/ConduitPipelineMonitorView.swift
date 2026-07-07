@@ -400,7 +400,7 @@ extension ConduitUI {
                     VStack(spacing: 14) {
                         ProgressView()
                             .tint(neon.accent)
-                        Text("Loading pipeline...")
+                        Text("Loading flow...")
                             .font(neon.sans(14))
                             .foregroundStyle(neon.textDim)
                     }
@@ -437,8 +437,8 @@ extension ConduitUI {
                     }
                 }
             }
-            .alert("Cancel pipeline?", isPresented: $showCancelAlert) {
-                Button("Cancel pipeline", role: .destructive) {
+            .alert("Cancel flow?", isPresented: $showCancelAlert) {
+                Button("Cancel flow", role: .destructive) {
                     cancelPipeline()
                 }
                 Button("Keep running", role: .cancel) {}
@@ -1019,7 +1019,7 @@ extension ConduitUI {
                         .foregroundStyle(neon.text)
                 }
 
-                Text("All runs have finished. Compare them below and pick the one to continue the pipeline.")
+                Text("All runs have finished. Compare them below and pick the one to continue the flow.")
                     .font(neon.sans(13))
                     .foregroundStyle(neon.textDim)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1459,7 +1459,7 @@ extension ConduitUI {
                                    "prev_len": "\(gate?.prev.count ?? 0)"])
                     }
                 } else if !showGatePreview {
-                    Text("Step \(p.current_step + 1) has finished and is gated. Review the output, then continue the pipeline.")
+                    Text("Step \(p.current_step + 1) has finished and is gated. Review the output, then continue the flow.")
                         .font(neon.sans(13))
                         .foregroundStyle(neon.textDim)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1544,7 +1544,7 @@ extension ConduitUI {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(neon.red)
-                    Text("Pipeline failed")
+                    Text("Flow failed")
                         .font(neon.sans(14).weight(.semibold))
                         .foregroundStyle(neon.text)
                 }
@@ -1692,7 +1692,7 @@ extension ConduitUI {
                     guard let http = resp as? HTTPURLResponse else { return }
                     if http.statusCode == 409 {
                         // 409 "not_failed" — pipeline was no longer in failed state.
-                        errorBanner = "Pipeline is not in a failed state (409)"
+                        errorBanner = "Flow is not in a failed state (409)"
                         Telemetry.breadcrumb("pipeline", "resume 409 not_failed",
                             data: ["id": pipelineID])
                         return

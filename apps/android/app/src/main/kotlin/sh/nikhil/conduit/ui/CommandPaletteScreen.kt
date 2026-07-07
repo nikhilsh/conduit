@@ -150,7 +150,7 @@ fun CommandPaletteScreen(
             add(PaletteActionSpec("pair", "Pair a box", null))
             add(PaletteActionSpec("fanout", "Fan out a task", null))
             add(PaletteActionSpec("pipeline", "New flow", null))
-            if (pipelinesEnabled) add(PaletteActionSpec("pipelines", "Pipelines", null))
+            if (pipelinesEnabled) add(PaletteActionSpec("pipelines", "Flows", null))
         }.filter { q.isEmpty() || it.title.lowercase().contains(q) }
     }
 
