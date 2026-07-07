@@ -20,6 +20,19 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Review fixes: untrack pipeline runtime state + inline task-row mismatch. PR #931.**
+
+- Removed the four accidentally-committed `.conduit/pipelines/p_*/pipeline.json`
+  runtime records (phantom "running" Flow cards on fresh checkouts) and added
+  `.conduit/pipelines/` to the repo `.gitignore`. [repo hygiene, no device
+  verification needed]
+- Inline subagent TaskRows no longer bind a historic transcript row to an
+  unrelated live task when the title has no name/description match against the
+  roster (`matchingRosterEntry` returns nil instead of falling back to the
+  whole roster). [iOS + Android, **needs on-device verification**: a finished
+  historic subagent row stays static done/error while a different task is
+  running]
+
 ---
 
 ## v0.0.220
