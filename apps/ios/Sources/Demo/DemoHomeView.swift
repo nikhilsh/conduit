@@ -394,6 +394,11 @@ private struct DemoFlowsSection: View {
                     .foregroundStyle(neon.accent)
                 }
                 .buttonStyle(.plain)
+                // Without this, the Image+Text HStack label synthesizes a
+                // combined accessibility label ("plus, New flow") that the
+                // screenshot tour's exact-text tap on "New flow" can't match
+                // (unlike text-only CTAs, e.g. "Explore without a server").
+                .accessibilityLabel("New flow")
             }
 
             ForEach(pipelines, id: \.id) { flow in

@@ -106,7 +106,19 @@ for (const { platform, publicKey } of TARGETS) {
       // 2e. Dismiss the wizard — back to demo home. No fake flow was
       // started, so the existing flow-monitor tap target below (the
       // `demo-flow-1` fixture card) is unaffected.
-      await session.tap({ element: { attributes: { text: 'Cancel' } } });
+      //
+      // Android: two elements match text "Cancel" here. Per code audit
+      // (FlowWizardScreen.kt AddStepControl), the add-step pill row's own
+      // "Cancel" pill is NOT the cause — `onBranchStep` already collapses
+      // `addStepMenuExpanded` back to false the moment "If / Else" is
+      // tapped (step 2d above), before the branch editor even opens. The
+      // only "Cancel" text that should exist at this point is the wizard's
+      // own nav-bar `TextButton`, so the second match is a residual
+      // accessibility node from the branch editor `Dialog` window Appetize
+      // observed mid-teardown, not a live tappable duplicate. matchIndex
+      // pins the tap to the nav-bar Cancel (topmost in composition order,
+      // the one guaranteed to be live) rather than guessing which node wins.
+      await session.tap({ element: { attributes: { text: 'Cancel' } } }, { matchIndex: 0 });
       await session.waitForTimeout(2_500);
 
       // 2f. Flow monitor — demo home's FLOWS section seeds two fixture

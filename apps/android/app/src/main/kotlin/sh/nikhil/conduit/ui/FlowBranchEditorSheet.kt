@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -25,7 +26,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -34,7 +34,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -162,12 +169,39 @@ private fun ConditionCard(neon: NeonTheme, step: PipelineStepDraft, update: ((Pi
         }
         if (!isExitStatus) {
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = step.branchConditionValue,
-                onValueChange = { v -> update { it.copy(branchConditionValue = v) } },
-                placeholder = { Text("value to match") },
-                modifier = Modifier.fillMaxWidth(),
-            )
+            // design_handoff_flow BranchSheet line 77 / iOS
+            // `ConduitFlowBranchEditorSheet.conditionCard`: dashed `lineSoft`
+            // outline + mono text, not a solid Material outline.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .drawBehind {
+                        drawRoundRect(
+                            color = neon.lineSoft,
+                            cornerRadius = CornerRadius(9.dp.toPx(), 9.dp.toPx()),
+                            style = Stroke(
+                                width = 1.dp.toPx(),
+                                pathEffect = PathEffect.dashPathEffect(
+                                    floatArrayOf(4.dp.toPx(), 3.dp.toPx()),
+                                    0f,
+                                ),
+                            ),
+                        )
+                    }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                if (step.branchConditionValue.isEmpty()) {
+                    Text("value to match", fontFamily = neon.mono, fontSize = 13.sp, color = neon.textFaint)
+                }
+                BasicTextField(
+                    value = step.branchConditionValue,
+                    onValueChange = { v -> update { it.copy(branchConditionValue = v) } },
+                    singleLine = true,
+                    textStyle = TextStyle(color = neon.text, fontFamily = neon.mono, fontSize = 13.sp),
+                    cursorBrush = SolidColor(neon.accent),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 }
@@ -194,6 +228,21 @@ private fun ConditionMenu(neon: NeonTheme, current: String, options: List<Pair<S
     }
 }
 
+/** Vertical indent rail behind THEN/ELSE contents -- design_handoff_flow
+ *  BranchSheet: a 2dp left rule (green ~27% alpha for THEN, `lineSoft` for
+ *  ELSE) ahead of a 12dp indent. Mirrors iOS's
+ *  `.overlay(Rectangle()..., alignment: .leading)` treatment. */
+private fun Modifier.branchRail(color: Color): Modifier = this
+    .drawBehind {
+        drawLine(
+            color = color,
+            start = Offset(1.dp.toPx(), 0f),
+            end = Offset(1.dp.toPx(), size.height),
+            strokeWidth = 2.dp.toPx(),
+        )
+    }
+    .padding(start = 12.dp)
+
 @Composable
 private fun ThenSection(neon: NeonTheme, viewModel: PipelineBuilderViewModel, stepId: String, step: PipelineStepDraft) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -202,7 +251,7 @@ private fun ThenSection(neon: NeonTheme, viewModel: PipelineBuilderViewModel, st
             Text("THEN", fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 11.sp, color = neon.green)
         }
         Column(
-            modifier = Modifier.padding(start = 12.dp),
+            modifier = Modifier.branchRail(neon.green.copy(alpha = 0.27f)),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             step.branchThen.forEach { sub ->
@@ -224,7 +273,7 @@ private fun ElseSection(neon: NeonTheme, viewModel: PipelineBuilderViewModel, st
             Text("ELSE — CONTINUE DOWN", fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 11.sp, color = neon.textFaint)
         }
         Column(
-            modifier = Modifier.padding(start = 12.dp),
+            modifier = Modifier.branchRail(neon.lineSoft),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (step.branchElse.isEmpty()) {

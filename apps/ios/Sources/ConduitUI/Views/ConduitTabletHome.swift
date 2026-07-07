@@ -147,6 +147,10 @@ extension ConduitUI {
                     .foregroundStyle(neon.accent)
                 }
                 .buttonStyle(.plain)
+                // Image+Text label otherwise synthesizes a combined
+                // accessibility label ("plus, New flow") that exact-text
+                // taps can't match.
+                .accessibilityLabel("New flow")
             }
             .padding(.bottom, 10)
             .padding(.top, 4)
