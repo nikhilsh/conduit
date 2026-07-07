@@ -15,7 +15,7 @@ extension ConduitUI {
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
-        @AppStorage("debug.workingIndicatorStyle") private var workingIndicatorStyleRaw: String = ConduitWorkingStyle.spine.rawValue
+        @AppStorage("debug.workingIndicatorStyle") private var workingIndicatorStyleRaw: String = ConduitWorkingStyle.packets.rawValue
 
         var body: some View {
             @Bindable var flags = flags
