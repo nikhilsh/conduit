@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.ui.LocalNeonTheme
 import sh.nikhil.conduit.ui.PipelineSummary
+import sh.nikhil.conduit.ui.PipelineSummaryStep
 import sh.nikhil.conduit.ui.neonCardSurface
 import kotlin.math.max
 import kotlin.math.min
@@ -73,16 +74,7 @@ fun FlowCard(
         isCancelled -> "cancelled"
         else -> "step ${min(summary.currentStep + 1, max(summary.stepCount, 1))}/${max(summary.stepCount, 1)}"
     }
-    val caption = when {
-        isGated -> "Step ${summary.currentStep + 1} done · review"
-        isAwaitingPick -> "Pick a result to continue"
-        isFailed -> "halted — open to inspect"
-        isComplete -> "all steps finished"
-        isCancelled -> "cancelled"
-        state == "step_done" -> "step done"
-        state == "pending" -> "queued"
-        else -> "running"
-    }
+    val caption = flowCardCaption(summary, state, isGated, isAwaitingPick, isFailed, isComplete, isCancelled)
     val cardBorder = when {
         needsYou -> neon.yellow.copy(alpha = 0.44f)
         isFailed -> neon.red.copy(alpha = 0.44f)
@@ -90,8 +82,10 @@ fun FlowCard(
     }
     val cardGlowTint: Color? = if (neon.glow && needsYou) neon.yellow else null
 
-    val topoSteps = remember(summary.state, summary.currentStep, summary.stepCount) {
-        buildFlowCardTopoSteps(summary, isComplete, needsYou, isFailed, state)
+    val topoSteps = remember(summary.state, summary.currentStep, summary.stepCount, summary.steps) {
+        summary.steps?.takeIf { it.isNotEmpty() }?.map { s ->
+            FlowTopoStep(agent = s.agent, status = flowCardTopoStatus(s.status), gateAfter = s.gateAfter)
+        } ?: buildFlowCardTopoSteps(summary, isComplete, needsYou, isFailed, state)
     }
 
     val shape = RoundedCornerShape(14.dp)
@@ -216,4 +210,77 @@ private fun buildFlowCardTopoSteps(
         }
         FlowTopoStep(agent = null, status = status, gateAfter = false)
     }
+}
+
+/**
+ * Maps the broker's coarse per-step status string (#922
+ * `stepDisplayStatus`) to [FlowAgentStatus]. "awaiting_gate" /
+ * "awaiting_pick" both read as the amber "needs attention" ring (same
+ * family as `running` per the README status map); "queued" degrades to
+ * `null` (faint, no ring/glow). Mirror of iOS `FlowCard.topoStatus`.
+ */
+private fun flowCardTopoStatus(raw: String): FlowAgentStatus? = when (raw) {
+    "running", "awaiting_gate", "awaiting_pick" -> FlowAgentStatus.RUNNING
+    "done" -> FlowAgentStatus.DONE
+    "failed" -> FlowAgentStatus.ERROR
+    else -> null
+}
+
+/**
+ * Role-forward caption using real per-step data (broker #922) when
+ * available -- falls back to the degraded generic caption otherwise.
+ * Mirror of iOS `FlowCard.caption`.
+ */
+private fun flowCardCaption(
+    summary: PipelineSummary,
+    state: String,
+    isGated: Boolean,
+    isAwaitingPick: Boolean,
+    isFailed: Boolean,
+    isComplete: Boolean,
+    isCancelled: Boolean,
+): String {
+    val steps = summary.steps
+    if (steps != null && steps.isNotEmpty()) {
+        if (isGated) {
+            roleAt(summary.currentStep, steps)?.let { return "$it done · review" }
+        }
+        if (isComplete) return flowCardCompleteCaption(summary)
+        if (!isAwaitingPick && !isFailed && !isCancelled) {
+            roleAt(summary.currentStep, steps)?.let { return "$it · running" }
+        }
+    }
+    return when {
+        isGated -> "Step ${summary.currentStep + 1} done · review"
+        isAwaitingPick -> "Pick a result to continue"
+        isFailed -> "halted — open to inspect"
+        isComplete -> flowCardCompleteCaption(summary)
+        isCancelled -> "cancelled"
+        state == "step_done" -> "step done"
+        state == "pending" -> "queued"
+        else -> "running"
+    }
+}
+
+/** Capitalized role name of the step at [index], if in range. */
+private fun roleAt(index: Int, steps: List<PipelineSummaryStep>): String? {
+    if (index < 0 || index >= steps.size) return null
+    val role = steps[index].role
+    return role.ifEmpty { null }?.let { it[0].uppercase() + it.substring(1) }
+}
+
+/**
+ * "+N -N · N files" from the completed pipeline's diffstat (broker #922
+ * `result`) -- falls back to the generic recap when the result is absent.
+ */
+private fun flowCardCompleteCaption(summary: PipelineSummary): String {
+    val result = summary.result ?: return "all steps finished"
+    val parts = mutableListOf<String>()
+    if (result.insertions > 0) parts.add("+${result.insertions}")
+    if (result.deletions > 0) parts.add("-${result.deletions}")
+    val stats = parts.joinToString(" ")
+    if (result.filesChanged > 0) {
+        return if (stats.isEmpty()) "${result.filesChanged} files" else "$stats · ${result.filesChanged} files"
+    }
+    return stats.ifEmpty { "all steps finished" }
 }
