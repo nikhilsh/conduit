@@ -20,6 +20,10 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+---
+
+## v0.0.220
+
 **Session tasks UI (design_handoff_session_tasks) — iOS + Android. PRs #920, #923, #925, #927.**
 
 - Background-task visibility in chat sessions: `ConduitTaskRow` + task spinner
@@ -35,7 +39,7 @@ pending section above it. Newest merge first._
   rows currently bind best-effort/historic only), no per-task transcript
   surface.
 
-**Flow (pipeline v2) redesign — iOS + Android. PRs #921, #922, #924, #926, +this PR.**
+**Flow (pipeline v2) redesign — iOS + Android. PRs #921, #922, #924, #926, #928.**
 
 - Native Start sheet (Session/Flow segmented) + two-step wizard (Task, Steps),
   step editor and If/Else editor replace the old builder as the phone create UX

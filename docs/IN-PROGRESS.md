@@ -9,7 +9,7 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
 
 ## Active
 
-- **Thinking block + indicator peek** (iOS + Android) -- consume `thinking_streaming` view_event; collapsible "Thinking..." disclosure above streaming prose; live reasoning line fed to WorkingIndicator peek. Branch `feat/thinking-app-ui`, PR #857.
+_(nothing actively building)_
 
 ## Deferred (not active)
 
