@@ -19,6 +19,7 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
   If/Else editor (C2); replaces the old builder as the phone create UX at
   every "+" entry point, tablet unchanged (kept on the old builder). Monitor
   redesign + the `pipeline`→`flow` naming pass are follow-up PRs.
+- **Session tasks UI PR 2/4** (RunningPill) -- persistent capsule above the chat composer showing the live per-session running-task count (green, "N running task(s)") / gated state (amber, "N running · M needs you"); wired to `SessionStore.subagentRosters`/`subagentRoster` filtered by session id, `gatedCount` always 0 (no gate status in the roster yet). Tap only sets a `showTasksSheet` flag -- the Tasks sheet itself lands in PR 3/4. iOS + Android. Branch `session-tasks-pr2`, PR #923.
 
 ## Deferred (not active)
 
