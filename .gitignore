@@ -84,3 +84,4 @@ broker/sidecar/package-lock.json
 # (see "BEGIN CONDUIT AWARENESS"). Not source; agents kept accidentally
 # committing it into unrelated PRs.
 AGENTS.md
+.conduit/pipelines/
