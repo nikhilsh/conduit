@@ -64,6 +64,38 @@ data class PipelineSummary(
     val currentStep: Int,
     val stepCount: Int,
     val created: String?,
+    /** Per-step topology summary carried on each list item since broker
+     *  #922 -- null on an older broker. [FlowCard] uses this for a real
+     *  `TopoMini` strip (agent dots + gate glyphs + per-step status)
+     *  instead of the stepCount-only degraded rendering. */
+    val steps: List<PipelineSummaryStep>? = null,
+    /** Diffstat-only recap, populated once the pipeline completes (broker
+     *  #922). Null on an older broker or a pre-#906 pipeline. */
+    val result: PipelineSummaryResult? = null,
+)
+
+/**
+ * One step's mini-topology entry on a `GET /api/pipelines` list item
+ * (broker #922 `pipelineStepSummary`). Mirrors iOS `PipelineSummaryStep`.
+ */
+data class PipelineSummaryStep(
+    val agent: String,
+    val role: String,
+    /** "queued" | "running" | "done" | "failed" | "awaiting_gate" | "awaiting_pick" */
+    val status: String,
+    val gateAfter: Boolean,
+)
+
+/**
+ * Diffstat-only slice of `PipelineResult` carried on a completed list item
+ * (broker #922) -- output is deliberately omitted. Mirrors iOS
+ * `PipelineSummaryResult`.
+ */
+data class PipelineSummaryResult(
+    val filesChanged: Int,
+    val insertions: Int,
+    val deletions: Int,
+    val finished: String?,
 )
 
 /**

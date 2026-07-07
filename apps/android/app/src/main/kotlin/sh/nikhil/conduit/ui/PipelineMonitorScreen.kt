@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
@@ -44,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -59,7 +61,11 @@ import sh.nikhil.conduit.SavedSession
 import sh.nikhil.conduit.SavedSessionStatus
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
+import sh.nikhil.conduit.ui.components.AgentDot
 import sh.nikhil.conduit.ui.components.ConduitChip
+import sh.nikhil.conduit.ui.components.FlowAgentStatus
+import sh.nikhil.conduit.ui.components.GateGlyph
+import sh.nikhil.conduit.ui.components.GatePill
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -669,45 +675,65 @@ fun PipelineMonitorScreen(
                     color = neon.textDim,
                 )
 
-                p.steps.forEach { step ->
+                // Vertical rail (design_handoff_flow/README.md "7. Monitor"):
+                // AgentDot(44dp) leading each step card, joined by a thin
+                // connector at the dot's x-center; a GatePill splices into
+                // the connector where the step above `gateAfter`.
+                p.steps.forEachIndexed { i, step ->
+                    val displayState = PipelineStepDisplayViewModel.state(step, p)
                     val stepState = resolveStepState(step, p)
-                    PipelineStepRow(
-                        step = step,
-                        stepState = stepState,
-                        neon = neon,
-                        outputExpanded = expandedStepOutputs.contains(step.index),
-                        onToggleOutput = {
-                            expandedStepOutputs = if (expandedStepOutputs.contains(step.index)) {
-                                expandedStepOutputs - step.index
-                            } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        AgentDot(
+                            agent = step.agentType,
+                            size = 44.dp,
+                            status = pipelineStepDotStatus(displayState),
+                        )
+                        PipelineStepRow(
+                            step = step,
+                            stepState = stepState,
+                            displayState = displayState,
+                            neon = neon,
+                            modifier = Modifier.weight(1f),
+                            outputExpanded = expandedStepOutputs.contains(step.index),
+                            onToggleOutput = {
+                                expandedStepOutputs = if (expandedStepOutputs.contains(step.index)) {
+                                    expandedStepOutputs - step.index
+                                } else {
+                                    Telemetry.breadcrumb(
+                                        "pipeline",
+                                        "step_output_preview_expanded",
+                                        mapOf("pipeline_id" to pipelineId, "step" to step.index.toString()),
+                                    )
+                                    expandedStepOutputs + step.index
+                                }
+                            },
+                            onTap = {
+                                step.sessionId?.let { sid ->
+                                    Telemetry.breadcrumb(
+                                        "pipeline",
+                                        "step_session_opened",
+                                        mapOf("pipeline_id" to pipelineId, "step" to step.index.toString()),
+                                    )
+                                    openStepSession(sid, step.agentType, step.role, step.started, step.ended)
+                                }
+                            },
+                            onTapRun = { sessionId ->
                                 Telemetry.breadcrumb(
                                     "pipeline",
-                                    "step_output_preview_expanded",
-                                    mapOf("pipeline_id" to pipelineId, "step" to step.index.toString()),
+                                    "fanout_run_opened",
+                                    mapOf("pipeline_id" to pipelineId, "session_id" to sessionId),
                                 )
-                                expandedStepOutputs + step.index
-                            }
-                        },
-                        onTap = {
-                            step.sessionId?.let { sid ->
-                                Telemetry.breadcrumb(
-                                    "pipeline",
-                                    "step_session_opened",
-                                    mapOf("pipeline_id" to pipelineId, "step" to step.index.toString()),
-                                )
-                                openStepSession(sid, step.agentType, step.role, step.started, step.ended)
-                            }
-                        },
-                        onTapRun = { sessionId ->
-                            Telemetry.breadcrumb(
-                                "pipeline",
-                                "fanout_run_opened",
-                                mapOf("pipeline_id" to pipelineId, "session_id" to sessionId),
-                            )
-                            val run = step.fanout?.runs?.firstOrNull { it.sessionId == sessionId }
-                            openStepSession(sessionId, run?.agentType ?: step.agentType, step.role, run?.started, run?.ended)
-                        },
-                    )
+                                val run = step.fanout?.runs?.firstOrNull { it.sessionId == sessionId }
+                                openStepSession(sessionId, run?.agentType ?: step.agentType, step.role, run?.started, run?.ended)
+                            },
+                        )
+                    }
+                    if (i < p.steps.size - 1) {
+                        PipelineStepConnector(step = step, pipeline = p, neon = neon)
+                    }
                 }
 
                 // Awaiting pick panel (fanout)
@@ -952,9 +978,48 @@ fun PipelineMonitorScreen(
                     }
                 }
 
+                // Completed recap (design_handoff_flow "7. Monitor" --
+                // accent/cyan-bordered "All steps finished" + mono
+                // diffstat) for when the richer `PipelineResultCard` above
+                // didn't render: an older broker without `pipeline_result`,
+                // or a pipeline that completed before that feature shipped.
+                if (p.isComplete && !(pipelineResult != null && pipelineResultCapability)) {
+                    val diffstat = pipelineCompleteDiffstat(pipelineResult)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .neonCardSurface(
+                                neon = neon,
+                                shape = RoundedCornerShape(14.dp),
+                                fill = neon.accent.copy(alpha = 0.05f),
+                                borderColor = neon.accent.copy(alpha = 0.2f),
+                            ),
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                "All steps finished",
+                                fontFamily = neon.sans,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.5.sp,
+                                color = neon.text,
+                            )
+                            Text(
+                                diffstat,
+                                fontFamily = neon.mono,
+                                fontSize = 11.5.sp,
+                                color = neon.textDim,
+                            )
+                        }
+                    }
+                }
+
                 // Awaiting gate card
                 if (p.state == "awaiting_gate") {
                     val gate = p.gate
+                    val gatedStep = p.steps.getOrNull(p.currentStep)
+                    val gatedSessionId = gatedStep?.sessionId
+                    val gatedRole = gatedStep?.role?.takeIf { it.isNotEmpty() }
+                        ?.let { it[0].uppercase() + it.substring(1) } ?: "Step ${p.currentStep + 1}"
                     // Determine preview text: prefer prev, then output, then null.
                     val previewText: String? = gate?.let { g ->
                         g.prev.takeIf { it.isNotEmpty() } ?: g.output?.takeIf { it.isNotEmpty() }
@@ -986,7 +1051,7 @@ fun PipelineMonitorScreen(
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text(
-                                "Waiting for your approval",
+                                "$gatedRole is ready for review",
                                 fontFamily = neon.sans,
                                 fontWeight = FontWeight.SemiBold,
                                 color = neon.yellow,
@@ -1076,67 +1141,118 @@ fun PipelineMonitorScreen(
                                 )
                             }
 
-                            // Continue button
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(if (!isContinuing) neon.yellow else neon.surface2)
-                                    .clickable(enabled = !isContinuing) {
-                                        val edited = isEditingHandoff &&
-                                            handoffDraft != (gate?.prev ?: "")
-                                        isContinuing = true
-                                        Telemetry.breadcrumb(
-                                            "pipeline",
-                                            "gate_continue_tapped",
-                                            mapOf(
-                                                "pipeline_id" to pipelineId,
-                                                "edited" to edited.toString(),
-                                            ),
-                                        )
-                                        scope.launch {
-                                            val body = if (edited) {
-                                                JSONObject().put("prev", handoffDraft)
+                            // "Open session" (secondary) + "Approve ·
+                            // continue" (amber, GateGlyph leading) --
+                            // design_handoff_flow "7. Monitor". Edit
+                            // handoff stays folded in as the tertiary text
+                            // action in the handoff-preview header above
+                            // (never removed).
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(50))
+                                        .background(neon.surface2)
+                                        .border(1.dp, neon.borderStrong, RoundedCornerShape(50))
+                                        .then(
+                                            if (gatedSessionId != null) {
+                                                Modifier.clickable {
+                                                    Telemetry.breadcrumb(
+                                                        "pipeline",
+                                                        "gate_open_session_tapped",
+                                                        mapOf("pipeline_id" to pipelineId, "step" to p.currentStep.toString()),
+                                                    )
+                                                    openStepSession(
+                                                        gatedSessionId,
+                                                        gatedStep?.agentType ?: "",
+                                                        gatedStep?.role ?: "",
+                                                        gatedStep?.started,
+                                                        gatedStep?.ended,
+                                                    )
+                                                }
                                             } else {
-                                                JSONObject()
-                                            }
-                                            val result = withContext(Dispatchers.IO) {
-                                                postEndpoint(
-                                                    "/api/pipeline/$pipelineId/continue",
-                                                    body,
-                                                )
-                                            }
-                                            isContinuing = false
-                                            result.onSuccess { json ->
-                                                val parsed = parsePipeline(json)
-                                                pipeline = parsed
-                                            }.onFailure { e ->
-                                                Telemetry.capture(
-                                                    error = e,
-                                                    message = "pipeline gate-continue error",
-                                                    tags = mapOf("surface" to "android", "phase" to "pipeline-monitor"),
-                                                    extras = mapOf("pipeline_id" to pipelineId),
-                                                )
-                                                actionError = e.message ?: "Continue failed"
+                                                Modifier
+                                            },
+                                        )
+                                        .alpha(if (gatedSessionId == null) 0.5f else 1f)
+                                        .padding(vertical = 12.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        "Open session",
+                                        fontFamily = neon.sans,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = neon.text,
+                                    )
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(if (!isContinuing) neon.yellow else neon.surface2)
+                                        .clickable(enabled = !isContinuing) {
+                                            val edited = isEditingHandoff &&
+                                                handoffDraft != (gate?.prev ?: "")
+                                            isContinuing = true
+                                            Telemetry.breadcrumb(
+                                                "pipeline",
+                                                "gate_continue_tapped",
+                                                mapOf(
+                                                    "pipeline_id" to pipelineId,
+                                                    "edited" to edited.toString(),
+                                                ),
+                                            )
+                                            scope.launch {
+                                                val body = if (edited) {
+                                                    JSONObject().put("prev", handoffDraft)
+                                                } else {
+                                                    JSONObject()
+                                                }
+                                                val result = withContext(Dispatchers.IO) {
+                                                    postEndpoint(
+                                                        "/api/pipeline/$pipelineId/continue",
+                                                        body,
+                                                    )
+                                                }
+                                                isContinuing = false
+                                                result.onSuccess { json ->
+                                                    val parsed = parsePipeline(json)
+                                                    pipeline = parsed
+                                                }.onFailure { e ->
+                                                    Telemetry.capture(
+                                                        error = e,
+                                                        message = "pipeline gate-continue error",
+                                                        tags = mapOf("surface" to "android", "phase" to "pipeline-monitor"),
+                                                        extras = mapOf("pipeline_id" to pipelineId),
+                                                    )
+                                                    actionError = e.message ?: "Continue failed"
+                                                }
                                             }
                                         }
+                                        .padding(vertical = 12.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (isContinuing) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            color = neon.accentText,
+                                            strokeWidth = 2.dp,
+                                        )
+                                    } else {
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            GateGlyph(color = neon.accentText, size = 11.dp)
+                                            Text(
+                                                "Approve · continue",
+                                                fontFamily = neon.sans,
+                                                fontWeight = FontWeight.Bold,
+                                                color = neon.accentText,
+                                            )
+                                        }
                                     }
-                                    .padding(vertical = 12.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                if (isContinuing) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(18.dp),
-                                        color = neon.accentText,
-                                        strokeWidth = 2.dp,
-                                    )
-                                } else {
-                                    Text(
-                                        "Continue",
-                                        fontFamily = neon.sans,
-                                        fontWeight = FontWeight.Bold,
-                                        color = neon.accentText,
-                                    )
                                 }
                             }
                         }
@@ -1471,6 +1587,30 @@ object PipelineStepDisplayViewModel {
     }
 }
 
+/**
+ * "+N -N · N files" from the completed pipeline's diffstat -- falls back
+ * to a generic message when [result] is absent (older broker or a
+ * pre-#906 pipeline). Mirror of iOS `PipelineMonitorView.completeDiffstat`.
+ */
+private fun pipelineCompleteDiffstat(result: PipelineResult?): String {
+    if (result == null) return "no diffstat available"
+    val parts = mutableListOf<String>()
+    if (result.insertions > 0) parts.add("+${result.insertions}")
+    if (result.deletions > 0) parts.add("-${result.deletions}")
+    val stats = parts.joinToString(" ")
+    if (result.filesChanged > 0) {
+        return if (stats.isEmpty()) "${result.filesChanged} files" else "$stats · ${result.filesChanged} files"
+    }
+    return stats.ifEmpty { "no diffstat available" }
+}
+
+/** Capitalized role (falling back to agent type) for a rail step's title,
+ *  never crashing on an unexpectedly empty string. */
+private fun pipelineStepRailTitle(step: PipelineStep): String {
+    val raw = step.role.ifEmpty { step.agentType }
+    return raw.ifEmpty { null }?.let { it[0].uppercase() + it.substring(1) } ?: raw
+}
+
 /** Derive a display state string for a step given pipeline state. */
 private fun resolveStepState(step: PipelineStep, pipeline: Pipeline): String =
     when (PipelineStepDisplayViewModel.state(step, pipeline)) {
@@ -1481,6 +1621,106 @@ private fun resolveStepState(step: PipelineStep, pipeline: Pipeline): String =
         PipelineStepDisplayViewModel.State.AWAITING_GATE -> "awaiting-gate"
         PipelineStepDisplayViewModel.State.AWAITING_PICK -> "pick"
     }
+
+/**
+ * `AgentDot` ring for a step's display state. `DONE` uses `LIVE` (green
+ * ring) rather than the atom's default `DONE` (accent) -- the Monitor's
+ * per-step rail spec explicitly wants a green ring here (vs. the home
+ * `FlowCard`/`TopoMini` topology strip, which uses the atom default accent
+ * for done). `AWAITING_GATE`/`AWAITING_PICK` both read as the active/amber
+ * "needs attention" ring, same family as `RUNNING`. Mirror of iOS
+ * `PipelineMonitorView.dotStatus`.
+ */
+private fun pipelineStepDotStatus(state: PipelineStepDisplayViewModel.State): FlowAgentStatus? = when (state) {
+    PipelineStepDisplayViewModel.State.QUEUED -> null
+    PipelineStepDisplayViewModel.State.RUNNING,
+    PipelineStepDisplayViewModel.State.AWAITING_GATE,
+    PipelineStepDisplayViewModel.State.AWAITING_PICK,
+    -> FlowAgentStatus.RUNNING
+    PipelineStepDisplayViewModel.State.DONE -> FlowAgentStatus.LIVE
+    PipelineStepDisplayViewModel.State.FAILED -> FlowAgentStatus.ERROR
+}
+
+/** Mono status-line text tint per the design's status map. Mirror of iOS
+ *  `PipelineMonitorView.statusTint`. */
+private fun pipelineStepStatusTint(state: PipelineStepDisplayViewModel.State, neon: NeonTheme): Color = when (state) {
+    PipelineStepDisplayViewModel.State.QUEUED -> neon.textFaint
+    PipelineStepDisplayViewModel.State.RUNNING,
+    PipelineStepDisplayViewModel.State.AWAITING_GATE,
+    PipelineStepDisplayViewModel.State.AWAITING_PICK,
+    -> neon.yellow
+    PipelineStepDisplayViewModel.State.DONE -> neon.green
+    PipelineStepDisplayViewModel.State.FAILED -> neon.red
+}
+
+/** "<agent> · <dur>" when done, "working…" running, an "exited(N)"-style
+ *  phase on failure, "waiting" queued. Mirror of iOS
+ *  `PipelineMonitorView.statusLine`. */
+private fun pipelineStepStatusLine(step: PipelineStep, state: PipelineStepDisplayViewModel.State): String =
+    when (state) {
+        PipelineStepDisplayViewModel.State.DONE -> {
+            val dur = pipelineStepDuration(step)
+            if (dur != null) "${step.agentType} · $dur" else "${step.agentType} · done"
+        }
+        PipelineStepDisplayViewModel.State.RUNNING, PipelineStepDisplayViewModel.State.AWAITING_GATE -> "working…"
+        PipelineStepDisplayViewModel.State.AWAITING_PICK -> "pick a result"
+        PipelineStepDisplayViewModel.State.FAILED -> step.phase ?: "exited(1)"
+        PipelineStepDisplayViewModel.State.QUEUED -> "waiting"
+    }
+
+/** Short "4m 12s" / "1h 3m" / "12s" duration from a step's started/ended
+ *  RFC3339 timestamps. Null when either is missing or unparseable. */
+private fun pipelineStepDuration(step: PipelineStep): String? {
+    val startedStr = step.started ?: return null
+    val endedStr = step.ended ?: return null
+    val started = runCatching { java.time.Instant.parse(startedStr) }.getOrNull() ?: return null
+    val ended = runCatching { java.time.Instant.parse(endedStr) }.getOrNull() ?: return null
+    val totalSeconds = maxOf(0L, ended.epochSecond - started.epochSecond)
+    val h = totalSeconds / 3600
+    val m = (totalSeconds % 3600) / 60
+    val s = totalSeconds % 60
+    return when {
+        h > 0 -> "${h}h ${m}m"
+        m > 0 -> "${m}m ${s}s"
+        else -> "${s}s"
+    }
+}
+
+/**
+ * Connector between two rail rows: a 1.5dp line at the dot's x-center
+ * (inset to match the 44dp `AgentDot`), green ~40% when the step above is
+ * done, else `lineSoft`. Where the step above has `gateAfter`, a
+ * `GatePill` splices in: active (amber) while that gate is the CURRENT
+ * awaiting boundary, "approved" once passed, plain "gate" before it's
+ * reached. Mirror of iOS `PipelineMonitorView.connector`.
+ */
+@Composable
+private fun PipelineStepConnector(step: PipelineStep, pipeline: Pipeline, neon: NeonTheme) {
+    val state = PipelineStepDisplayViewModel.state(step, pipeline)
+    val isDone = state == PipelineStepDisplayViewModel.State.DONE
+    val gateActive = pipeline.state == "awaiting_gate" && step.gateAfter && step.index == pipeline.currentStep
+    val gateApproved = step.gateAfter && isDone && !gateActive
+    val lineHeight = if (gateActive) 44.dp else 30.dp
+
+    Row(
+        modifier = Modifier.padding(start = 21.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .width(1.5.dp)
+                .height(lineHeight)
+                .background(if (isDone) neon.green.copy(alpha = 0.4f) else neon.lineSoft),
+        )
+        if (step.gateAfter) {
+            GatePill(
+                label = if (gateActive) "gate — review below" else if (gateApproved) "approved" else "gate",
+                active = gateActive,
+            )
+        }
+    }
+}
 
 /**
  * Pure view-model for the Result card's "collapse long output" behavior
@@ -1599,16 +1839,19 @@ private fun PipelineResultCard(
     }
 }
 
+// NavHeader trailing state Chip (design_handoff_flow/README.md "7.
+// Monitor"): needs you (amber) while awaiting_gate/awaiting_pick, running
+// (green) while active, done (accent/cyan) complete, failed (red) halted.
 @Composable
 private fun PipelineStateChip(state: String, neon: NeonTheme) {
-    val color = when (state) {
-        "running" -> neon.accent
-        "done", "complete" -> neon.green
-        "failed" -> neon.red
-        "awaiting_gate" -> neon.yellow
-        "awaiting_pick" -> neon.accent
-        "cancelled" -> neon.textFaint
-        else -> neon.textFaint
+    val (label, color) = when (state) {
+        "running" -> "running" to neon.green
+        "complete" -> "done" to neon.accent
+        "failed" -> "failed" to neon.red
+        "awaiting_gate" -> "needs you" to neon.yellow
+        "awaiting_pick" -> "needs you" to neon.yellow
+        "cancelled" -> "cancelled" to neon.textFaint
+        else -> state.replace("_", " ") to neon.textFaint
     }
     Box(
         modifier = Modifier
@@ -1618,7 +1861,7 @@ private fun PipelineStateChip(state: String, neon: NeonTheme) {
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Text(
-            state.replace("_", " "),
+            label,
             fontFamily = neon.mono,
             fontWeight = FontWeight.SemiBold,
             fontSize = 12.sp,
@@ -1631,21 +1874,19 @@ private fun PipelineStateChip(state: String, neon: NeonTheme) {
 private fun PipelineStepRow(
     step: PipelineStep,
     stepState: String,
+    displayState: PipelineStepDisplayViewModel.State,
     neon: NeonTheme,
     onTap: () -> Unit,
     onTapRun: (String) -> Unit = {},
     outputExpanded: Boolean = false,
     onToggleOutput: () -> Unit = {},
+    modifier: Modifier = Modifier,
 ) {
-    val stateColor = when (stepState) {
-        "running" -> neon.accent
-        "done" -> neon.green
-        "failed" -> neon.red
-        "awaiting-gate" -> neon.yellow
-        "pick" -> neon.accent
-        else -> neon.textFaint
-    }
+    val isActive = stepState == "running" || stepState == "awaiting-gate" || stepState == "pick"
+    val isQueued = stepState == "queued"
     val isTappable = step.sessionId != null
+    val borderColor = if (isActive) neon.yellow.copy(alpha = 0.27f) else neon.lineSoft
+    val glowTint: Color? = if (isActive && neon.glow) neon.yellow else null
 
     // The tap-to-transcript click is scoped to the main info Row below,
     // not the whole card: the disclosure IconButton lives inside that Row
@@ -1653,44 +1894,37 @@ private fun PipelineStepRow(
     // target), while the expanded output preview and fanout sub-run lines
     // sit outside the Row and must never navigate on tap (#918).
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .neonCardSurface(neon = neon, shape = RoundedCornerShape(12.dp), fill = neon.surface),
+            .alpha(if (isQueued) 0.55f else 1f)
+            .neonCardSurface(
+                neon = neon,
+                shape = RoundedCornerShape(12.dp),
+                fill = neon.surface,
+                borderColor = borderColor,
+                glowTint = glowTint,
+            ),
     ) {
-        Column(modifier = Modifier.padding(12.dp).fillMaxWidth()) {
+        Column(modifier = Modifier.padding(13.dp).fillMaxWidth()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .then(if (isTappable) Modifier.clickable(onClick = onTap) else Modifier),
-                verticalAlignment = Alignment.CenterVertically,
+                    .then(if (isTappable && !isQueued) Modifier.clickable(onClick = onTap) else Modifier),
+                verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                AgentGlyph(assistant = step.agentType, size = 30.dp)
                 Column(modifier = Modifier.weight(1f)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         Text(
-                            step.role.ifEmpty { step.agentType },
+                            "${step.index + 1}. ${pipelineStepRailTitle(step)}",
                             fontFamily = neon.sans,
                             fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp,
+                            fontSize = 15.sp,
                             color = neon.text,
                         )
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(neon.surface2)
-                                .padding(horizontal = 6.dp, vertical = 2.dp),
-                        ) {
-                            Text(
-                                "Step ${step.index + 1}",
-                                fontFamily = neon.mono,
-                                fontSize = 10.sp,
-                                color = neon.textFaint,
-                            )
-                        }
                         // Fanout badge
                         if (step.isFanout) {
                             step.fanout?.let { fo ->
@@ -1750,6 +1984,16 @@ private fun PipelineStepRow(
                             }
                         }
                     }
+                    // Mono status-line, tinted per the design's status map:
+                    // "<agent> · <dur>" done, "working…" running, an
+                    // "exited(N)"-style phase on failure, "waiting" queued.
+                    Text(
+                        pipelineStepStatusLine(step, displayState),
+                        fontFamily = neon.mono,
+                        fontSize = 11.sp,
+                        color = pipelineStepStatusTint(displayState, neon),
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
                     if (step.inputFromPrev.isNotEmpty() && step.inputFromPrev != "none") {
                         Text(
                             "input: ${step.inputFromPrev}",
@@ -1771,14 +2015,6 @@ private fun PipelineStepRow(
                         )
                     }
                 }
-                PipelineStepStateChip(state = stepState, neon = neon)
-                if (stateColor == neon.accent && stepState != "pick") {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
-                        color = neon.accent,
-                        strokeWidth = 1.5.dp,
-                    )
-                }
                 // Output disclosure (#907): a subtle affordance, separate
                 // from the row's tap-to-transcript click, that expands an
                 // inline preview of this step's harvested output. The
@@ -1792,6 +2028,16 @@ private fun PipelineStepRow(
                             modifier = Modifier.size(16.dp),
                         )
                     }
+                }
+                // Chevron whenever the row has activity -- per design, no
+                // chevron on an idle/queued row.
+                if (isTappable && !isQueued) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = neon.textFaint,
+                        modifier = Modifier.size(16.dp),
+                    )
                 }
             }
 
@@ -2040,29 +2286,3 @@ private fun PickRunCard(
     }
 }
 
-@Composable
-private fun PipelineStepStateChip(state: String, neon: NeonTheme) {
-    val color = when (state) {
-        "running" -> neon.accent
-        "done" -> neon.green
-        "failed" -> neon.red
-        "awaiting-gate" -> neon.yellow
-        "pick" -> neon.accent
-        else -> neon.textFaint
-    }
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(color.copy(alpha = 0.12f))
-            .border(1.dp, color.copy(alpha = 0.40f), RoundedCornerShape(50))
-            .padding(horizontal = 7.dp, vertical = 3.dp),
-    ) {
-        Text(
-            state,
-            fontFamily = neon.mono,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = color,
-        )
-    }
-}
