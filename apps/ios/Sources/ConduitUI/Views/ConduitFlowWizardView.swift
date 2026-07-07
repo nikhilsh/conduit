@@ -35,12 +35,19 @@ extension ConduitUI {
         @State private var createdPipeline: CreatedPipeline?
         @State private var navigateToMonitor = false
         @State private var chainGuardrailIndices: [Int] = []
+        /// Fired the moment a flow submits successfully (Home FLOWS fix,
+        /// device feedback round 4): lets the presenter (`ConduitHomeView`)
+        /// refresh its pipeline summaries immediately instead of waiting for
+        /// the wizard sheet to fully dismiss, so a freshly-started flow's
+        /// card is already there when the user backs out.
+        var onFlowStarted: (() -> Void)?
 
-        init(prefill: FlowWizardPrefill) {
+        init(prefill: FlowWizardPrefill, onFlowStarted: (() -> Void)? = nil) {
             let steps = prefill.steps ?? [PipelineStep()]
             _viewModel = State(initialValue: PipelineBuilderViewModel(steps: steps))
             _task = State(initialValue: prefill.task)
             _stepIndex = State(initialValue: max(1, min(2, prefill.startStep)))
+            self.onFlowStarted = onFlowStarted
         }
 
         var body: some View {
@@ -600,6 +607,7 @@ extension ConduitUI {
                         Telemetry.breadcrumb("flow_wizard", "start ok", data: ["id": parsed.id, "state": parsed.state])
                         createdPipeline = CreatedPipeline(id: parsed.id, state: parsed.state, currentStep: parsed.current_step)
                         navigateToMonitor = true
+                        onFlowStarted?()
                     } else {
                         struct ErrorEnvelope: Decodable {
                             struct Detail: Decodable { let message: String? }

@@ -14,10 +14,18 @@ extension NeonTheme {
     /// `claude` (warm), Codex → `codex` (bright accent), others land on
     /// distinct neon hues. Falls back to `textDim` for unknown agents so
     /// an unknown adapter doesn't masquerade as a known one.
+    ///
+    /// `gemini` was missing here (device feedback): with no case it fell
+    /// through to the `textDim` default, so `AgentGlyph`'s template-tinted
+    /// rendering of the real `GeminiMark` asset painted it in a faint gray
+    /// — indistinguishable from a placeholder dot — even though the mark
+    /// resolved correctly. `accent2` == `blue` (see `NeonTheme.resolve`),
+    /// same fallback Android's `neonAgentColor` already used for gemini.
     func agentTint(forAgent assistant: String) -> Color {
         switch assistant.lowercased() {
         case "claude":   return claude
         case "codex":    return codex
+        case "gemini":   return accent2
         case "hermes":   return purple
         case "pi":       return blue
         case "opencode": return opencode

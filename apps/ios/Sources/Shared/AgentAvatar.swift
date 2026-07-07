@@ -25,12 +25,16 @@ struct AgentAvatar: View {
                 // Real brand logo on a white disc: the marks are designed
                 // for a light background, so without this the black Codex
                 // knot is invisible on the dark sheet (device feedback).
-                // Padding keeps the mark off the rim.
+                // Padding keeps the mark off the rim. Divided by the
+                // optical-size correction (device feedback: gemini/opencode
+                // read visibly smaller than claude/codex at the same
+                // padding, since the source art isn't uniformly cropped) so
+                // every agent occupies the same visual weight.
                 Circle().fill(Color.white)
                 Image(asset)
                     .resizable()
                     .scaledToFit()
-                    .padding(size * 0.16)
+                    .padding(size * 0.16 / AgentAvatar.glyphRenderScale(forAgent: assistant))
             } else {
                 Circle()
                     .fill(neon.agentTint(forAgent: assistant))
@@ -74,6 +78,21 @@ struct AgentAvatar: View {
         default:          return nil
         }
         return UIImage(named: name) != nil ? name : nil
+    }
+
+    /// Per-agent optical-size correction for the bundled brand-mark PNGs.
+    /// The source art isn't uniformly cropped -- gemini's and opencode's
+    /// marks carry more effective padding than claude's/codex's at the
+    /// same `scaledToFit` frame, so they read visibly smaller even in an
+    /// identical container (device feedback). Applied as an extra
+    /// multiplier by both [AgentAvatar] and [AgentGlyph] so every agent's
+    /// logo occupies roughly the same optical weight at any size. `1.0` is
+    /// a no-op; only the two under-sized marks are scaled up.
+    static func glyphRenderScale(forAgent assistant: String) -> CGFloat {
+        switch assistant.lowercased() {
+        case "gemini", "opencode": return 1.25
+        default: return 1.0
+        }
     }
 
     /// Per-agent brand glyph as an SF Symbol name. Claude → a sparkle,
@@ -130,12 +149,17 @@ struct AgentGlyph: View {
             if let asset = AgentAvatar.logoAsset(forAgent: assistant) {
                 // Real brand mark, rendered as a template (alpha-mask) image
                 // so it tints exactly like the SF Symbol fallback below --
-                // bare mark, no white tile/disc behind it.
+                // bare mark, no white tile/disc behind it. Scaled by the
+                // same optical-size correction as `AgentAvatar` (see
+                // `glyphRenderScale`) so gemini/opencode don't read smaller
+                // than claude/codex; the resulting frame stays well inside
+                // the outer `size` container, so this can't overflow/clip.
+                let glyphSize = size * 0.62 * AgentAvatar.glyphRenderScale(forAgent: assistant)
                 Image(asset)
                     .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: size * 0.62, height: size * 0.62)
+                    .frame(width: glyphSize, height: glyphSize)
             } else if let symbol = AgentAvatar.symbol(forAgent: assistant) {
                 Image(systemName: symbol)
                     .font(.system(size: size * 0.62, weight: .semibold))

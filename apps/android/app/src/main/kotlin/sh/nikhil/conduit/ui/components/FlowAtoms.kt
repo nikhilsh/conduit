@@ -93,7 +93,9 @@ fun AgentDot(
         contentAlignment = Alignment.Center,
     ) {
         if (agent != null) {
-            AgentGlyph(assistant = agent, size = size * 0.55f)
+            // Bumped 0.55 -> 0.6 (device feedback: glyphs read too small
+            // relative to their tinted-circle container).
+            AgentGlyph(assistant = agent, size = size * 0.6f)
         }
     }
 }

@@ -141,9 +141,11 @@ fun NeonGrid(modifier: Modifier = Modifier, color: Color, cellDp: Float = 28f) {
 /**
  * Per-agent neon brand colour, resolved against the active [NeonTheme].
  * Mirrors the chat renderer's agent tinting (claude=claude, codex=codex,
- * hermes=purple, pi=blue, others=accent2) so chrome rows and chat cards
- * agree. Shared so the home list + sheets can tint agent rows without
- * duplicating the map.
+ * hermes=purple, pi=blue, gemini=accent2, others=accent2) so chrome rows
+ * and chat cards agree. Shared so the home list + sheets can tint agent
+ * rows without duplicating the map. `gemini` is explicit (not just falling
+ * into `else`) to mirror iOS's `agentTint(forAgent:)`, which needed the
+ * explicit case to fix a device-feedback bug (gray glyph in Flow surfaces).
  */
 fun neonAgentColor(agent: String?, neon: NeonTheme): androidx.compose.ui.graphics.Color =
     when (agent?.lowercase()) {
@@ -152,6 +154,7 @@ fun neonAgentColor(agent: String?, neon: NeonTheme): androidx.compose.ui.graphic
         "opencode" -> neon.opencode
         "hermes"   -> neon.purple
         "pi"       -> neon.blue
+        "gemini"   -> neon.accent2
         else       -> neon.accent2
     }
 

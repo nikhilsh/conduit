@@ -131,11 +131,16 @@ class PipelineListScreenTest {
     // ---- Home affordance gate ---------------------------------------------
 
     @Test
-    fun homeAffordanceGatesOnExactlyThreeActiveStates() {
+    fun homeAffordanceGatesOnAllNonTerminalStates() {
+        // A just-started flow (`pending`) and the brief inter-step window
+        // (`step_done`) must qualify too -- device feedback: the FLOWS
+        // section never appeared for a live flow because these two were
+        // excluded.
+        assertTrue(PipelineListViewModel.isActiveForHomeAffordance("pending"))
         assertTrue(PipelineListViewModel.isActiveForHomeAffordance("running"))
+        assertTrue(PipelineListViewModel.isActiveForHomeAffordance("step_done"))
         assertTrue(PipelineListViewModel.isActiveForHomeAffordance("awaiting_gate"))
         assertTrue(PipelineListViewModel.isActiveForHomeAffordance("awaiting_pick"))
-        assertFalse(PipelineListViewModel.isActiveForHomeAffordance("pending"))
         assertFalse(PipelineListViewModel.isActiveForHomeAffordance("complete"))
         assertFalse(PipelineListViewModel.isActiveForHomeAffordance("failed"))
         assertFalse(PipelineListViewModel.isActiveForHomeAffordance("cancelled"))
