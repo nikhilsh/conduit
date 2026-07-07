@@ -44,7 +44,6 @@ import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.Warning
@@ -73,6 +72,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -113,13 +113,18 @@ import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.PendingChatKind
 import sh.nikhil.conduit.PinnedContext
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.SubagentEntry
 import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.auth.OAuthProvider
 import sh.nikhil.conduit.descriptorFor
 import sh.nikhil.conduit.sortedByConversationTs
 import sh.nikhil.conduit.stripPendingSentinel
+import sh.nikhil.conduit.tsEpochMillis
 import sh.nikhil.conduit.ui.components.ConduitRunningPill
+import sh.nikhil.conduit.ui.components.ConduitTaskRow
+import sh.nikhil.conduit.ui.components.ConduitTaskStatus
 import sh.nikhil.conduit.ui.components.runningTaskCount
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.conduit_core.ChatEvent
 import uniffi.conduit_core.ConversationItem
@@ -966,6 +971,8 @@ fun ChatPage(
                                     onPendingAnswered = {
                                         answeredPendingIds = answeredPendingIds + ev.id
                                     },
+                                    subagentRoster = subagentRosterMap[session.id] ?: emptyList(),
+                                    onOpenTasks = { showTasksSheet = true },
                                 )
                             }
                         }
@@ -1608,6 +1615,13 @@ private fun ConversationEventRow(
     onAnswerPending: (String) -> Unit = {},
     /** Record this pending-input card as answered (durable upstream lock). */
     onPendingAnswered: () -> Unit = {},
+    /** Live subagent roster for this session (design handoff session_tasks
+     *  PR4) -- used to bind a `kind == "subagent"` row to its live task. */
+    subagentRoster: List<SubagentEntry> = emptyList(),
+    /** Opens the session's Tasks sheet -- the inline task row's tap target.
+     *  No per-task transcript surface exists yet, so every row opens the
+     *  same sheet as the RunningPill. */
+    onOpenTasks: () -> Unit = {},
 ) {
     if (ev.status.lowercase() == "swapping") {
         // Transient agent-swap marker — inline divider, not a full row.
@@ -1634,7 +1648,7 @@ private fun ConversationEventRow(
         return
     }
     if (ev.kind == "subagent") {
-        SubagentCard(ev)
+        InlineTaskRow(ev = ev, roster = subagentRoster, onOpenTasks = onOpenTasks)
         return
     }
     if (ev.role.lowercase() == "user") {
@@ -2264,62 +2278,161 @@ private fun SwapNotice(fromAgent: String?, toAgent: String?) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Inline task row (design handoff session_tasks PR4)
+// ---------------------------------------------------------------------------
+//
+// Replaces the old expand/collapse `SubagentCard` with the shared
+// [ConduitTaskRow] (PR1) for a `kind == "subagent"` transcript event.
+//
+// Binding investigation (see PR4 notes, mirrors iOS `ConduitInlineTaskRow`):
+// there is NO shared id between a `kind == "subagent"` [ConversationItem]
+// and a live [SubagentEntry] on the wire -- the core classifier
+// (`looks_like_subagent`) derives the item purely from free-text system
+// content ("subagent started: ..."), while the roster
+// (`SessionStore.subagentRoster`, `view:"agents"`) is built from separate
+// `task_*` stream frames keyed by `task_id`. The broker's task_* handling
+// (`broker/internal/session/claudechat.go` + `codexappserver.go`)
+// explicitly `continue`s / documents "must NEVER ... emit parent chat
+// events" -- so in the CURRENT broker, a `subagent`-kind chat line isn't
+// actually produced by a live dispatch at all; this branch only fires for
+// legacy/other-source system text matching the classifier's phrasing.
+//
+// Given that gap, [ConduitInlineTaskLogic.rowModel] does a best-effort
+// NAME + RECENCY match against the live roster (substring match on
+// name/description, broken by nearest `startedAt` to the event's own
+// `ts`); when nothing matches -- the common case -- it falls back to the
+// event's own static content/status ("failed" -> Error, else Done, per
+// the design intent "no roster match -> treat as done, historic
+// transcript"). Unit-tested directly by `ConduitInlineTaskRowLogicTest`.
+
 @Composable
-private fun SubagentCard(ev: ConversationItem) {
-    val neon = LocalNeonTheme.current
-    var expanded by remember { mutableStateOf(false) }
-    val running = ev.status.equals("running", true) || ev.status.equals("pending", true)
-    val shape = RoundedCornerShape(15.dp)
-    val chevron by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (expanded) 180f else 0f,
-        label = "subagentChevron",
+private fun InlineTaskRow(ev: ConversationItem, roster: List<SubagentEntry>, onOpenTasks: () -> Unit) {
+    // Elapsed + tail refresh at most once a second -- mirrors the
+    // [TasksSheet] ticker (`nowMs` + `LaunchedEffect`/`delay(1000)`).
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            nowMs = System.currentTimeMillis()
+        }
+    }
+    val model = remember(ev, roster, nowMs) {
+        ConduitInlineTaskLogic.rowModel(ev, roster, nowMs)
+    }
+    ConduitTaskRow(
+        title = model.title,
+        status = model.status,
+        elapsed = model.elapsed,
+        tail = model.tail,
+        onOpen = onOpenTasks,
     )
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface, glowTint = neon.purple)
-            .clickable { expanded = !expanded }
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(22.dp)
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(neon.purple.copy(alpha = 0.18f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Outlined.SmartToy, null, tint = neon.purple, modifier = Modifier.size(14.dp))
+}
+
+/**
+ * Pure mapping logic behind [InlineTaskRow] -- no Compose runtime
+ * dependency, unit-tested in `ConduitInlineTaskRowLogicTest` mirroring the
+ * [TasksSheetLogic] precedent.
+ */
+object ConduitInlineTaskLogic {
+    /** Lifecycle prefixes the core's `looks_like_subagent` (conversation.rs)
+     *  recognizes -- mirrored here so the extracted title strips the same
+     *  boilerplate the classifier anchored on. */
+    private val subagentPrefixes = listOf(
+        "sub-agent started", "sub-agent done", "sub-agent failed",
+        "sub-agent running", "sub-agent complete",
+        "subagent started", "subagent done", "subagent failed",
+        "subagent running", "subagent complete",
+    )
+
+    /** Recover the free-text title/description the CLI wrote after a
+     *  recognized lifecycle prefix ("subagent started: investigating the
+     *  build failure" -> "investigating the build failure"). Falls back to
+     *  the first content line, then the old card's placeholder. */
+    fun extractedTitle(content: String): String {
+        val trimmed = content.trim()
+        val lower = trimmed.lowercase()
+        if (lower.startsWith("spawning agent")) {
+            val rest = trimmed.substring("spawning agent".length).trim(':', ' ')
+            if (rest.isNotEmpty()) return rest
+        }
+        for (prefix in subagentPrefixes) {
+            if (lower.startsWith(prefix)) {
+                val rest = trimmed.substring(prefix.length).trim(':', ' ')
+                if (rest.isNotEmpty()) return rest
             }
-            Spacer(Modifier.width(10.dp))
-            NeonLabel("SUBAGENT", neon.purple, neon)
-            Spacer(Modifier.width(6.dp))
-            NeonStatusChip(ev.status, neon)
-            Spacer(Modifier.weight(1f))
-            Icon(
-                Icons.Filled.KeyboardArrowDown,
-                contentDescription = if (expanded) "Collapse" else "Expand",
-                tint = neon.textDim,
-                modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = chevron },
+        }
+        return trimmed.lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "Subagent activity"
+    }
+
+    /** Best-effort correlation to a LIVE roster entry: no shared id exists
+     *  (see the file-header note above), so match candidates by
+     *  name/description substring, then break ties (or pick among all
+     *  entries when nothing matches on text) by nearest `startedAt` to the
+     *  event's own `ts`. */
+    fun matchingRosterEntry(title: String, eventTs: String, roster: List<SubagentEntry>): SubagentEntry? {
+        if (roster.isEmpty()) return null
+        val needle = title.lowercase()
+        val candidates = roster.filter { entry ->
+            val name = entry.name.lowercase()
+            val description = entry.description.lowercase()
+            (name.isNotEmpty() || description.isNotEmpty()) &&
+                ((name.isNotEmpty() && (needle.contains(name) || name.contains(needle))) ||
+                    (description.isNotEmpty() && (needle.contains(description) || description.contains(needle))))
+        }
+        val pool = candidates.ifEmpty { roster }
+        if (eventTs.isEmpty()) return pool.firstOrNull()
+        val eventEpochMs = tsEpochMillis(eventTs)
+        return pool.minByOrNull { entry ->
+            if (entry.startedAt.isEmpty()) Long.MAX_VALUE
+            else kotlin.math.abs(tsEpochMillis(entry.startedAt) - eventEpochMs)
+        }
+    }
+
+    /** The inline row's fully-resolved render inputs. */
+    data class RowModel(
+        val title: String,
+        val status: ConduitTaskStatus,
+        val elapsed: String?,
+        val tail: String?,
+        /** True when bound to a live roster entry (elapsed ticks, tail
+         *  tracks `lastTool`); false for the static last-resort fallback. */
+        val isLive: Boolean,
+    )
+
+    /** Map a `kind == "subagent"` [ConversationItem] (+ the live roster) to
+     *  the row's render inputs. [nowMs] is injectable so callers/tests can
+     *  pin a stable elapsed value. */
+    fun rowModel(ev: ConversationItem, roster: List<SubagentEntry>, nowMs: Long): RowModel {
+        val title = extractedTitle(ev.content)
+        val entry = matchingRosterEntry(title, ev.ts, roster)
+        if (entry != null) {
+            val status = TasksSheetLogic.statusFromRaw(entry.status)
+            val elapsed = if (status == ConduitTaskStatus.Running && entry.startedAt.isNotEmpty()) {
+                TasksSheetLogic.elapsedLabel(((nowMs - tsEpochMillis(entry.startedAt)) / 1000).coerceAtLeast(0))
+            } else {
+                null
+            }
+            val liveTail = entry.lastTool.trim()
+            return RowModel(
+                title = entry.name.ifEmpty { title },
+                status = status,
+                elapsed = elapsed,
+                tail = liveTail.ifEmpty { null },
+                isLive = true,
             )
         }
-        if (running) {
-            androidx.compose.material3.LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth().clip(CircleShape),
-                color = neon.purple,
-                trackColor = neon.border,
-            )
+        // Last resort: no live roster match (the common case -- see the
+        // file header) -- render from the event's own static content.
+        // "failed" -> Error, everything else -> Done (design intent:
+        // "no roster match -> treat as done, historic transcript").
+        val staticStatus = if (ev.status.equals("failed", ignoreCase = true)) {
+            ConduitTaskStatus.Error
+        } else {
+            ConduitTaskStatus.Done
         }
-        Text(
-            if (expanded) ev.content
-            else (ev.content.lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "Subagent activity"),
-            style = MaterialTheme.typography.bodyMedium,
-            fontFamily = neon.sans,
-            color = neon.text,
-            maxLines = if (expanded) Int.MAX_VALUE else 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        val tailLine = ev.content.lineSequence().drop(1).firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+        return RowModel(title = title, status = staticStatus, elapsed = null, tail = tailLine, isLive = false)
     }
 }
 

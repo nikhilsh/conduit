@@ -10,7 +10,7 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
 ## Active
 
 - **Thinking block + indicator peek** (iOS + Android) -- consume `thinking_streaming` view_event; collapsible "Thinking..." disclosure above streaming prose; live reasoning line fed to WorkingIndicator peek. Branch `feat/thinking-app-ui`, PR #857.
-- **Session tasks UI PR 3/4** (Tasks sheet) -- bottom sheet grouping a session's background tasks (NEEDS YOU / RUNNING / FINISHED), opened from the RunningPill tap; maps `SessionStore.subagentRosters`/`subagentRoster` to sheet rows (`ConduitTasksSheetLogic`/`TasksSheetLogic`), ticking elapsed for running rows. `canStop` is hard-false (no broker kill verb yet) and "View transcript" is omitted (no nav target exists yet for a roster entry) -- both flagged as follow-ups. iOS + Android. Branch `session-tasks-pr3`, PR #925.
+- **Session tasks UI PR 4/4** (transcript integration, FINAL) -- a dispatched background task now renders as `ConduitUI.TaskRow`/`ConduitTaskRow` inline in the chat transcript at its dispatch point, replacing the old expand/collapse `ConduitSubagentCard`/`SubagentCard` (deleted). No shared id exists on the wire between a `kind == "subagent"` transcript event and a live `SubagentEntry`, so `ConduitInlineTaskLogic` (both platforms, Kotlin's lives in ChatPage.kt) binds by best-effort name/description match + nearest-timestamp, falling back to the event's own static content/status (done/failed) when nothing matches -- the common case, since the current broker never actually emits a `subagent`-kind chat line for a live dispatch. Elapsed ticks + tail (`lastTool`) refresh at ~1Hz; tap opens the Tasks sheet. iOS + Android, unit-tested. Branch `session-tasks-pr4`, PR TBD.
 
 ## Deferred (not active)
 
