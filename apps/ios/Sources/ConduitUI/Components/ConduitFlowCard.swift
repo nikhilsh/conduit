@@ -137,14 +137,51 @@ extension ConduitUI {
         }
 
         private var caption: String {
+            // Real per-step data (broker #922) upgrades the caption with
+            // the actual role name / diffstat instead of a generic
+            // "Step N" placeholder -- falls through to the degraded
+            // caption below when `summary.steps` is absent (older broker).
+            if let steps = summary.steps, !steps.isEmpty {
+                if isGated, let role = roleAt(summary.current_step, in: steps) {
+                    return "\(role) done · review"
+                }
+                if isComplete { return completeCaption }
+                if !isAwaitingPick && !isFailed && !isCancelled,
+                   let role = roleAt(summary.current_step, in: steps) {
+                    return "\(role) · running"
+                }
+            }
             if isGated { return "Step \(summary.current_step + 1) done · review" }
             if isAwaitingPick { return "Pick a result to continue" }
             if isFailed { return "halted — open to inspect" }
-            if isComplete { return "all steps finished" }
+            if isComplete { return completeCaption }
             if isCancelled { return "cancelled" }
             if state == "step_done" { return "step done" }
             if state == "pending" { return "queued" }
             return "running"
+        }
+
+        /// Capitalized role name of the step at `index`, if in range --
+        /// feeds the role-forward captions above.
+        private func roleAt(_ index: Int, in steps: [ConduitUI.PipelineSummaryStep]) -> String? {
+            guard steps.indices.contains(index) else { return nil }
+            let role = steps[index].role
+            return role.isEmpty ? nil : role.capitalized
+        }
+
+        /// "+N -N · N files" from the completed pipeline's diffstat (broker
+        /// #922 `result`) -- falls back to the generic recap when the
+        /// result is absent (older broker or a pre-#906 pipeline).
+        private var completeCaption: String {
+            guard let result = summary.result else { return "all steps finished" }
+            var parts: [String] = []
+            if result.insertions > 0 { parts.append("+\(result.insertions)") }
+            if result.deletions > 0 { parts.append("-\(result.deletions)") }
+            let stats = parts.joined(separator: " ")
+            if result.files_changed > 0 {
+                return stats.isEmpty ? "\(result.files_changed) files" : "\(stats) · \(result.files_changed) files"
+            }
+            return stats.isEmpty ? "all steps finished" : stats
         }
 
         private var cardBorder: Color {
@@ -158,12 +195,41 @@ extension ConduitUI {
             return needsYou ? neon.yellow : nil
         }
 
+        /// Real per-step topology (broker #922 `steps`) when available --
+        /// actual agent dots + gate glyphs instead of the degraded generic
+        /// strip. Tolerates absence (older broker / not-yet-refreshed
+        /// summary) by falling back to `degradedTopoSteps`.
+        private var topoSteps: [ConduitUI.FlowTopoStep] {
+            guard let steps = summary.steps, !steps.isEmpty else { return degradedTopoSteps }
+            return steps.map { step in
+                ConduitUI.FlowTopoStep(
+                    agent: step.agent,
+                    status: Self.topoStatus(step.status),
+                    gateAfter: step.gate_after
+                )
+            }
+        }
+
+        /// Maps the broker's coarse per-step status string (#922
+        /// `stepDisplayStatus`) to `AgentDot.Status`. "awaiting_gate" /
+        /// "awaiting_pick" both read as the amber "needs attention" ring
+        /// (same family as `running` per the README status map); "queued"
+        /// degrades to `nil` (faint, no ring/glow).
+        private static func topoStatus(_ raw: String) -> ConduitUI.AgentDot.Status? {
+            switch raw {
+            case "running", "awaiting_gate", "awaiting_pick": return .running
+            case "done": return .done
+            case "failed": return .error
+            default: return nil
+            }
+        }
+
         /// Degrade `TopoMini` from `step_count`/`current_step` alone (no
         /// per-step agent/gate data in `PipelineSummary`): generic dots,
         /// no gate pips. `current_step` is the step that's DONE/current per
         /// the broker's gate semantics (mirrors
         /// `ConduitPipelineMonitorView.gateCard`'s "Step N+1 ... gated").
-        private var topoSteps: [ConduitUI.FlowTopoStep] {
+        private var degradedTopoSteps: [ConduitUI.FlowTopoStep] {
             let n = max(summary.step_count, 1)
             let doneThrough: Int = {
                 if isComplete { return n }
@@ -204,6 +270,24 @@ extension ConduitUI {
             )
             ConduitUI.FlowCard(
                 summary: .init(id: "4", title: "Ship dark mode toggle", state: "failed", current_step: 1, step_count: 3, created: nil),
+                onOpen: {}, onContinue: {}
+            )
+            // Real per-step topology (broker #922) -- exercises the
+            // non-degraded TopoMini + role/diffstat captions.
+            ConduitUI.FlowCard(
+                summary: {
+                    var s = ConduitUI.PipelineSummary(
+                        id: "5", title: "Add rate limiter to broker", state: "complete",
+                        current_step: 2, step_count: 3, created: nil
+                    )
+                    s.steps = [
+                        .init(agent: "claude", role: "research", status: "done", gate_after: false),
+                        .init(agent: "claude", role: "design", status: "done", gate_after: true),
+                        .init(agent: "codex", role: "build", status: "done", gate_after: false),
+                    ]
+                    s.result = .init(files_changed: 6, insertions: 214, deletions: 38)
+                    return s
+                }(),
                 onOpen: {}, onContinue: {}
             )
         }
