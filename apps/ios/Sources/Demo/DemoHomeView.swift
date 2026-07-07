@@ -44,6 +44,25 @@ extension ConduitUI {
     }
 }
 
+// MARK: - Demo wizard sheet item
+//
+// `.sheet(item:)` instead of a plain `.sheet(isPresented:)` + separate
+// `@State` prefill var: an `isPresented`-style sheet keeps the SAME
+// `FlowWizardView` identity across re-presentations at this tree position,
+// and SwiftUI only honors a custom `init`'s `@State(initialValue:)` seed the
+// FIRST time that identity is created -- a later re-render that passes a
+// DIFFERENT `prefill` does NOT re-seed `@State private var task`, which is
+// how the wizard's Task screen was screenshot-verified showing the
+// placeholder/empty task and "no folder" Where row instead of the tapped
+// template's content (Appetize run 3, iOS only -- Android's direct
+// single-state-write in `DemoHomeScreen.kt` never hit this). Keying off a
+// fresh `Identifiable` per presentation forces a brand-new view identity
+// (and therefore a fresh `@State` seed) every time, matching Android.
+private struct DemoWizardPrefillItem: Identifiable {
+    let id = UUID()
+    let prefill: ConduitUI.FlowWizardPrefill
+}
+
 // MARK: - Phone shell
 
 private struct DemoPhoneShell: View {
@@ -60,8 +79,7 @@ private struct DemoPhoneShell: View {
     @State private var showFlowStart = false
     @State private var flowStartInitialTab: ConduitUI.FlowStartSheet.Tab = .session
     @State private var pendingFlowWizardPrefill: ConduitUI.FlowWizardPrefill?
-    @State private var showFlowWizard = false
-    @State private var flowWizardPrefill: ConduitUI.FlowWizardPrefill = .blank
+    @State private var wizardItem: DemoWizardPrefillItem?
 
     private var selectedSession: ProjectSession? {
         guard let id = selectedSessionID else { return nil }
@@ -153,8 +171,7 @@ private struct DemoPhoneShell: View {
             .sheet(isPresented: $showFlowStart, onDismiss: {
                 if let prefill = pendingFlowWizardPrefill {
                     pendingFlowWizardPrefill = nil
-                    flowWizardPrefill = prefill
-                    showFlowWizard = true
+                    wizardItem = DemoWizardPrefillItem(prefill: prefill)
                 }
             }) {
                 ConduitUI.FlowStartSheet(initialTab: flowStartInitialTab) { prefill in
@@ -172,8 +189,8 @@ private struct DemoPhoneShell: View {
                 .presentationDetents([.medium, .large])
                 .presentationCornerRadius(26)
             }
-            .sheet(isPresented: $showFlowWizard) {
-                ConduitUI.FlowWizardView(prefill: flowWizardPrefill)
+            .sheet(item: $wizardItem) { item in
+                ConduitUI.FlowWizardView(prefill: item.prefill)
                     .environment(store)
                     .presentationDetents([.large])
             }
@@ -212,8 +229,7 @@ private struct DemoTabletShell: View {
     @State private var showFlowStart = false
     @State private var flowStartInitialTab: ConduitUI.FlowStartSheet.Tab = .flow
     @State private var pendingFlowWizardPrefill: ConduitUI.FlowWizardPrefill?
-    @State private var showFlowWizard = false
-    @State private var flowWizardPrefill: ConduitUI.FlowWizardPrefill = .blank
+    @State private var wizardItem: DemoWizardPrefillItem?
 
     var body: some View {
         NavigationSplitView {
@@ -300,8 +316,7 @@ private struct DemoTabletShell: View {
         .sheet(isPresented: $showFlowStart, onDismiss: {
             if let prefill = pendingFlowWizardPrefill {
                 pendingFlowWizardPrefill = nil
-                flowWizardPrefill = prefill
-                showFlowWizard = true
+                wizardItem = DemoWizardPrefillItem(prefill: prefill)
             }
         }) {
             ConduitUI.FlowStartSheet(initialTab: flowStartInitialTab) { prefill in
@@ -316,8 +331,8 @@ private struct DemoTabletShell: View {
             .presentationDetents([.medium, .large])
             .presentationCornerRadius(26)
         }
-        .sheet(isPresented: $showFlowWizard) {
-            ConduitUI.FlowWizardView(prefill: flowWizardPrefill)
+        .sheet(item: $wizardItem) { item in
+            ConduitUI.FlowWizardView(prefill: item.prefill)
                 .environment(store)
                 .presentationDetents([.large])
         }

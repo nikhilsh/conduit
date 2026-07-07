@@ -124,9 +124,19 @@ extension ConduitUI {
             }
             .appearanceColorScheme()
             .onAppear {
-                if cwd.isEmpty, let activeID = store.selectedSessionID,
-                   let status = store.statusBySession[activeID], let sessionCwd = status.cwd, !sessionCwd.isEmpty {
-                    cwd = sessionCwd
+                if cwd.isEmpty {
+                    if store.isDemoMode, let demoCwd = DemoData.sessions.first?.cwd, !demoCwd.isEmpty {
+                        // No `store.selectedSessionID` in demo (the wizard is
+                        // opened straight from Home, not from a session) --
+                        // fall back to the first demo session's cwd so the
+                        // "Where" row shows real content instead of
+                        // "no folder" (Android mirrors this via
+                        // `sessions.firstOrNull()?.cwd`).
+                        cwd = demoCwd
+                    } else if let activeID = store.selectedSessionID,
+                       let status = store.statusBySession[activeID], let sessionCwd = status.cwd, !sessionCwd.isEmpty {
+                        cwd = sessionCwd
+                    }
                 }
                 Telemetry.breadcrumb("flow_wizard", "opened", data: ["step": "\(stepIndex)"])
             }

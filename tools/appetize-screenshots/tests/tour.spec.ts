@@ -134,8 +134,12 @@ for (const { platform, publicKey } of TARGETS) {
       // PipelineMonitorScreen.kt).
       // matchIndex: Android's element dump reports two "Home" matches at this
       // point (the toolbar button plus an occluded element under the overlay);
-      // index 0 is the visible toolbar button, first in the tree.
-      await session.tap({ element: { attributes: { text: 'Home' } }, matchIndex: 0 });
+      // index 0 is the visible toolbar button, first in the tree. Per the
+      // @appetize/playwright types (session.tap(args, options) --
+      // PlayActionOptions.matchIndex), matchIndex is a SECOND-argument
+      // option, not a sibling of `element` in the first arg -- the same
+      // shape already used for the "Cancel" tap above.
+      await session.tap({ element: { attributes: { text: 'Home' } } }, { matchIndex: 0 });
       await session.waitForTimeout(3_000);
 
       // 3. A session's chat — agent replies + tool cards.
