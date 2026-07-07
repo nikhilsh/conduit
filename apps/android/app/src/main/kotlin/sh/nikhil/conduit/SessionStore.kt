@@ -556,6 +556,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
         updateLifecycle { map ->
             map + DemoData.sessions.associate { it.id to SessionLifecycle.Live }
         }
+        // Demo mode never fetches /api/capabilities (no network), so this
+        // stays false by default and PipelineMonitorScreen would render the
+        // generic gate card instead of the rich handoff-preview markdown
+        // block the demo-flow-1 fixture carries. Flip it on so the demo
+        // shows the real Flow gate-review UI, matching what a broker that
+        // supports it renders.
+        _pipelineGatePreview.value = true
         Telemetry.breadcrumb("demo", "activated", mapOf("sessions" to DemoData.sessions.size.toString()))
     }
 
@@ -568,6 +575,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _statusBySession.value = _statusBySession.value - demoIds
         _conversationLog.value = _conversationLog.value - demoIds
         updateLifecycle { map -> map - demoIds }
+        // Reset the demo-only capability override (see activateDemo()) --
+        // the next real /api/capabilities fetch re-derives the true value.
+        _pipelineGatePreview.value = false
         Telemetry.breadcrumb("demo", "deactivated")
     }
 
@@ -5417,6 +5427,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * though the broker kept it running.
      */
     suspend fun refreshPipelines(): List<sh.nikhil.conduit.ui.PipelineSummary> = withContext(Dispatchers.IO) {
+        if (_isDemoMode.value) {
+            return@withContext DemoData.pipelines
+        }
         val ep = _endpoint.value
         val raw = getJsonOrNull(ep, "/api/pipelines")
         if (raw == null) {

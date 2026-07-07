@@ -946,6 +946,13 @@ final class SessionStore {
             statusBySession[session.id] = DemoData.statusBySession[session.id]
             sessionLifecycle[session.id] = .live
         }
+        // Demo mode never fetches `/api/capabilities` (no network), so this
+        // stays false by default and the Monitor would render the generic
+        // gate card instead of the rich handoff-preview markdown block the
+        // `demo-flow-1` fixture carries. Flip it on so the demo shows the
+        // real Flow gate-review UI, matching what a broker that supports it
+        // renders.
+        pipelineGatePreview = true
         Telemetry.breadcrumb("demo", "activated", data: ["sessions": "\(DemoData.sessions.count)"])
     }
 
@@ -959,6 +966,9 @@ final class SessionStore {
             statusBySession.removeValue(forKey: id)
             sessionLifecycle.removeValue(forKey: id)
         }
+        // Reset the demo-only capability override (see activateDemo()) --
+        // the next real `/api/capabilities` fetch re-derives the true value.
+        pipelineGatePreview = false
         Telemetry.breadcrumb("demo", "deactivated")
     }
 
@@ -2841,6 +2851,9 @@ final class SessionStore {
     /// became unreachable the moment its creation sheet was dismissed even
     /// though the broker kept it running.
     func refreshPipelines() async -> [ConduitUI.PipelineSummary] {
+        if isDemoMode {
+            return DemoData.pipelines
+        }
         guard let data = await getJSON(endpoint: endpoint, path: "/api/pipelines") else {
             Telemetry.breadcrumb("pipeline", "list fetch failed", data: ["host": endpoint.displayHost])
             return []

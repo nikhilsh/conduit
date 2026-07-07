@@ -144,6 +144,150 @@ enum DemoData {
         "demo-session-2": session2Conversation,
     ]
 
+    // MARK: - Pipelines (Flow demo fixtures)
+    //
+    // Feeds the demo home FLOWS section (`ConduitUI.FlowCard`, real
+    // component) and the Monitor's static-fixture seam
+    // (`ConduitUI.PipelineMonitorView.demoStatus`). No network -- these are
+    // hand-built `PipelineSummary`/`PipelineStatus` values matching the
+    // broker's real shapes (see `ConduitPipelineListView.swift` /
+    // `ConduitPipelineMonitorView.swift`).
+
+    static let pipelines: [ConduitUI.PipelineSummary] = [
+        ConduitUI.PipelineSummary(
+            id: "demo-flow-1",
+            title: "Add rate limiter to broker",
+            state: "awaiting_gate",
+            current_step: 1,
+            step_count: 3,
+            created: "2026-06-25T10:00:00Z",
+            steps: [
+                ConduitUI.PipelineSummaryStep(agent: "claude", role: "research", status: "done", gate_after: false),
+                ConduitUI.PipelineSummaryStep(agent: "claude", role: "design", status: "done", gate_after: true),
+                ConduitUI.PipelineSummaryStep(agent: "codex", role: "build", status: "queued", gate_after: false),
+            ],
+            result: nil
+        ),
+        ConduitUI.PipelineSummary(
+            id: "demo-flow-2",
+            title: "Migrate settings to KV store",
+            state: "running",
+            current_step: 1,
+            step_count: 3,
+            created: "2026-06-25T09:30:00Z",
+            steps: [
+                ConduitUI.PipelineSummaryStep(agent: "claude", role: "research", status: "done", gate_after: false),
+                ConduitUI.PipelineSummaryStep(agent: "codex", role: "build", status: "running", gate_after: false),
+                ConduitUI.PipelineSummaryStep(agent: "codex", role: "verify", status: "queued", gate_after: false),
+            ],
+            result: nil
+        ),
+    ]
+
+    /// Gate handoff excerpt shown in the Monitor's "Handoff preview" block
+    /// for the gated demo fixture (`demo-flow-1`).
+    private static let flow1GateHandoff = """
+    ## Proposed design
+
+    Token-bucket limiter keyed by bearer token:
+    - 60 req/min steady, burst 20
+    - 429 with Retry-After on exhaustion
+    - Metrics counter per client
+
+    Mounted as HTTP middleware ahead of /api/session routes.
+    """
+
+    /// Full per-step detail for the Monitor, keyed by `pipelines` id. Mirrors
+    /// `GET /api/pipeline/{id}` (`ConduitUI.PipelineStatus`).
+    static func pipelineStatus(id: String) -> ConduitUI.PipelineStatus? {
+        switch id {
+        case "demo-flow-1":
+            return ConduitUI.PipelineStatus(
+                id: "demo-flow-1",
+                title: "Add rate limiter to broker",
+                task: "Add rate limiting middleware to the broker's HTTP API to prevent abuse.",
+                cwd: "/home/user/projects/broker",
+                base: "main",
+                state: "awaiting_gate",
+                current_step: 1,
+                steps: [
+                    ConduitUI.PipelineStepStatus(
+                        index: 0, agent_type: "claude", role: "research",
+                        prompt_template: "", input_from_prev: "", gate_after: false,
+                        session_id: "demo-flow-1-step-0", phase: "exited(0)",
+                        started: "2026-06-25T10:00:00Z", ended: "2026-06-25T10:04:12Z",
+                        retries: nil, prev_session_ids: nil, fanout: nil, kind: nil,
+                        spliced_from: nil, loop: nil,
+                        output: "Reviewed the broker's HTTP middleware chain and existing rate-limit precedent in sibling services. Recommending a token-bucket limiter keyed by client token, mounted ahead of the session routes."
+                    ),
+                    ConduitUI.PipelineStepStatus(
+                        index: 1, agent_type: "claude", role: "design",
+                        prompt_template: "", input_from_prev: "", gate_after: true,
+                        session_id: "demo-flow-1-step-1", phase: "exited(0)",
+                        started: "2026-06-25T10:04:12Z", ended: "2026-06-25T10:09:47Z",
+                        retries: nil, prev_session_ids: nil, fanout: nil, kind: nil,
+                        spliced_from: nil, loop: nil,
+                        output: flow1GateHandoff
+                    ),
+                    ConduitUI.PipelineStepStatus(
+                        index: 2, agent_type: "codex", role: "build",
+                        prompt_template: "", input_from_prev: "", gate_after: false,
+                        session_id: nil, phase: nil,
+                        started: nil, ended: nil,
+                        retries: nil, prev_session_ids: nil, fanout: nil, kind: nil,
+                        spliced_from: nil, loop: nil,
+                        output: nil
+                    ),
+                ],
+                gate: ConduitUI.PipelineGate(step: 1, prev: flow1GateHandoff, output: flow1GateHandoff),
+                result: nil
+            )
+        case "demo-flow-2":
+            return ConduitUI.PipelineStatus(
+                id: "demo-flow-2",
+                title: "Migrate settings to KV store",
+                task: "Move the app's local settings storage to a KV store backend for durability across reinstalls.",
+                cwd: "/home/user/projects/api",
+                base: "main",
+                state: "running",
+                current_step: 1,
+                steps: [
+                    ConduitUI.PipelineStepStatus(
+                        index: 0, agent_type: "claude", role: "research",
+                        prompt_template: "", input_from_prev: "", gate_after: false,
+                        session_id: "demo-flow-2-step-0", phase: "exited(0)",
+                        started: "2026-06-25T09:30:00Z", ended: "2026-06-25T09:34:20Z",
+                        retries: nil, prev_session_ids: nil, fanout: nil, kind: nil,
+                        spliced_from: nil, loop: nil,
+                        output: "Audited current settings storage across Settings screens; found 12 keys touching 3 stores. KV store candidate: a boltdb-backed key namespace under ~/.conduit/kv."
+                    ),
+                    ConduitUI.PipelineStepStatus(
+                        index: 1, agent_type: "codex", role: "build",
+                        prompt_template: "", input_from_prev: "", gate_after: false,
+                        session_id: "demo-flow-2-step-1", phase: "running",
+                        started: "2026-06-25T09:34:20Z", ended: nil,
+                        retries: nil, prev_session_ids: nil, fanout: nil, kind: nil,
+                        spliced_from: nil, loop: nil,
+                        output: nil
+                    ),
+                    ConduitUI.PipelineStepStatus(
+                        index: 2, agent_type: "codex", role: "verify",
+                        prompt_template: "", input_from_prev: "", gate_after: false,
+                        session_id: nil, phase: nil,
+                        started: nil, ended: nil,
+                        retries: nil, prev_session_ids: nil, fanout: nil, kind: nil,
+                        spliced_from: nil, loop: nil,
+                        output: nil
+                    ),
+                ],
+                gate: nil,
+                result: nil
+            )
+        default:
+            return nil
+        }
+    }
+
     // MARK: Session 1: Build a to-do app
 
     private static let session1Conversation: [ConversationItem] = [

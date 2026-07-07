@@ -382,6 +382,16 @@ fun PipelineMonitorScreen(
     pipelineTitle: String = "",
     onOpenSession: (String) -> Unit = {},
     onBack: () -> Unit = {},
+    /**
+     * Static demo fixture: when non-null, the screen renders this fixed
+     * [Pipeline] and skips the poll loop + all network actions entirely --
+     * mirrors iOS `PipelineMonitorView.demoStatus` / ChatPage's
+     * readOnlyItems seam. "Approve · continue" and "Cancel" become inert
+     * no-ops; "Open session" is naturally disabled since demo steps carry
+     * no live session for the queued step. Fed by
+     * `DemoData.pipelineStatus(id:)`.
+     */
+    demoStatus: Pipeline? = null,
 ) {
     val neon = LocalNeonTheme.current
     val endpoint by store.endpoint.collectAsState()
@@ -391,7 +401,7 @@ fun PipelineMonitorScreen(
     val pipelineResultCapability by store.pipelineResult.collectAsState()
     val scope = rememberCoroutineScope()
 
-    var pipeline by remember { mutableStateOf<Pipeline?>(null) }
+    var pipeline by remember { mutableStateOf(demoStatus) }
     var pollError by remember { mutableStateOf<String?>(null) }
     var showCancelConfirm by remember { mutableStateOf(false) }
     var isContinuing by remember { mutableStateOf(false) }
@@ -517,8 +527,14 @@ fun PipelineMonitorScreen(
         }
     }
 
-    // Polling loop: every 5 seconds until terminal state
+    // Polling loop: every 5 seconds until terminal state (skipped entirely
+    // in demo mode -- `pipeline` is already seeded from `demoStatus` above,
+    // no network).
     LaunchedEffect(pipelineId) {
+        if (demoStatus != null) {
+            Telemetry.breadcrumb("pipeline", "monitor_demo_static", mapOf("pipeline_id" to pipelineId))
+            return@LaunchedEffect
+        }
         while (true) {
             val result = withContext(Dispatchers.IO) {
                 getEndpoint("/api/pipeline/$pipelineId")
@@ -568,6 +584,19 @@ fun PipelineMonitorScreen(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                },
+                // Demo-only: the real screen has no back affordance here
+                // (the caller wires system/hardware back via BackHandler).
+                // A text-labeled "Home" nav icon gives the Appetize tour a
+                // tappable, text-matched way back after shooting the
+                // gated-flow monitor -- mirrors the equally demo-only
+                // "Home" toolbar button added to iOS's PipelineMonitorView.
+                navigationIcon = {
+                    if (demoStatus != null) {
+                        TextButton(onClick = onBack) {
+                            Text("Home", color = neon.accent, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
                 },
                 actions = {
                     TextButton(onClick = { showCancelConfirm = true }) {
@@ -1192,6 +1221,14 @@ fun PipelineMonitorScreen(
                                         .clip(RoundedCornerShape(10.dp))
                                         .background(if (!isContinuing) neon.yellow else neon.surface2)
                                         .clickable(enabled = !isContinuing) {
+                                            if (demoStatus != null) {
+                                                Telemetry.breadcrumb(
+                                                    "pipeline",
+                                                    "demo_gate_continue_no_op",
+                                                    mapOf("pipeline_id" to pipelineId),
+                                                )
+                                                return@clickable
+                                            }
                                             val edited = isEditingHandoff &&
                                                 handoffDraft != (gate?.prev ?: "")
                                             isContinuing = true
@@ -1483,6 +1520,15 @@ fun PipelineMonitorScreen(
                 TextButton(
                     onClick = {
                         showCancelConfirm = false
+                        if (demoStatus != null) {
+                            Telemetry.breadcrumb(
+                                "pipeline",
+                                "demo_cancel_no_op",
+                                mapOf("pipeline_id" to pipelineId),
+                            )
+                            onBack()
+                            return@TextButton
+                        }
                         isCancelling = true
                         Telemetry.breadcrumb(
                             "pipeline",

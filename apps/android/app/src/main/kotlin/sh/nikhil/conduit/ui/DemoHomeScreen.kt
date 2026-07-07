@@ -2,6 +2,7 @@ package sh.nikhil.conduit.ui
 
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -55,6 +56,7 @@ import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.demo.DemoData
+import sh.nikhil.conduit.ui.components.FlowCard
 import uniffi.conduit_core.ProjectSession
 
 // ---------------------------------------------------------------------------
@@ -104,10 +106,23 @@ private fun DemoPhoneLayout(store: SessionStore, onExitDemo: () -> Unit) {
     val neon = LocalNeonTheme.current
     val appearance = LocalAppearanceStore.current
     var selectedSession by remember { mutableStateOf<ProjectSession?>(null) }
+    var selectedFlowId by remember { mutableStateOf<String?>(null) }
     var showingAppearance by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize().background(neon.appBg)) {
-        if (selectedSession == null) {
+        val flowId = selectedFlowId
+        val flowStatus = flowId?.let { DemoData.pipelineStatus(it) }
+        if (flowId != null && flowStatus != null) {
+            BackHandler(enabled = true) { selectedFlowId = null }
+            PipelineMonitorScreen(
+                store = store,
+                pipelineId = flowId,
+                pipelineTitle = flowStatus.title,
+                onOpenSession = {},
+                onBack = { selectedFlowId = null },
+                demoStatus = flowStatus,
+            )
+        } else if (selectedSession == null) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -126,6 +141,7 @@ private fun DemoPhoneLayout(store: SessionStore, onExitDemo: () -> Unit) {
                     },
                 )
                 DemoBanner(neon = neon)
+                DemoFlowsSection(neon = neon, onOpenFlow = { selectedFlowId = it })
                 DemoSessionListContent(
                     neon = neon,
                     onSelect = { selectedSession = it },
@@ -171,6 +187,7 @@ private fun DemoTabletLayout(store: SessionStore, onExitDemo: () -> Unit) {
     val neon = LocalNeonTheme.current
     val appearance = LocalAppearanceStore.current
     var selectedSession by remember { mutableStateOf(DemoData.sessions.firstOrNull()) }
+    var selectedFlowId by remember { mutableStateOf<String?>(null) }
     var showingAppearance by remember { mutableStateOf(false) }
 
     Row(modifier = Modifier.fillMaxSize().background(neon.appBg).statusBarsPadding()) {
@@ -226,9 +243,10 @@ private fun DemoTabletLayout(store: SessionStore, onExitDemo: () -> Unit) {
                 }
             }
             DemoBanner(neon = neon, compact = true)
+            DemoFlowsSection(neon = neon, onOpenFlow = { selectedFlowId = it })
             DemoSessionListContent(
                 neon = neon,
-                onSelect = { selectedSession = it },
+                onSelect = { selectedSession = it; selectedFlowId = null },
                 selectedId = selectedSession?.id,
             )
         }
@@ -241,10 +259,22 @@ private fun DemoTabletLayout(store: SessionStore, onExitDemo: () -> Unit) {
                 .background(neon.border),
         )
 
-        // Detail panel — Phase-2: tab switcher (Chat / Terminal / Browser).
+        // Detail panel — Phase-2: tab switcher (Chat / Terminal / Browser),
+        // or the flow Monitor when a FLOWS card was tapped.
         Column(modifier = Modifier.weight(1f).fillMaxSize()) {
+            val flowId = selectedFlowId
+            val flowStatus = flowId?.let { DemoData.pipelineStatus(it) }
             val session = selectedSession
-            if (session != null) {
+            if (flowId != null && flowStatus != null) {
+                PipelineMonitorScreen(
+                    store = store,
+                    pipelineId = flowId,
+                    pipelineTitle = flowStatus.title,
+                    onOpenSession = {},
+                    onBack = { selectedFlowId = null },
+                    demoStatus = flowStatus,
+                )
+            } else if (session != null) {
                 DemoProjectScreen(store = store, session = session)
             } else {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -386,6 +416,54 @@ private fun DemoBanner(neon: NeonTheme, compact: Boolean = false) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Flows section (demo)
+//
+// Routes through the REAL FlowCard component + the real home's "FLOWS"
+// section-header style (HomeScreen.kt) -- same seam pattern as the demo
+// ChatPage (readOnlyItems): compose from the shared library, never a
+// hand-rolled demo-only card. Placed above the demo session list on both
+// phone and tablet layouts.
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun DemoFlowsSection(neon: NeonTheme, onOpenFlow: (String) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            "FLOWS",
+            fontFamily = neon.mono,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 12.sp,
+            letterSpacing = 2.sp,
+            color = neon.accent,
+            maxLines = 1,
+        )
+        DemoData.pipelines.forEach { flow ->
+            FlowCard(
+                summary = flow,
+                onOpen = {
+                    Telemetry.breadcrumb(
+                        "demo",
+                        "flow_card_opened",
+                        mapOf("pipeline_id" to flow.id, "state" to flow.state),
+                    )
+                    onOpenFlow(flow.id)
+                },
+                onContinue = {
+                    // No network in demo mode -- the monitor's own
+                    // static-fixture seam gates the same action.
+                    Telemetry.breadcrumb("demo", "flow_card_continue_no_op", mapOf("pipeline_id" to flow.id))
+                },
+            )
+        }
     }
 }
 

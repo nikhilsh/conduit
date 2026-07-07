@@ -1,5 +1,10 @@
 package sh.nikhil.conduit.demo
 
+import sh.nikhil.conduit.ui.Pipeline
+import sh.nikhil.conduit.ui.PipelineGate
+import sh.nikhil.conduit.ui.PipelineStep
+import sh.nikhil.conduit.ui.PipelineSummary
+import sh.nikhil.conduit.ui.PipelineSummaryStep
 import uniffi.conduit_core.ConversationItem
 import uniffi.conduit_core.PlanStep
 import uniffi.conduit_core.ProjectSession
@@ -142,6 +147,127 @@ object DemoData {
             contextWindowTokens = 200_000UL,
         ),
     )
+
+    // -------------------------------------------------------------------------
+    // Pipelines (Flow demo fixtures)
+    //
+    // Feeds the demo home FLOWS section (real FlowCard component) and the
+    // Monitor's static-fixture seam (PipelineMonitorScreen's `demoStatus`
+    // param). No network -- hand-built to mirror the broker's real shapes
+    // (see PipelineListScreen.kt / PipelineMonitorScreen.kt). Mirrors iOS
+    // DemoData.pipelines / DemoData.pipelineStatus(id:) value-for-value.
+    // -------------------------------------------------------------------------
+
+    val pipelines: List<PipelineSummary> = listOf(
+        PipelineSummary(
+            id = "demo-flow-1",
+            title = "Add rate limiter to broker",
+            state = "awaiting_gate",
+            currentStep = 1,
+            stepCount = 3,
+            created = "2026-06-25T10:00:00Z",
+            steps = listOf(
+                PipelineSummaryStep(agent = "claude", role = "research", status = "done", gateAfter = false),
+                PipelineSummaryStep(agent = "claude", role = "design", status = "done", gateAfter = true),
+                PipelineSummaryStep(agent = "codex", role = "build", status = "queued", gateAfter = false),
+            ),
+            result = null,
+        ),
+        PipelineSummary(
+            id = "demo-flow-2",
+            title = "Migrate settings to KV store",
+            state = "running",
+            currentStep = 1,
+            stepCount = 3,
+            created = "2026-06-25T09:30:00Z",
+            steps = listOf(
+                PipelineSummaryStep(agent = "claude", role = "research", status = "done", gateAfter = false),
+                PipelineSummaryStep(agent = "codex", role = "build", status = "running", gateAfter = false),
+                PipelineSummaryStep(agent = "codex", role = "verify", status = "queued", gateAfter = false),
+            ),
+            result = null,
+        ),
+    )
+
+    /** Gate handoff excerpt shown in the Monitor's "Handoff preview" block for the gated demo fixture. */
+    private val flow1GateHandoff = """
+        ## Proposed design
+
+        Token-bucket limiter keyed by bearer token:
+        - 60 req/min steady, burst 20
+        - 429 with Retry-After on exhaustion
+        - Metrics counter per client
+
+        Mounted as HTTP middleware ahead of /api/session routes.
+    """.trimIndent()
+
+    /** Full per-step detail for the Monitor, keyed by [pipelines] id. Mirrors `GET /api/pipeline/{id}`. */
+    fun pipelineStatus(id: String): Pipeline? = when (id) {
+        "demo-flow-1" -> Pipeline(
+            id = "demo-flow-1",
+            title = "Add rate limiter to broker",
+            task = "Add rate limiting middleware to the broker's HTTP API to prevent abuse.",
+            cwd = "/home/user/projects/broker",
+            base = "main",
+            state = "awaiting_gate",
+            currentStep = 1,
+            steps = listOf(
+                PipelineStep(
+                    index = 0, agentType = "claude", role = "research",
+                    promptTemplate = "", inputFromPrev = "", gateAfter = false,
+                    sessionId = "demo-flow-1-step-0", phase = "exited(0)",
+                    started = "2026-06-25T10:00:00Z", ended = "2026-06-25T10:04:12Z",
+                    output = "Reviewed the broker's HTTP middleware chain and existing rate-limit precedent in sibling services. Recommending a token-bucket limiter keyed by client token, mounted ahead of the session routes.",
+                ),
+                PipelineStep(
+                    index = 1, agentType = "claude", role = "design",
+                    promptTemplate = "", inputFromPrev = "", gateAfter = true,
+                    sessionId = "demo-flow-1-step-1", phase = "exited(0)",
+                    started = "2026-06-25T10:04:12Z", ended = "2026-06-25T10:09:47Z",
+                    output = flow1GateHandoff,
+                ),
+                PipelineStep(
+                    index = 2, agentType = "codex", role = "build",
+                    promptTemplate = "", inputFromPrev = "", gateAfter = false,
+                    sessionId = null, phase = null,
+                ),
+            ),
+            gate = PipelineGate(step = 1, prev = flow1GateHandoff, output = flow1GateHandoff),
+            result = null,
+        )
+        "demo-flow-2" -> Pipeline(
+            id = "demo-flow-2",
+            title = "Migrate settings to KV store",
+            task = "Move the app's local settings storage to a KV store backend for durability across reinstalls.",
+            cwd = "/home/user/projects/api",
+            base = "main",
+            state = "running",
+            currentStep = 1,
+            steps = listOf(
+                PipelineStep(
+                    index = 0, agentType = "claude", role = "research",
+                    promptTemplate = "", inputFromPrev = "", gateAfter = false,
+                    sessionId = "demo-flow-2-step-0", phase = "exited(0)",
+                    started = "2026-06-25T09:30:00Z", ended = "2026-06-25T09:34:20Z",
+                    output = "Audited current settings storage across Settings screens; found 12 keys touching 3 stores. KV store candidate: a boltdb-backed key namespace under ~/.conduit/kv.",
+                ),
+                PipelineStep(
+                    index = 1, agentType = "codex", role = "build",
+                    promptTemplate = "", inputFromPrev = "", gateAfter = false,
+                    sessionId = "demo-flow-2-step-1", phase = "running",
+                    started = "2026-06-25T09:34:20Z", ended = null,
+                ),
+                PipelineStep(
+                    index = 2, agentType = "codex", role = "verify",
+                    promptTemplate = "", inputFromPrev = "", gateAfter = false,
+                    sessionId = null, phase = null,
+                ),
+            ),
+            gate = null,
+            result = null,
+        )
+        else -> null
+    }
 
     // -------------------------------------------------------------------------
     // Session 1: Build a to-do app
