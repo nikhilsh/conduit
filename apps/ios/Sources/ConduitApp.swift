@@ -176,7 +176,12 @@ struct ConduitApp: App {
                         // notDetermined. requestAuthorizationIfNeeded() is
                         // guarded — it no-ops if auth != .notDetermined, so
                         // this cannot re-show a prompt the user already acted on.
+                        // Never prompt in demo mode: DemoData seeds fake
+                        // sessions, so both session-count triggers would fire
+                        // and a system permission alert would cover the demo
+                        // UI (blocks the Appetize tour + reviewer experience).
                         if newPhase == .active,
+                           !store.isDemoMode,
                            !store.sessions.isEmpty,
                            PushNotificationManager.shared.settingsState.auth == .notDetermined {
                             Telemetry.breadcrumb("push", "active with existing sessions — requesting authorization")
@@ -193,7 +198,7 @@ struct ConduitApp: App {
                     // demonstrated intent (they started a session) and a push
                     // from a future session would be useful to them immediately.
                     .onChange(of: store.sessions.count) { old, new in
-                        if old == 0, new > 0 {
+                        if old == 0, new > 0, !store.isDemoMode {
                             Telemetry.breadcrumb("push", "first session exists — requesting authorization")
                             PushNotificationManager.shared.requestAuthorizationIfNeeded()
                         }
