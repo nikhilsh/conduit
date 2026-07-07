@@ -23,7 +23,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CloudOff
@@ -1076,19 +1075,11 @@ fun HomeScreen(
                         modifier = Modifier.size(22.dp),
                     )
                 }
+                // "New session" / "New pipeline" removed here -- the plain tap
+                // (onNewSession) now opens the Start sheet (Session/Flow),
+                // which covers both. "Fan out" remains a standalone quick
+                // action.
                 DropdownMenu(expanded = plusMenuExpanded, onDismissRequest = { plusMenuExpanded = false }) {
-                    DropdownMenuItem(
-                        text = { Text("New session") },
-                        leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
-                        onClick = { plusMenuExpanded = false; onNewSession() },
-                    )
-                    if (pipelinesEnabled) {
-                        DropdownMenuItem(
-                            text = { Text("New pipeline") },
-                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.CallSplit, contentDescription = null) },
-                            onClick = { plusMenuExpanded = false; onNewPipeline() },
-                        )
-                    }
                     DropdownMenuItem(
                         text = { Text("Fan out") },
                         leadingIcon = { Icon(Icons.Default.GridView, contentDescription = null) },

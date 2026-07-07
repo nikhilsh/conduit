@@ -149,7 +149,7 @@ fun CommandPaletteScreen(
             add(PaletteActionSpec("new", "New session…", "⌘N"))
             add(PaletteActionSpec("pair", "Pair a box", null))
             add(PaletteActionSpec("fanout", "Fan out a task", null))
-            add(PaletteActionSpec("pipeline", "New pipeline", null))
+            add(PaletteActionSpec("pipeline", "New flow", null))
             if (pipelinesEnabled) add(PaletteActionSpec("pipelines", "Pipelines", null))
         }.filter { q.isEmpty() || it.title.lowercase().contains(q) }
     }

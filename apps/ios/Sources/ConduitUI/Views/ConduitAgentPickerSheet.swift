@@ -44,6 +44,19 @@ extension ConduitUI {
         /// dismisses without chaining further.
         var onOpenPipelineBuilder: () -> Void = {}
 
+        /// True when this sheet is hosted as a TAB inside another sheet's
+        /// own chrome (`ConduitUI.FlowStartSheet`'s Session tab) rather than
+        /// presented on its own -- suppresses this view's own navigation
+        /// bar (title + Cancel button) so the host's single "Start" + X
+        /// header is the only header shown. `dismiss()` is unaffected: it
+        /// always resolves to the nearest enclosing `.sheet`/`.fullScreenCover`
+        /// presentation, not this NavigationStack, so every dismiss call
+        /// below (Cancel, DirectoryPicker's onCreate, the pipeline-row
+        /// hand-off) still tears down the host sheet correctly when
+        /// embedded. Default false so every existing call site (the "+"
+        /// button, deep-link post-pair, tablet rail) is unaffected.
+        var embedded: Bool = false
+
         /// Agent the user tapped; pushes the directory picker. nil while
         /// on the agent-selection screen.
         @State private var pickedAgent: String?
@@ -184,6 +197,12 @@ extension ConduitUI {
                 }
                 .navigationTitle("New session")
                 .navigationBarTitleDisplayMode(.inline)
+                // Embedded (FlowStartSheet's Session tab): the host already
+                // shows a "Start" + X header -- hide this screen's own bar
+                // entirely rather than show a second title/Cancel row.
+                // Only applies to THIS root page; the pushed DirectoryPicker
+                // destination keeps its own bar (back button) regardless.
+                .toolbar(embedded ? .hidden : .visible, for: .navigationBar)
                 .safeAreaInset(edge: .bottom) {
                     // Cards mode commits with a tinted Continue bar (§3); rows
                     // mode keeps tap-to-drill, so no bottom bar there.
@@ -618,6 +637,20 @@ extension ConduitUI {
         /// falls back to the sheet's own initialPrompt, e.g. a voice transcript).
         let onCreate: (String?, String?, String?, String?, Bool?, String?) -> Void
 
+        /// Flow wizard's "Where" step (PR B follow-up): hides the agent
+        /// model/effort/mode sections + harness chip + launch line (none
+        /// apply outside a single-agent new-session context) and shows
+        /// ONLY the Recent/browse directory picker -- optionally with an
+        /// inline `branch` field, since this picker has no branch control
+        /// of its own. `onCreate` is still called with the full tuple
+        /// (model/effort/mode/fastMode always nil in this mode); callers
+        /// that only care about the path read just the first value.
+        var directoryOnly: Bool = false
+        /// Inline branch field shown only when `directoryOnly` is true AND
+        /// this is non-nil (the flow wizard's "Where" picker supplies it;
+        /// every other call site passes nil and sees no branch UI at all).
+        var branch: Binding<String>? = nil
+
         @Environment(SessionStore.self) private var store
         @Environment(FeatureFlags.self) private var flags
         @Environment(\.neonTheme) private var neon
@@ -660,11 +693,15 @@ extension ConduitUI {
             agentKind: String,
             agentTint: Color? = nil,
             initialPrompt: String? = nil,
+            directoryOnly: Bool = false,
+            branch: Binding<String>? = nil,
             onCreate: @escaping (String?, String?, String?, String?, Bool?, String?) -> Void
         ) {
             self.agentKind = agentKind
             self.agentTint = agentTint
             self.initialPrompt = initialPrompt
+            self.directoryOnly = directoryOnly
+            self.branch = branch
             self.onCreate = onCreate
             self._effort = State(initialValue: Self.defaultEffort(forAssistant: agentKind))
         }
@@ -745,25 +782,33 @@ extension ConduitUI {
                 GlassAppBackground()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        modelSection
-                        // Tablet (§6): effort + mode sit side by side to use
-                        // the width; phone stacks them. A model with no
-                        // effort control (haiku) drops the effort section.
-                        if effortOptions.isEmpty {
-                            modeSection
-                        } else if horizontalSizeClass == .regular {
-                            HStack(alignment: .top, spacing: 14) {
-                                effortSection.frame(maxWidth: .infinity, alignment: .leading)
-                                modeSection.frame(maxWidth: .infinity, alignment: .leading)
+                        // directoryOnly (flow wizard "Where" step): none of
+                        // the per-agent model/effort/mode config applies --
+                        // the wizard's own step editor owns that per-step.
+                        if !directoryOnly {
+                            modelSection
+                            // Tablet (§6): effort + mode sit side by side to use
+                            // the width; phone stacks them. A model with no
+                            // effort control (haiku) drops the effort section.
+                            if effortOptions.isEmpty {
+                                modeSection
+                            } else if horizontalSizeClass == .regular {
+                                HStack(alignment: .top, spacing: 14) {
+                                    effortSection.frame(maxWidth: .infinity, alignment: .leading)
+                                    modeSection.frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            } else {
+                                effortSection
+                                modeSection
                             }
-                        } else {
-                            effortSection
-                            modeSection
                         }
                         if !store.recentDirectories.isEmpty {
                             recentSection
                         }
                         browseSection
+                        if directoryOnly, let branch {
+                            branchSection(branch)
+                        }
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 18)
@@ -1097,12 +1142,31 @@ extension ConduitUI {
             }
         }
 
+        /// Inline branch field for `directoryOnly` mode (this picker has no
+        /// branch control of its own -- flow wizard PR B follow-up).
+        private func branchSection(_ branch: Binding<String>) -> some View {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionLabel("Branch")
+                TextField("main", text: branch)
+                    .font(neon.mono(13))
+                    .foregroundStyle(neon.text)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
+                    .tint(neon.accent)
+            }
+        }
+
         private var bottomBar: some View {
             VStack(spacing: 10) {
-                if showHarnessChip {
+                // Neither applies in directoryOnly mode -- both are
+                // new-session-launch affordances (harness bootstrap prompt /
+                // "will run <agent>" preview), not directory-pick concerns.
+                if showHarnessChip && !directoryOnly {
                     harnessChip
                 }
-                if flags.newSessionLaunchLine {
+                if flags.newSessionLaunchLine && !directoryOnly {
                     launchLine
                 }
                 Button {

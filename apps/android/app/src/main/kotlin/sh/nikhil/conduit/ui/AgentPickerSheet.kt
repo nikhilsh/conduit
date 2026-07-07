@@ -94,6 +94,16 @@ fun AgentPickerSheet(
     // present the Builder. Default no-op so existing call sites compile
     // without change; the row self-gates on `store.pipelinesEnabled`.
     onOpenPipelineBuilder: () -> Unit = {},
+    // True when hosted as a TAB inside another composable's own chrome
+    // (`FlowStartSheet`'s Session tab) rather than presented on its own:
+    // skips this composable's own Dialog/ModalBottomSheet wrapper (so it
+    // renders directly into the host's container instead of a nested
+    // popup-in-a-popup) AND hides `AgentStep`'s own "New session" heading,
+    // so the host's single header is the only one shown. `onDismiss` is
+    // unaffected -- it is always the caller's own callback regardless of
+    // wrapper. Default false so every existing call site (the "+" button,
+    // deep-link post-pair) is unaffected.
+    embedded: Boolean = false,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -156,6 +166,7 @@ fun AgentPickerSheet(
                     onDismiss()
                     onOpenPipelineBuilder()
                 },
+                embedded = embedded,
             )
         } else {
             DirectoryStep(
@@ -178,7 +189,11 @@ fun AgentPickerSheet(
         }
     }
 
-    if (wide) {
+    if (embedded) {
+        // Hosted inside FlowStartSheet's own Dialog -- render directly, no
+        // nested Dialog/ModalBottomSheet (that would be a popup-in-a-popup).
+        content()
+    } else if (wide) {
         androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
             androidx.compose.material3.Surface(
                 shape = RoundedCornerShape(22.dp),
@@ -221,6 +236,10 @@ private fun AgentStep(
     onPick: (String) -> Unit,
     onSignIn: (provider: String) -> Unit = {},
     onOpenPipelineBuilder: () -> Unit = {},
+    // Hides the "New session" heading below when hosted inside
+    // `FlowStartSheet` (which already shows its own "Start" header) -- see
+    // `AgentPickerSheet`'s `embedded` doc comment.
+    embedded: Boolean = false,
 ) {
     val neon = LocalNeonTheme.current
     val appearance = sh.nikhil.conduit.LocalAppearanceStore.current
@@ -237,13 +256,15 @@ private fun AgentStep(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text(
-            "New session",
-            style = MaterialTheme.typography.titleMedium,
-            fontFamily = neon.sans,
-            fontWeight = FontWeight.SemiBold,
-            color = neon.text,
-        )
+        if (!embedded) {
+            Text(
+                "New session",
+                style = MaterialTheme.typography.titleMedium,
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                color = neon.text,
+            )
+        }
         if (!headerNote.isNullOrBlank()) {
             Box(
                 modifier = Modifier
@@ -546,7 +567,7 @@ private fun AgentCard(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DirectoryStep(
+internal fun DirectoryStep(
     store: SessionStore,
     assistant: String,
     agentTint: Color,
@@ -555,6 +576,20 @@ private fun DirectoryStep(
     // start paths). fastMode is the claude-only toggle (null = unsupported /
     // no override).
     onCreate: (String?, String?, String?, String?, Boolean?, String?) -> Unit,
+    // Flow wizard's "Where" step (PR B follow-up): hides the model/effort/
+    // mode config + harness chip + launch line (none apply outside a
+    // single-agent new-session context) and shows ONLY the Recent/browse
+    // directory picker -- optionally with an inline branch field, since
+    // this picker has no branch control of its own. `onCreate` is still
+    // called with the full tuple (model/effort/mode/fastMode always null
+    // in this mode); callers that only care about the path read just the
+    // first value.
+    directoryOnly: Boolean = false,
+    // Inline branch field shown only when [directoryOnly] is true AND this
+    // is non-null (the flow wizard's "Where" picker supplies it; every
+    // other call site passes null and sees no branch UI at all).
+    branch: String? = null,
+    onBranchChange: (String) -> Unit = {},
 ) {
     val appearance = sh.nikhil.conduit.LocalAppearanceStore.current
     val useDial by appearance.newSessionEffortDial.collectAsState()
@@ -651,85 +686,87 @@ private fun DirectoryStep(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text(
-                "Working directory",
-                style = MaterialTheme.typography.titleMedium,
-                fontFamily = neon.sans,
-                fontWeight = FontWeight.SemiBold,
-                color = neon.text,
-            )
+            if (!directoryOnly) {
+                Text(
+                    "Working directory",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    color = neon.text,
+                )
 
-            ModelPicker(
-                assistant = assistant,
-                model = model,
-                catalog = catalog,
-                onSelect = { model = it },
-                fastMode = fastMode,
-                onFastModeChange = { fastMode = it },
-            )
+                ModelPicker(
+                    assistant = assistant,
+                    model = model,
+                    catalog = catalog,
+                    onSelect = { model = it },
+                    fastMode = fastMode,
+                    onFastModeChange = { fastMode = it },
+                )
 
-            // Effort + Mode: side by side on a wide (tablet) modal, stacked
-            // on phone (§6 "two columns"). A model with no effort control
-            // (haiku) drops the effort block entirely.
-            // Use true-tablet gate (sw>=600dp) to avoid phone-landscape false positive.
-            val wideConfig = androidx.compose.ui.platform.LocalConfiguration.current
-            val wide = wideConfig.smallestScreenWidthDp >= 600 && wideConfig.screenWidthDp >= 840
-            val effortBlock: @Composable () -> Unit = {
-                if (useDial) {
-                    EffortDial(
-                        options = effortOptions,
-                        effort = effort,
-                        tint = agentTint,
-                        onSelect = { effort = it; appearance.setNewSessionLastEffort(it) },
-                    )
-                } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        ModelPickerSectionLabel("Reasoning effort")
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            effortOptions.forEach { level ->
-                                ConduitChip(
-                                    label = effortLabel(level),
-                                    selected = effort == level,
-                                    modifier = Modifier.clickable { effort = level },
-                                )
+                // Effort + Mode: side by side on a wide (tablet) modal, stacked
+                // on phone (§6 "two columns"). A model with no effort control
+                // (haiku) drops the effort block entirely.
+                // Use true-tablet gate (sw>=600dp) to avoid phone-landscape false positive.
+                val wideConfig = androidx.compose.ui.platform.LocalConfiguration.current
+                val wide = wideConfig.smallestScreenWidthDp >= 600 && wideConfig.screenWidthDp >= 840
+                val effortBlock: @Composable () -> Unit = {
+                    if (useDial) {
+                        EffortDial(
+                            options = effortOptions,
+                            effort = effort,
+                            tint = agentTint,
+                            onSelect = { effort = it; appearance.setNewSessionLastEffort(it) },
+                        )
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            ModelPickerSectionLabel("Reasoning effort")
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                effortOptions.forEach { level ->
+                                    ConduitChip(
+                                        label = effortLabel(level),
+                                        selected = effort == level,
+                                        modifier = Modifier.clickable { effort = level },
+                                    )
+                                }
                             }
                         }
                     }
                 }
-            }
-            val modeBlock: @Composable () -> Unit = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ModelPickerSectionLabel("Mode")
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        ConduitChip(
-                            label = "Auto",
-                            selected = permissionMode == "",
-                            modifier = Modifier.clickable { permissionMode = "" },
-                        )
-                        ConduitChip(
-                            label = "Plan",
-                            selected = permissionMode == "plan",
-                            modifier = Modifier.clickable { permissionMode = "plan" },
+                val modeBlock: @Composable () -> Unit = {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ModelPickerSectionLabel("Mode")
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            ConduitChip(
+                                label = "Auto",
+                                selected = permissionMode == "",
+                                modifier = Modifier.clickable { permissionMode = "" },
+                            )
+                            ConduitChip(
+                                label = "Plan",
+                                selected = permissionMode == "plan",
+                                modifier = Modifier.clickable { permissionMode = "plan" },
+                            )
+                        }
+                        Text(
+                            "Plan = read-only; agent explores and proposes without editing.",
+                            fontFamily = neon.mono,
+                            fontSize = 10.5.sp,
+                            color = neon.textFaint,
                         )
                     }
-                    Text(
-                        "Plan = read-only; agent explores and proposes without editing.",
-                        fontFamily = neon.mono,
-                        fontSize = 10.5.sp,
-                        color = neon.textFaint,
-                    )
                 }
-            }
-            if (effortOptions.isEmpty()) {
-                modeBlock()
-            } else if (wide) {
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
-                    Box(Modifier.weight(1f)) { effortBlock() }
-                    Box(Modifier.weight(1f)) { modeBlock() }
+                if (effortOptions.isEmpty()) {
+                    modeBlock()
+                } else if (wide) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+                        Box(Modifier.weight(1f)) { effortBlock() }
+                        Box(Modifier.weight(1f)) { modeBlock() }
+                    }
+                } else {
+                    effortBlock()
+                    modeBlock()
                 }
-            } else {
-                effortBlock()
-                modeBlock()
             }
 
             if (recent.isNotEmpty()) {
@@ -808,6 +845,21 @@ private fun DirectoryStep(
                     }
                 }
             }
+
+            // Inline branch field for directoryOnly mode (this picker has
+            // no branch control of its own -- flow wizard PR B follow-up).
+            if (directoryOnly && branch != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ModelPickerSectionLabel("Branch")
+                    androidx.compose.material3.OutlinedTextField(
+                        value = branch,
+                        onValueChange = onBranchChange,
+                        placeholder = { Text("main") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
         }
 
         // Hairline separates the pinned action bar from the browse list
@@ -824,7 +876,7 @@ private fun DirectoryStep(
             // the broker confirmed BOTH CLAUDE.md and AGENTS.md are absent.
             // Tapping seeds the curated bootstrap prompt and starts cd'd in.
             val showHarnessChip = harnessStatus?.let { !it.hasHarness } == true &&
-                !harnessChipDismissed && listing != null
+                !harnessChipDismissed && listing != null && !directoryOnly
             if (showHarnessChip) {
                 HarnessChip(
                     tint = agentTint,
@@ -837,7 +889,7 @@ private fun DirectoryStep(
                     onDismiss = { harnessChipDismissed = true },
                 )
             }
-            if (useLaunch) {
+            if (useLaunch && !directoryOnly) {
                 // Live launch preview (§3): will run <agent> · <effort> · <folder>.
                 val folder = listing?.path?.trimEnd('/')?.substringAfterLast('/')?.ifEmpty { null }
                 Text(

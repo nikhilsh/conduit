@@ -180,7 +180,7 @@ extension ConduitUI {
                               shortcut: nil, run: onPairBox),
                 PaletteAction(id: "fanout", title: "Fan out a task", systemImage: "square.grid.2x2",
                               shortcut: nil, run: onFanOut),
-                PaletteAction(id: "pipeline", title: "New pipeline", systemImage: "arrow.triangle.merge",
+                PaletteAction(id: "pipeline", title: "New flow", systemImage: "arrow.triangle.merge",
                               shortcut: nil, run: onNewPipeline),
             ] + (store.pipelinesEnabled ? [
                 PaletteAction(id: "pipelines", title: "Pipelines", systemImage: "list.bullet.rectangle",
