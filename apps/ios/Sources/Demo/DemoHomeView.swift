@@ -51,6 +51,7 @@ private struct DemoPhoneShell: View {
     @Environment(AppearanceStore.self) private var appearance
     @Environment(\.neonTheme) private var neon
     @State private var selectedSessionID: String?
+    @State private var selectedFlowID: String?
     @State private var showingAppearance = false
 
     private var selectedSession: ProjectSession? {
@@ -64,6 +65,7 @@ private struct DemoPhoneShell: View {
                 GlassAppBackground()
                 VStack(spacing: 0) {
                     demoBanner(neon: neon)
+                    DemoFlowsSection(onOpen: { selectedFlowID = $0.id })
                     DemoSessionList(onSelect: { selectedSessionID = $0.id })
                         .padding(.top, 8)
                 }
@@ -116,6 +118,16 @@ private struct DemoPhoneShell: View {
                     DemoProjectView(session: session)
                 }
             }
+            .navigationDestination(item: $selectedFlowID) { id in
+                if let status = DemoData.pipelineStatus(id: id) {
+                    ConduitUI.PipelineMonitorView(
+                        pipelineID: id,
+                        pipelineTitle: status.title,
+                        demoStatus: status
+                    )
+                    .environment(store)
+                }
+            }
             .sheet(isPresented: $showingAppearance) {
                 ConduitUI.AppearanceSheet()
                     .environment(appearance)
@@ -134,6 +146,7 @@ private struct DemoTabletShell: View {
     @Environment(AppearanceStore.self) private var appearance
     @Environment(\.neonTheme) private var neon
     @State private var selectedSession: ProjectSession? = DemoData.sessions.first
+    @State private var selectedFlowID: String? = nil
     @State private var showingAppearance = false
 
     var body: some View {
@@ -170,6 +183,7 @@ private struct DemoTabletShell: View {
                 demoBanner(neon: neon)
                     .padding(.horizontal, 10)
                     .padding(.bottom, 8)
+                DemoFlowsSection(onOpen: { selectedFlowID = $0.id })
                 DemoSessionList(onSelect: { selectedSession = $0 })
             }
             .background(neon.appBg)
@@ -181,6 +195,25 @@ private struct DemoTabletShell: View {
                     .id(session.id)
             } else {
                 ConduitUI.EmptyDetail()
+            }
+        }
+        // Flow monitor presents as a sheet (mirrors the real tablet home's
+        // `selectedFlowPipeline` sheet, ConduitTabletHome.swift) rather than
+        // taking over the detail column, which stays session-scoped.
+        .sheet(isPresented: Binding(
+            get: { selectedFlowID != nil },
+            set: { if !$0 { selectedFlowID = nil } }
+        )) {
+            if let id = selectedFlowID, let status = DemoData.pipelineStatus(id: id) {
+                NavigationStack {
+                    ConduitUI.PipelineMonitorView(
+                        pipelineID: id,
+                        pipelineTitle: status.title,
+                        demoStatus: status
+                    )
+                    .environment(store)
+                }
+                .presentationDetents([.large])
             }
         }
         .sheet(isPresented: $showingAppearance) {
@@ -221,6 +254,51 @@ private func demoBanner(neon: NeonTheme) -> some View {
     )
     .padding(.horizontal, 14)
     .padding(.top, 6)
+}
+
+// MARK: - Flows section (demo)
+//
+// Routes through the REAL `ConduitUI.FlowCard` + section-header style used
+// by the real home (`ConduitHomeView.flowsSectionHeader`/`homeFlows`) --
+// same seam pattern as `DemoChatView` (PR #832): compose from the shared
+// library, never a hand-rolled demo-only card. Placed above the demo
+// session list on both phone and tablet shells.
+
+private struct DemoFlowsSection: View {
+    @Environment(\.neonTheme) private var neon
+    var onOpen: (ConduitUI.PipelineSummary) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("FLOWS")
+                .font(neon.mono(12).weight(.semibold))
+                .tracking(2)
+                .foregroundStyle(neon.accent)
+                .neonTextGlow(neon.glow ? neon.textGlow : nil)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            ForEach(DemoData.pipelines, id: \.id) { flow in
+                ConduitUI.FlowCard(
+                    summary: flow,
+                    onOpen: {
+                        Telemetry.breadcrumb("demo", "flow card opened",
+                            data: ["id": flow.id, "state": flow.state])
+                        onOpen(flow)
+                    },
+                    onContinue: {
+                        // No network in demo mode -- the "Continue" gate
+                        // approval is a no-op here (the monitor's own
+                        // static-fixture seam gates the same action).
+                        Telemetry.breadcrumb("demo", "flow card continue no-op",
+                            data: ["id": flow.id])
+                    }
+                )
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+    }
 }
 
 // MARK: - Session list

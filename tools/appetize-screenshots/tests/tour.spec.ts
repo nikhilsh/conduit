@@ -53,6 +53,20 @@ for (const { platform, publicKey } of TARGETS) {
       await session.waitForTimeout(6_000);
       await shot('demo-home');
 
+      // 2b. Flow monitor — demo home's FLOWS section seeds two fixture
+      // pipelines (DemoData.pipelines); this one is `awaiting_gate`, so the
+      // gate review card should be visible in the shot.
+      await session.tap({ element: { attributes: { text: 'Add rate limiter to broker' } } });
+      await session.waitForTimeout(5_000);
+      await shot('demo-flow-monitor');
+
+      // Back to demo home — "Home" is demo-fixture-only chrome on the
+      // Monitor's toolbar (the real Monitor has no text-labeled back
+      // affordance to tap; see ConduitPipelineMonitorView.swift /
+      // PipelineMonitorScreen.kt).
+      await session.tap({ element: { attributes: { text: 'Home' } } });
+      await session.waitForTimeout(3_000);
+
       // 3. A session's chat — agent replies + tool cards.
       await session.tap({ element: { attributes: { text: 'Build a to-do app' } } });
       await session.waitForTimeout(5_000);

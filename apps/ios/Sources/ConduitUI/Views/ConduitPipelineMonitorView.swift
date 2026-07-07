@@ -230,6 +230,16 @@ extension ConduitUI {
             prev   = try c.decodeIfPresent(String.self, forKey: .prev)   ?? ""
             output = try c.decodeIfPresent(String.self, forKey: .output)
         }
+
+        /// Direct-construction initializer for fixtures (demo mode,
+        /// previews, tests) -- the network decode path always uses
+        /// `init(from:)` above. A custom `init(from:)` disables Swift's
+        /// synthesized memberwise init, so this fills that gap.
+        init(step: Int, prev: String, output: String?) {
+            self.step = step
+            self.prev = prev
+            self.output = output
+        }
     }
 
     /// End-of-run summary populated once a pipeline reaches `complete`
@@ -266,6 +276,17 @@ extension ConduitUI {
             insertions   = try c.decodeIfPresent(Int.self, forKey: .insertions) ?? 0
             deletions    = try c.decodeIfPresent(Int.self, forKey: .deletions) ?? 0
             branches     = try c.decodeIfPresent([String].self, forKey: .branches)
+        }
+
+        /// Direct-construction initializer for fixtures (demo mode,
+        /// previews, tests) -- see `PipelineGate.init(step:prev:output:)`.
+        init(output: String, finished: String, files_changed: Int, insertions: Int, deletions: Int, branches: [String]?) {
+            self.output = output
+            self.finished = finished
+            self.files_changed = files_changed
+            self.insertions = insertions
+            self.deletions = deletions
+            self.branches = branches
         }
     }
 
@@ -308,6 +329,13 @@ extension ConduitUI {
 
         let pipelineID: String
         let pipelineTitle: String
+        /// Static demo fixture: when non-nil, the Monitor renders this fixed
+        /// status and skips `pollTask`/all network entirely -- mirrors
+        /// `ChatView`'s `readOnlyItems`/`forceReadOnly` seam (PR #832).
+        /// Approve/Cancel/Resume/Pick become inert no-ops; "Open session" is
+        /// naturally disabled since demo fixtures carry no live session for
+        /// the queued step. Fed by `DemoData.pipelineStatus(id:)`.
+        var demoStatus: PipelineStatus? = nil
 
         @State private var pipeline: PipelineStatus? = nil
         @State private var pollTask: Task<Void, Never>? = nil
@@ -426,6 +454,20 @@ extension ConduitUI {
             .navigationTitle(pipelineTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // Demo-only: the real Monitor relies on the NavigationStack's
+                // default back chevron (no text label, so untappable by the
+                // Appetize tour's text-attribute taps). A text-labeled "Home"
+                // affordance here is demo-fixture-only chrome so the tour can
+                // navigate back after `shot('demo-flow-monitor')` -- mirrors
+                // the equally demo-only "Home" nav icon added to Android's
+                // PipelineMonitorScreen.
+                ToolbarItem(placement: .topBarLeading) {
+                    if demoStatus != nil {
+                        Button("Home") { dismiss() }
+                            .font(neon.sans(13).weight(.semibold))
+                            .foregroundStyle(neon.accent)
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     if pipeline?.isTerminal == false {
                         Button {
@@ -448,8 +490,14 @@ extension ConduitUI {
             .tint(neon.accent)
             .onAppear {
                 Telemetry.breadcrumb("pipeline", "monitor opened",
-                    data: ["id": pipelineID])
-                startPolling()
+                    data: ["id": pipelineID, "demo": demoStatus != nil ? "true" : "false"])
+                if let demo = demoStatus {
+                    lastState = demo.state
+                    pipeline = demo
+                    updateResultCache(for: demo)
+                } else {
+                    startPolling()
+                }
             }
             .onDisappear {
                 pollTask?.cancel()
@@ -1300,6 +1348,10 @@ extension ConduitUI {
         }
 
         private func submitPick(runIndex: Int, pipeline: PipelineStatus) {
+            if demoStatus != nil {
+                Telemetry.breadcrumb("pipeline", "demo pick no-op", data: ["id": pipelineID])
+                return
+            }
             let endpoint = store.endpoint
             guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return }
             var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
@@ -1666,6 +1718,10 @@ extension ConduitUI {
         // MARK: - Resume (retry-from-failed)
 
         private func resumePipeline(promptOverride: String?) {
+            if demoStatus != nil {
+                Telemetry.breadcrumb("pipeline", "demo resume no-op", data: ["id": pipelineID])
+                return
+            }
             let endpoint = store.endpoint
             guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return }
             var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
@@ -1811,6 +1867,10 @@ extension ConduitUI {
         // MARK: - Continue (gate)
 
         private func continuePipeline(prevOverride: String? = nil) {
+            if demoStatus != nil {
+                Telemetry.breadcrumb("pipeline", "demo gate continue no-op", data: ["id": pipelineID])
+                return
+            }
             let endpoint = store.endpoint
             guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return }
             var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
@@ -1870,6 +1930,10 @@ extension ConduitUI {
 
         private func cancelPipeline() {
             Telemetry.breadcrumb("pipeline", "cancel tapped", data: ["id": pipelineID])
+            if demoStatus != nil {
+                Telemetry.breadcrumb("pipeline", "demo cancel no-op", data: ["id": pipelineID])
+                return
+            }
             let endpoint = store.endpoint
             guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return }
             var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
