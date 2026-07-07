@@ -102,6 +102,11 @@ struct NeonSegmentedPill<Tab: Hashable>: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(isActive ? .isSelected : [])
+                // Icon+text labels synthesize a combined accessibility
+                // label ("<icon>, Terminal") — pin it to the plain label
+                // so VoiceOver reads cleanly and UI automation (Appetize
+                // tour) can match by exact text.
+                .accessibilityLabel(seg.label)
             }
         }
         .padding(4)
