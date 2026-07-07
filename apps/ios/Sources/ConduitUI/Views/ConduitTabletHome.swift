@@ -20,12 +20,15 @@ extension ConduitUI {
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
 
-        // Pipeline affordance (#907, tablet-parity fix for the gap #905
-        // flagged): mirrors ConduitHomeView's phone-only banner -- refresh
+        // Flows / pipeline affordance (#907, tablet-parity fix for the gap
+        // #905 flagged): mirrors ConduitHomeView's FLOWS section -- refresh
         // on appear / box switch only (no polling loop while Home sits
         // idle), gated on the broker's `pipeline` capability.
         @State private var pipelineSummaries: [ConduitUI.PipelineSummary] = []
         @State private var showPipelineList = false
+        @State private var showPipelineBuilder = false
+        @State private var selectedFlowPipeline: ConduitUI.PipelineSummary?
+        @State private var continuingFlowIDs: Set<String> = []
 
         private var activePipelines: [ConduitUI.PipelineSummary] {
             pipelineSummaries.filter { ConduitUI.PipelineListViewModel.isActiveForHomeAffordance($0.state) }
@@ -33,6 +36,10 @@ extension ConduitUI {
 
         private var recentTerminalPipelines: [ConduitUI.PipelineSummary] {
             pipelineSummaries.filter { ConduitUI.PipelineListViewModel.isRecentTerminal($0) }
+        }
+
+        private var homeFlows: [ConduitUI.PipelineSummary] {
+            ConduitUI.PipelineListViewModel.sorted(activePipelines + recentTerminalPipelines)
         }
 
         private let columns = [
@@ -45,12 +52,24 @@ extension ConduitUI {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     header
-                    // Same slot as phone Home: above "Active sessions",
-                    // below the header. Never a fabricated count -- hidden
-                    // when no pipeline is active or recently terminal.
-                    if !activePipelines.isEmpty || !recentTerminalPipelines.isEmpty {
-                        PipelinesBannerCard(active: activePipelines, recentTerminal: recentTerminalPipelines) {
-                            showPipelineList = true
+                    // FLOWS: same slot as phone Home -- above "Active
+                    // sessions", below the header. Never a fabricated count
+                    // -- hidden when no flow qualifies.
+                    if !homeFlows.isEmpty {
+                        flowsSectionLabel
+                        VStack(spacing: 10) {
+                            ForEach(homeFlows) { flow in
+                                ConduitUI.FlowCard(
+                                    summary: flow,
+                                    isContinuing: continuingFlowIDs.contains(flow.id),
+                                    onOpen: {
+                                        Telemetry.breadcrumb("pipeline", "flow card opened",
+                                            data: ["id": flow.id, "state": flow.state])
+                                        selectedFlowPipeline = flow
+                                    },
+                                    onContinue: { continueFlow(flow) }
+                                )
+                            }
                         }
                         .padding(.bottom, 16)
                     }
@@ -86,6 +105,98 @@ extension ConduitUI {
                 ConduitUI.PipelineListView()
                     .environment(store)
                     .presentationDetents([.large])
+            }
+            .sheet(isPresented: $showPipelineBuilder) {
+                ConduitUI.PipelineBuilderView()
+                    .environment(store)
+                    .presentationDetents([.large])
+            }
+            .sheet(item: $selectedFlowPipeline) { flow in
+                NavigationStack {
+                    ConduitUI.PipelineMonitorView(
+                        pipelineID: flow.id,
+                        pipelineTitle: flow.title.isEmpty ? "Flow" : flow.title
+                    )
+                    .environment(store)
+                }
+                .presentationDetents([.large])
+            }
+        }
+
+        // MARK: Flows
+
+        private var flowsSectionLabel: some View {
+            HStack {
+                // Own label (not `sectionLabel(_:)`) -- that helper stretches
+                // to `maxWidth: .infinity`, which would fight the trailing
+                // button for space in this HStack. Accent-tinted per the
+                // design handoff ("FLOWS" eyebrow), unlike the textDim
+                // "Active sessions"/"Boxes" labels.
+                Text("FLOWS")
+                    .font(neon.mono(11).weight(.bold))
+                    .foregroundStyle(neon.accent)
+                    .textCase(.uppercase)
+                Spacer(minLength: 8)
+                Button {
+                    showPipelineBuilder = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "plus").font(.system(size: 12, weight: .semibold))
+                        Text("New flow").font(neon.sans(12.5).weight(.semibold))
+                    }
+                    .foregroundStyle(neon.accent)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.bottom, 10)
+            .padding(.top, 4)
+        }
+
+        /// Inline "Continue" (gate approval) from a tablet `FlowCard` --
+        /// same endpoint + approve-as-is semantics as the phone Home /
+        /// monitor Continue (`ConduitPipelineMonitorView.continuePipeline`).
+        private func continueFlow(_ flow: ConduitUI.PipelineSummary) {
+            guard !continuingFlowIDs.contains(flow.id) else { return }
+            let endpoint = store.endpoint
+            guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/pipeline/\(flow.id)/continue"
+            guard let url = components?.url else { return }
+
+            continuingFlowIDs.insert(flow.id)
+            Telemetry.breadcrumb("pipeline", "flow card continue tapped", data: ["id": flow.id])
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 15
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = Data("{}".utf8)
+
+            Task { @MainActor in
+                defer { continuingFlowIDs.remove(flow.id) }
+                do {
+                    let (_, resp) = try await URLSession.shared.data(for: req)
+                    guard let http = resp as? HTTPURLResponse else { return }
+                    if http.statusCode >= 200 && http.statusCode < 300 {
+                        Telemetry.breadcrumb("pipeline", "flow card continue ok", data: ["id": flow.id])
+                        pipelineSummaries = await store.refreshPipelines()
+                    } else {
+                        Telemetry.capture(
+                            error: NSError(domain: "ios.pipeline", code: 12,
+                                userInfo: [NSLocalizedDescriptionKey: "flow card continue failed"]),
+                            message: "flow card continue failed",
+                            tags: ["surface": "ios", "phase": "pipeline"],
+                            extras: ["id": flow.id, "status": "\(http.statusCode)"]
+                        )
+                    }
+                } catch {
+                    Telemetry.capture(
+                        error: error,
+                        message: "flow card continue network error",
+                        tags: ["surface": "ios", "phase": "pipeline"],
+                        extras: ["id": flow.id]
+                    )
+                }
             }
         }
 
