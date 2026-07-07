@@ -140,14 +140,16 @@ struct ConduitInlineTaskRowLogicTests {
         #expect(match == nil)
     }
 
-    @Test func fallsBackToFirstEntryWhenNoTextMatch() {
+    @Test func returnsNilWhenNoTextMatch() {
+        // A historic transcript row must NOT bind to an unrelated live
+        // task just because the roster is non-empty.
         let roster = [entry(taskId: "only", name: "totally-unrelated-name")]
         let match = ConduitInlineTaskLogic.matchingRosterEntry(
             title: "investigating the build failure",
             eventTs: "2026-07-01T10:00:10Z",
             roster: roster
         )
-        #expect(match?.taskId == "only")
+        #expect(match == nil)
     }
 
     // MARK: - rowModel
@@ -188,6 +190,15 @@ struct ConduitInlineTaskRowLogicTests {
         #expect(model.status == .done)
         #expect(model.title == "orphaned task")
         #expect(model.elapsed == nil)
+    }
+
+    @Test func rowModelStaysStaticWhenLiveRosterHasNoTextMatch() {
+        let roster = [entry(taskId: "live", name: "totally-unrelated-name", status: "working")]
+        let event = item(content: "subagent started: orphaned task", status: "done")
+        let model = ConduitInlineTaskLogic.rowModel(for: event, roster: roster, now: Date())
+        #expect(model.isLive == false)
+        #expect(model.status == .done)
+        #expect(model.title == "orphaned task")
     }
 
     @Test func rowModelFallsBackToStaticErrorWhenEventStatusFailed() {

@@ -5169,15 +5169,16 @@ enum ConduitInlineTaskLogic {
 
     /// Best-effort correlation to a LIVE roster entry: no shared id exists
     /// (see the file-header note above), so match candidates by
-    /// name/description substring, then break ties (or pick among all
-    /// entries when nothing matches on text) by nearest `startedAt` to the
-    /// event's own `ts`.
+    /// name/description substring, then break ties by nearest `startedAt`
+    /// to the event's own `ts`. No text match -> nil: binding a historic
+    /// transcript row to whatever unrelated task happens to be live would
+    /// show the wrong status/elapsed, so the caller renders the static
+    /// done/error fallback instead.
     static func matchingRosterEntry(
         title: String,
         eventTs: String,
         roster: [SubagentEntry]
     ) -> SubagentEntry? {
-        guard !roster.isEmpty else { return nil }
         let needle = title.lowercased()
         let candidates = roster.filter { entry in
             let name = entry.name.lowercased()
@@ -5186,10 +5187,10 @@ enum ConduitInlineTaskLogic {
             return (!name.isEmpty && (needle.contains(name) || name.contains(needle)))
                 || (!description.isEmpty && (needle.contains(description) || description.contains(needle)))
         }
-        let pool = candidates.isEmpty ? roster : candidates
+        guard !candidates.isEmpty else { return nil }
         let eventEpoch = eventTs.isEmpty ? Double.greatestFiniteMagnitude : conduitConversationTsEpoch(eventTs)
-        guard eventEpoch.isFinite, eventEpoch != .greatestFiniteMagnitude else { return pool.first }
-        return pool.min { a, b in
+        guard eventEpoch.isFinite, eventEpoch != .greatestFiniteMagnitude else { return candidates.first }
+        return candidates.min { a, b in
             startedDistance(a, to: eventEpoch) < startedDistance(b, to: eventEpoch)
         }
     }

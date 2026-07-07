@@ -156,14 +156,16 @@ class ConduitInlineTaskRowLogicTest {
     }
 
     @Test
-    fun fallsBackToFirstEntryWhenNoTextMatch() {
+    fun returnsNullWhenNoTextMatch() {
+        // A historic transcript row must NOT bind to an unrelated live
+        // task just because the roster is non-empty.
         val roster = listOf(entry(taskId = "only", name = "totally-unrelated-name"))
         val match = ConduitInlineTaskLogic.matchingRosterEntry(
             title = "investigating the build failure",
             eventTs = "2026-07-01T10:00:10Z",
             roster = roster,
         )
-        assertEquals("only", match?.taskId)
+        assertNull(match)
     }
 
     // endregion
@@ -210,6 +212,16 @@ class ConduitInlineTaskRowLogicTest {
         assertEquals(ConduitTaskStatus.Done, model.status)
         assertEquals("orphaned task", model.title)
         assertNull(model.elapsed)
+    }
+
+    @Test
+    fun rowModelStaysStaticWhenLiveRosterHasNoTextMatch() {
+        val roster = listOf(entry(taskId = "live", name = "totally-unrelated-name", status = "working"))
+        val ev = item(content = "subagent started: orphaned task", status = "done")
+        val model = ConduitInlineTaskLogic.rowModel(ev, roster, System.currentTimeMillis())
+        assertEquals(false, model.isLive)
+        assertEquals(ConduitTaskStatus.Done, model.status)
+        assertEquals("orphaned task", model.title)
     }
 
     @Test
