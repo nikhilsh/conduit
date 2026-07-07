@@ -602,7 +602,7 @@ fun PipelineMonitorScreen(
                         strokeWidth = 2.dp,
                     )
                     Text(
-                        "Loading pipeline...",
+                        "Loading flow...",
                         fontFamily = neon.sans,
                         color = neon.textDim,
                     )
@@ -834,7 +834,7 @@ fun PipelineMonitorScreen(
                                 color = neon.accent,
                             )
                             Text(
-                                "All runs have finished. Compare them and pick the one to continue the pipeline.",
+                                "All runs have finished. Compare them and pick the one to continue the flow.",
                                 fontFamily = neon.sans,
                                 fontSize = 13.sp,
                                 color = neon.textDim,
@@ -1134,7 +1134,7 @@ fun PipelineMonitorScreen(
                                 }
                             } else if (!showGatePreview) {
                                 Text(
-                                    "The pipeline is paused at a gate step. Review the output above, then continue.",
+                                    "The flow is paused at a gate step. Review the output above, then continue.",
                                     fontFamily = neon.sans,
                                     fontSize = 13.sp,
                                     color = neon.textDim,
@@ -1271,7 +1271,7 @@ fun PipelineMonitorScreen(
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text(
-                                "Pipeline failed",
+                                "Flow failed",
                                 fontFamily = neon.sans,
                                 fontWeight = FontWeight.SemiBold,
                                 color = neon.red,
@@ -1477,8 +1477,8 @@ fun PipelineMonitorScreen(
     if (showCancelConfirm) {
         AlertDialog(
             onDismissRequest = { showCancelConfirm = false },
-            title = { Text("Cancel pipeline?") },
-            text = { Text("This will stop the running pipeline. This cannot be undone.") },
+            title = { Text("Cancel flow?") },
+            text = { Text("This will stop the running flow. This cannot be undone.") },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -1507,7 +1507,7 @@ fun PipelineMonitorScreen(
                             }
                         }
                     },
-                ) { Text("Cancel pipeline", color = neon.red) }
+                ) { Text("Cancel flow", color = neon.red) }
             },
             dismissButton = {
                 TextButton(onClick = { showCancelConfirm = false }) { Text("Keep running") }

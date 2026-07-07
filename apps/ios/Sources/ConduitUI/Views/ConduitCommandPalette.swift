@@ -183,7 +183,7 @@ extension ConduitUI {
                 PaletteAction(id: "pipeline", title: "New flow", systemImage: "arrow.triangle.merge",
                               shortcut: nil, run: onNewPipeline),
             ] + (store.pipelinesEnabled ? [
-                PaletteAction(id: "pipelines", title: "Pipelines", systemImage: "list.bullet.rectangle",
+                PaletteAction(id: "pipelines", title: "Flows", systemImage: "list.bullet.rectangle",
                               shortcut: nil, run: onPipelines),
             ] : [])
         }

@@ -224,7 +224,7 @@ fun PipelineListScreen(
                 }
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    "Pipelines",
+                    "Flows",
                     fontFamily = neon.mono,
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp,
@@ -252,7 +252,7 @@ fun PipelineListScreen(
                                         "pipeline", "reentered monitor",
                                         mapOf("id_prefix" to p.id.take(8)),
                                     )
-                                    onOpenPipeline(p.id, p.title.ifEmpty { "Pipeline" })
+                                    onOpenPipeline(p.id, p.title.ifEmpty { "Flow" })
                                 },
                             )
                         }
@@ -273,12 +273,12 @@ private fun EmptyPipelines(neon: NeonTheme, loading: Boolean) {
         if (loading) {
             CircularProgressIndicator(color = neon.accent)
             Spacer(Modifier.height(12.dp))
-            Text("Loading pipelines...", fontFamily = neon.sans, fontSize = 14.sp, color = neon.textDim)
+            Text("Loading flows...", fontFamily = neon.sans, fontSize = 14.sp, color = neon.textDim)
         } else {
             Icon(Icons.AutoMirrored.Filled.CallSplit, null, tint = neon.textFaint, modifier = Modifier.size(28.dp))
             Spacer(Modifier.height(12.dp))
             Text(
-                "No pipelines yet",
+                "No flows yet",
                 fontFamily = neon.sans,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 15.sp,
@@ -286,7 +286,7 @@ private fun EmptyPipelines(neon: NeonTheme, loading: Boolean) {
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "Pipelines you create keep running here even after you close the sheet.",
+                "Flows you create keep running here even after you close the sheet.",
                 fontFamily = neon.sans,
                 fontSize = 13.sp,
                 color = neon.textDim,
@@ -310,7 +310,7 @@ private fun PipelineListRow(pipeline: PipelineSummary, neon: NeonTheme, onTap: (
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                pipeline.title.ifEmpty { "Pipeline" },
+                pipeline.title.ifEmpty { "Flow" },
                 fontFamily = neon.sans,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 14.sp,

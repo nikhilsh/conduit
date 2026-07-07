@@ -332,7 +332,7 @@ internal fun EffortDial(
     val neon = LocalNeonTheme.current
     data class Stop(val label: String, val value: String, val desc: String)
     val stops = buildList {
-        if (allowDefault) add(Stop("Default", "", "Inherits the pipeline's default reasoning effort."))
+        if (allowDefault) add(Stop("Default", "", "Inherits the flow's default reasoning effort."))
         addAll(options.map { Stop(effortLabel(it), it, effortDescription(it)) })
     }
     if (stops.isEmpty()) return
