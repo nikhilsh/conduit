@@ -17,10 +17,11 @@ import SwiftUI
 //   - No broker verb exists to stop an individual subagent. `canStop` is
 //     hard-false for real rows (only previews set it true to show the
 //     control) -- wiring `onStop` to a real kill is a follow-up.
-// "View transcript" is intentionally omitted: neither
-// `ConduitSubagentCard` (chat transcript card) nor the Android
-// `SubagentCard` navigate anywhere today, so there is no destination to
-// link to yet -- also a follow-up.
+// "View transcript" is intentionally omitted: there is no per-task
+// transcript surface yet (design handoff session_tasks PR4 -- the inline
+// `ConduitUI.TaskRow` in the chat transcript, `ConduitInlineTaskRow` in
+// ConduitChatView.swift -- opens this same sheet, not a transcript), so
+// there is no destination to link to yet -- also a follow-up.
 
 /// One row in the Tasks sheet, derived from a `SubagentEntry`.
 public struct ConduitTaskSheetRow: Identifiable, Equatable {

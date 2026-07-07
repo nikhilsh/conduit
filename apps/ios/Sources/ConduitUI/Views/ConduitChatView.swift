@@ -763,7 +763,8 @@ extension ConduitUI {
                                                 fingerprint: fp,
                                                 answer: answer ?? ""
                                             )
-                                        }
+                                        },
+                                        onOpenTasks: { showTasksSheet = true }
                                     )
                                     // Perf (litter-parity): skip re-rendering a
                                     // row whose render-determining inputs didn't
@@ -1838,6 +1839,10 @@ private struct ConduitEventRow: View, Equatable {
     var appearanceRevision: Int = 0
     let onQuickReply: (String) -> Void
     var onPendingAnswered: (String?) -> Void = { _ in }
+    /// Opens the session's Tasks sheet — the inline task row's tap target
+    /// (design handoff session_tasks PR4). No per-task transcript surface
+    /// exists yet, so every row opens the same sheet as the RunningPill.
+    var onOpenTasks: () -> Void = {}
     @Environment(AppearanceStore.self) private var appearance
 
     /// Skip re-rendering a row whose render-determining inputs are
@@ -1873,7 +1878,7 @@ private struct ConduitEventRow: View, Equatable {
         } else if event.kind == "plan" {
             ConduitPlanCard(event: event)
         } else if event.kind == "subagent" {
-            ConduitSubagentCard(event: event)
+            ConduitInlineTaskRow(event: event, sessionID: sessionID, onOpenTasks: onOpenTasks)
         } else if event.role.lowercased() == "user", let peer = ConduitPeerMessage.parse(event.content) {
             ConduitPeerMessageCard(event: event, peer: peer)
         } else if event.role.lowercased() == "tool" {
@@ -4437,29 +4442,6 @@ private struct ConduitNeonCommandCard: View {
     }
 }
 
-private struct ConduitStatusChip: View {
-    let status: String
-    @Environment(\.neonTheme) private var neon
-
-    var body: some View {
-        Text(status.isEmpty ? "DONE" : status.uppercased())
-            .font(neon.mono(10).weight(.bold))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(tint.opacity(0.18)))
-    }
-
-    private var tint: Color {
-        switch status.lowercased() {
-        case "running", "streaming", "working": return neon.accent2
-        case "pending", "thinking":             return neon.claude
-        case "failed", "error":                 return neon.red
-        default:                                return neon.green
-        }
-    }
-}
-
 private struct ConduitCommandBlock: View {
     let command: String
     @Environment(\.neonTheme) private var neon
@@ -5098,51 +5080,172 @@ struct ConduitSwapNotice: View {
     }
 }
 
-private struct ConduitSubagentCard: View {
+// MARK: - Inline task row (design handoff session_tasks PR4)
+//
+// Replaces the old expand/collapse `ConduitSubagentCard` with the shared
+// `ConduitUI.TaskRow` (PR1) for a `kind == "subagent"` transcript event.
+//
+// Binding investigation (see PR4 notes): there is NO shared id between a
+// `kind == "subagent"` `ConversationItem` and a live `SubagentEntry` on the
+// wire -- the core classifier (`looks_like_subagent`) derives the item
+// purely from free-text system content ("subagent started: ..."), while
+// the roster (`SessionStore.subagentRosters`, `view:"agents"`) is built
+// from separate `task_*` stream frames keyed by `task_id`. In fact, the
+// broker's task_* handling (`broker/internal/session/claudechat.go` +
+// `codexappserver.go`) explicitly `continue`s / comments "must NEVER ...
+// emit parent chat events" -- so in the CURRENT broker, a `subagent`-kind
+// chat line is not actually produced by a live dispatch at all; this
+// branch only fires for legacy/other-source system text matching the
+// classifier's phrasing.
+//
+// Given that gap, `ConduitInlineTaskRow` does a best-effort NAME + RECENCY
+// match against the live roster (substring match on name/description,
+// broken by nearest `startedAt` to the event's own `ts`); when nothing
+// matches -- the common case -- it falls back to the event's own static
+// content/status (status "failed" -> `.error`, everything else -> `.done`,
+// per the design intent "no roster match -> treat as done, historic
+// transcript"). See `ConduitInlineTaskLogic` below for the pure mapping,
+// exercised directly by `ConduitInlineTaskRowLogicTests`.
+private struct ConduitInlineTaskRow: View {
     let event: ConversationItem
-    @State private var expanded = false
-    @Environment(\.neonTheme) private var neon
+    let sessionID: String
+    var onOpenTasks: () -> Void = {}
+    @Environment(SessionStore.self) private var store
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: "person.2.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(neon.purple)
-                Text("SUBAGENT")
-                    .font(neon.mono(10).weight(.bold))
-                    .tracking(0.7)
-                    .foregroundStyle(neon.textDim)
-                ConduitStatusChip(status: event.status)
-                Spacer()
-                if !event.ts.isEmpty {
-                    Text(ConversationTimestamp.relative(event.ts))
-                        .font(neon.mono(10))
-                        .foregroundStyle(neon.textFaint)
-                }
-                Image(systemName: "chevron.down")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(neon.textDim)
-                    .rotationEffect(.degrees(expanded ? 180 : 0))
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
-            }
-            if expanded {
-                ConduitMarkdownBlock(text: event.content, role: .system)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            } else {
-                Text(event.content.split(separator: "\n").first.map(String.init) ?? "Subagent activity")
-                    .font(neon.sans(13))
-                    .foregroundStyle(neon.textDim)
-                    .lineLimit(1)
-            }
+        // Elapsed ticks + the tail line refresh at most once a second --
+        // the periodic schedule is the throttle: this row is behind the
+        // call site's `.equatable()` (whose digest excludes roster state),
+        // so a bursty roster update doesn't force an extra render between
+        // ticks, only the next scheduled one picks it up.
+        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+            let roster = store.subagentRosters[sessionID] ?? []
+            let model = ConduitInlineTaskLogic.rowModel(for: event, roster: roster, now: timeline.date)
+            ConduitUI.TaskRow(
+                title: model.title,
+                status: model.status,
+                elapsed: model.elapsed,
+                tail: model.tail,
+                onOpen: onOpenTasks
+            )
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14, glowTint: neon.purple)
+    }
+}
+
+/// Pure mapping logic behind `ConduitInlineTaskRow` -- kept free of SwiftUI
+/// so it's directly unit-testable (`ConduitInlineTaskRowLogicTests`).
+enum ConduitInlineTaskLogic {
+    /// Lifecycle prefixes the core's `looks_like_subagent` (conversation.rs)
+    /// recognizes -- mirrored here so the extracted title strips the same
+    /// boilerplate the classifier anchored on. Longer/hyphenated variants
+    /// are listed before their un-hyphenated twins purely for readability;
+    /// `hasPrefix` doesn't need them ordered.
+    static let subagentPrefixes: [String] = [
+        "sub-agent started", "sub-agent done", "sub-agent failed",
+        "sub-agent running", "sub-agent complete",
+        "subagent started", "subagent done", "subagent failed",
+        "subagent running", "subagent complete",
+    ]
+
+    /// Recover the free-text title/description the CLI wrote after a
+    /// recognized lifecycle prefix ("subagent started: investigating the
+    /// build failure" -> "investigating the build failure"). Falls back to
+    /// the first content line, then the old card's placeholder.
+    static func extractedTitle(from content: String) -> String {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("spawning agent") {
+            let rest = trimmed.dropFirst("spawning agent".count)
+                .trimmingCharacters(in: CharacterSet(charactersIn: ": "))
+            if !rest.isEmpty { return rest }
+        }
+        for prefix in subagentPrefixes where lower.hasPrefix(prefix) {
+            let rest = trimmed.dropFirst(prefix.count)
+                .trimmingCharacters(in: CharacterSet(charactersIn: ": "))
+            if !rest.isEmpty { return rest }
+        }
+        return trimmed.split(separator: "\n").first.map(String.init) ?? "Subagent activity"
+    }
+
+    /// Best-effort correlation to a LIVE roster entry: no shared id exists
+    /// (see the file-header note above), so match candidates by
+    /// name/description substring, then break ties (or pick among all
+    /// entries when nothing matches on text) by nearest `startedAt` to the
+    /// event's own `ts`.
+    static func matchingRosterEntry(
+        title: String,
+        eventTs: String,
+        roster: [SubagentEntry]
+    ) -> SubagentEntry? {
+        guard !roster.isEmpty else { return nil }
+        let needle = title.lowercased()
+        let candidates = roster.filter { entry in
+            let name = entry.name.lowercased()
+            let description = entry.description.lowercased()
+            guard !name.isEmpty || !description.isEmpty else { return false }
+            return (!name.isEmpty && (needle.contains(name) || name.contains(needle)))
+                || (!description.isEmpty && (needle.contains(description) || description.contains(needle)))
+        }
+        let pool = candidates.isEmpty ? roster : candidates
+        let eventEpoch = eventTs.isEmpty ? Double.greatestFiniteMagnitude : conduitConversationTsEpoch(eventTs)
+        guard eventEpoch.isFinite, eventEpoch != .greatestFiniteMagnitude else { return pool.first }
+        return pool.min { a, b in
+            startedDistance(a, to: eventEpoch) < startedDistance(b, to: eventEpoch)
+        }
+    }
+
+    private static func startedDistance(_ entry: SubagentEntry, to eventEpoch: Double) -> Double {
+        guard !entry.startedAt.isEmpty else { return .greatestFiniteMagnitude }
+        let started = conduitConversationTsEpoch(entry.startedAt)
+        guard started.isFinite, started != .greatestFiniteMagnitude else { return .greatestFiniteMagnitude }
+        return abs(started - eventEpoch)
+    }
+
+    /// The inline row's fully-resolved render inputs.
+    struct RowModel: Equatable {
+        let title: String
+        let status: ConduitTaskStatus
+        let elapsed: String?
+        let tail: String?
+        /// True when bound to a live roster entry (elapsed ticks, tail
+        /// tracks `lastTool`); false for the static last-resort fallback.
+        let isLive: Bool
+    }
+
+    /// Map a `kind == "subagent"` `ConversationItem` (+ the live roster) to
+    /// the row's render inputs. `now` is injectable so callers/tests can
+    /// pin a stable elapsed value.
+    static func rowModel(for event: ConversationItem, roster: [SubagentEntry], now: Date) -> RowModel {
+        let title = extractedTitle(from: event.content)
+        if let entry = matchingRosterEntry(title: title, eventTs: event.ts, roster: roster) {
+            let status = ConduitTasksSheetLogic.statusFromRaw(entry.status)
+            var elapsed: String? = nil
+            if status == .running, !entry.startedAt.isEmpty {
+                let startedEpoch = conduitConversationTsEpoch(entry.startedAt)
+                if startedEpoch.isFinite, startedEpoch != .greatestFiniteMagnitude {
+                    elapsed = ConduitTasksSheetLogic.elapsedLabel(seconds: max(0, now.timeIntervalSince1970 - startedEpoch))
+                }
+            }
+            let liveTail = entry.lastTool.trimmingCharacters(in: .whitespaces)
+            return RowModel(
+                title: entry.name.isEmpty ? title : entry.name,
+                status: status,
+                elapsed: elapsed,
+                tail: liveTail.isEmpty ? nil : liveTail,
+                isLive: true
+            )
+        }
+        // Last resort: no live roster match (the common case -- see the
+        // file header) -- render from the event's own static content.
+        // "failed" -> error, everything else -> done (design intent:
+        // "no roster match -> treat as done, historic transcript").
+        let staticStatus: ConduitTaskStatus = event.status.lowercased() == "failed" ? .error : .done
+        let tailLine = event.content
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .dropFirst()
+            .first
+            .map(String.init)
+        return RowModel(title: title, status: staticStatus, elapsed: nil, tail: tailLine, isLive: false)
     }
 }
 

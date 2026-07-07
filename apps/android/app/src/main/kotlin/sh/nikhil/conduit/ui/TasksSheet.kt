@@ -195,10 +195,11 @@ object TasksSheetLogic {
  * tap (PR2). Follows [ComposerAttachSheet]'s chrome conventions
  * ([ModalBottomSheet] + [rememberModalBottomSheetState]).
  *
- * "View transcript" is intentionally omitted: neither the chat transcript's
- * `SubagentCard` (this file's [ChatPage]) nor the iOS `ConduitSubagentCard`
- * navigate anywhere today, so there's no destination to link to yet -- a
- * follow-up.
+ * "View transcript" is intentionally omitted: there is no per-task
+ * transcript surface yet (design handoff session_tasks PR4 -- the inline
+ * `ConduitTaskRow` in the chat transcript, `InlineTaskRow` in
+ * [ChatPage] -- opens this same sheet, not a transcript), so there's no
+ * destination to link to yet -- a follow-up.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
