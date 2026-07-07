@@ -71,6 +71,14 @@ fun AppRoot(
     // Pipeline screens
     var showPipelineBuilder by remember { mutableStateOf(false) }
     var showPipelineList by remember { mutableStateOf(false) }
+    // Flow (pipeline v2) Start sheet + wizard -- replaces the old direct
+    // `showAgentPicker` / `showPipelineBuilder` presentation at the "+"
+    // entry points on PHONE. Tablet's `NeonTabletRail`/`HomeScreen` "New
+    // pipeline" wiring below is UNCHANGED -- it keeps the old builder
+    // (PR scope §6).
+    var showFlowStart by remember { mutableStateOf(false) }
+    var flowStartInitialTab by remember { mutableStateOf(FlowStartTab.SESSION) }
+    var flowWizardPrefill by remember { mutableStateOf<FlowWizardPrefill?>(null) }
     var pipelineMonitorTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showApprovals by remember { mutableStateOf(false) }
     var boxHealthTarget by remember { mutableStateOf<sh.nikhil.conduit.SavedServer?>(null) }
@@ -130,7 +138,8 @@ fun AppRoot(
 
     val onNewSession: () -> Unit = {
         if (harness is HarnessState.Live || harness is HarnessState.Linked) {
-            showAgentPicker = true
+            flowStartInitialTab = FlowStartTab.SESSION
+            showFlowStart = true
         } else {
             showAddServer = true
         }
@@ -246,7 +255,13 @@ fun AppRoot(
                         onOpenBoxHealth = { server -> boxHealthTarget = server },
                         onOpenPipelines = { showPipelineList = true },
                         onOpenPipeline = { id, title -> pipelineMonitorTarget = Pair(id, title) },
-                        onNewPipeline = { showPipelineBuilder = true },
+                        // "+ New flow" header -- straight to the wizard
+                        // (blank), no Start-sheet detour (phone only; tablet
+                        // above keeps the old builder).
+                        onNewPipeline = {
+                            Telemetry.breadcrumb("flow_wizard", "flows_header_new_flow_tapped", emptyMap())
+                            flowWizardPrefill = FlowWizardPrefill.Blank
+                        },
                         onFanOut = { showFanOut = true },
                         onOpenOnboarding = {
                             onboardingEntry = FeatureFlags.OnboardingEntry.replay
@@ -322,7 +337,11 @@ fun AppRoot(
             onPairBox = { showCommandPalette = false; showAddServer = true },
             onOpenSession = { id -> showCommandPalette = false; store.select(id) },
             onFanOut = { showCommandPalette = false; showFanOut = true },
-            onNewPipeline = { showCommandPalette = false; showPipelineBuilder = true },
+            onNewPipeline = {
+                showCommandPalette = false
+                flowStartInitialTab = FlowStartTab.FLOW
+                showFlowStart = true
+            },
             onPipelines = { showCommandPalette = false; showPipelineList = true },
             onRunOnBox = { text ->
                 // CommandPaletteScreen always calls onDismiss() before onRunOnBox(),
@@ -489,6 +508,36 @@ fun AppRoot(
                 pipelineMonitorTarget = Pair(id, title)
             },
             onBack = { showPipelineBuilder = false },
+        )
+    }
+
+    // Flow (pipeline v2) Start sheet -- Session/Flow segmented; Session tab
+    // hosts the existing AgentPickerSheet, Flow tab picks a template/blank
+    // flow and opens the wizard.
+    if (showFlowStart) {
+        FlowStartSheet(
+            store = store,
+            initialTab = flowStartInitialTab,
+            onStartWizard = { prefill ->
+                showFlowStart = false
+                flowWizardPrefill = prefill
+            },
+            onDismiss = { showFlowStart = false },
+        )
+    }
+
+    // Flow wizard (Task -> Steps) -- replaces PipelineBuilderScreen as the
+    // phone create UX. Tablet keeps the old builder (PR scope §6).
+    flowWizardPrefill?.let { prefill ->
+        BackHandler(enabled = true) { flowWizardPrefill = null }
+        FlowWizardScreen(
+            store = store,
+            prefill = prefill,
+            onCreated = { id, title ->
+                flowWizardPrefill = null
+                pipelineMonitorTarget = Pair(id, title)
+            },
+            onBack = { flowWizardPrefill = null },
         )
     }
 

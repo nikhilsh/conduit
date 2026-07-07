@@ -10,6 +10,15 @@ do NOT mint a new `vX.Y.Z` heading. The real version is assigned only when
 ## Active
 
 - **Thinking block + indicator peek** (iOS + Android) -- consume `thinking_streaming` view_event; collapsible "Thinking..." disclosure above streaming prose; live reasoning line fed to WorkingIndicator peek. Branch `feat/thinking-app-ui`, PR #857.
+- **Flow (pipeline v2) redesign** (iOS + Android) -- SWE Kitty 5 handoff
+  (`design_handoff_flow/`), replacing the pipeline Builder with a native
+  Start-sheet + wizard create flow and richer flow surfaces. PRs: #921 (merged
+  -- ConduitFlowAtoms/FlowCard components + home Flows section), #922 (broker
+  step summaries), and this PR (branch `flow-wizard`) -- Start sheet
+  (Session/Flow segmented), two-step wizard (Task, Steps), step editor (C1),
+  If/Else editor (C2); replaces the old builder as the phone create UX at
+  every "+" entry point, tablet unchanged (kept on the old builder). Monitor
+  redesign + the `pipeline`→`flow` naming pass are follow-up PRs.
 
 ## Deferred (not active)
 
