@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -49,7 +50,6 @@ import sh.nikhil.conduit.ui.components.AgentDot
 import sh.nikhil.conduit.ui.components.ConduitButton
 import sh.nikhil.conduit.ui.components.ConduitCard
 import sh.nikhil.conduit.ui.components.ConduitChip
-import sh.nikhil.conduit.ui.components.ConduitNavRow
 import sh.nikhil.conduit.ui.components.ButtonVariant
 import sh.nikhil.conduit.ui.components.GatePill
 import sh.nikhil.conduit.ui.components.GateGlyph
@@ -257,17 +257,37 @@ fun FlowWizardScreen(
     }
 
     if (showWhereEditor) {
-        AlertDialog(
-            onDismissRequest = { showWhereEditor = false },
-            title = { Text("Where") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(value = cwd, onValueChange = { cwd = it }, label = { Text("Directory") }, singleLine = true)
-                    OutlinedTextField(value = baseBranch, onValueChange = { baseBranch = it }, label = { Text("Branch") }, singleLine = true)
+        // Reuses the SAME directory/box picker `AgentPickerSheet` uses
+        // (`DirectoryStep`'s `directoryOnly` mode -- PR B follow-up):
+        // Recent + live browse over `store.listDirectories`, no per-agent
+        // model/effort/mode UI. That picker has no branch control of its
+        // own, so an inline branch field lives INSIDE this dialog (not on
+        // the wizard face) via its `branch`/`onBranchChange` params.
+        Dialog(onDismissRequest = { showWhereEditor = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Box(modifier = Modifier.fillMaxSize().background(neon.bg)) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Where", fontFamily = neon.sans, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = neon.text, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { showWhereEditor = false }) { Text("Done") }
+                    }
+                    DirectoryStep(
+                        store = store,
+                        assistant = "claude",
+                        agentTint = neon.accent,
+                        directoryOnly = true,
+                        branch = baseBranch,
+                        onBranchChange = { baseBranch = it },
+                        onCreate = { path, _, _, _, _, _ ->
+                            cwd = path ?: ""
+                            showWhereEditor = false
+                        },
+                    )
                 }
-            },
-            confirmButton = { TextButton(onClick = { showWhereEditor = false }) { Text("Done") } },
-        )
+            }
+        }
     }
 
     if (showTemplateReplace) {
@@ -401,14 +421,22 @@ private fun TaskStep(
             )
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("WHERE", fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 11.sp, color = neon.textFaint)
+                // A custom row (not ConduitNavRow, whose canned subtitle
+                // isn't mono) -- box name title, mono "<dir> · <branch>"
+                // subtitle, chevron.
                 ConduitCard(modifier = Modifier.clickable(onClick = onWhereClick)) {
-                    ConduitNavRow(
-                        icon = Icons.Default.Add,
-                        title = whereTitle,
-                        subtitle = "${cwd.ifEmpty { "no folder" }} · ${baseBranch.ifEmpty { "main" }}",
-                        iconTint = neon.accent,
-                        onClick = onWhereClick,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Folder, contentDescription = null, tint = neon.accent, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(whereTitle, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = neon.text)
+                            Text(
+                                "${cwd.ifEmpty { "no folder" }} · ${baseBranch.ifEmpty { "main" }}",
+                                fontFamily = neon.mono, fontSize = 12.sp, color = neon.textDim, maxLines = 1,
+                            )
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = neon.textDim, modifier = Modifier.size(18.dp))
+                    }
                 }
             }
             Text(

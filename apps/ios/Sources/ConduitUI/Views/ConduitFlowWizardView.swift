@@ -173,13 +173,33 @@ extension ConduitUI {
 
                         VStack(alignment: .leading, spacing: 6) {
                             sectionLabel("Where")
+                            // A custom row (not `ConduitUI.navRow`, whose
+                            // canned subtitle isn't mono) -- box name title,
+                            // mono "<dir> · <branch>" subtitle, chevron.
                             Button { showWhereEditor = true } label: {
-                                ConduitUI.navRow(
-                                    icon: "folder",
-                                    title: whereTitle,
-                                    subtitle: "\(cwdDisplay) \u{00B7} \(baseBranch.isEmpty ? "main" : baseBranch)",
-                                    iconTint: neon.accent
-                                )
+                                HStack(spacing: 12) {
+                                    Image(systemName: "folder")
+                                        .font(.body)
+                                        .foregroundStyle(neon.accent)
+                                        .frame(width: 20)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(whereTitle)
+                                            .font(neon.sans(15).weight(.semibold))
+                                            .foregroundStyle(neon.text)
+                                        Text("\(cwdDisplay) \u{00B7} \(baseBranch.isEmpty ? "main" : baseBranch)")
+                                            .font(neon.mono(12))
+                                            .foregroundStyle(neon.textDim)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                    }
+                                    Spacer(minLength: 8)
+                                    Image(systemName: "chevron.right")
+                                        .font(.footnote.weight(.semibold))
+                                        .foregroundStyle(neon.textDim)
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
@@ -238,45 +258,25 @@ extension ConduitUI {
             cwd.isEmpty ? "no folder" : (cwd as NSString).lastPathComponent
         }
 
+        /// Reuses the SAME directory/box picker `AgentPickerSheet` uses
+        /// (`directoryOnly` mode -- PR B follow-up): Recent + live browse
+        /// over `store.listDirectories(path:)`, no per-agent model/effort/
+        /// mode UI. That picker has no branch control of its own, so an
+        /// inline branch field lives INSIDE this sheet (not on the wizard
+        /// face) via its `branch` binding.
         private var whereEditorSheet: some View {
             NavigationStack {
-                ZStack {
-                    GlassAppBackground()
-                    VStack(alignment: .leading, spacing: 18) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            sectionLabel("Directory")
-                            TextField("/path/to/project", text: $cwd)
-                                .font(neon.mono(13))
-                                .foregroundStyle(neon.text)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .conduitGlassRoundedRect(cornerRadius: 13)
-                                .tint(neon.accent)
-                        }
-                        VStack(alignment: .leading, spacing: 6) {
-                            sectionLabel("Branch")
-                            TextField("main", text: $baseBranch)
-                                .font(neon.mono(13))
-                                .foregroundStyle(neon.text)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .conduitGlassRoundedRect(cornerRadius: 13)
-                                .tint(neon.accent)
-                        }
-                        Spacer()
+                ConduitUI.DirectoryPicker(
+                    agentKind: "claude",
+                    directoryOnly: true,
+                    branch: $baseBranch,
+                    onCreate: { path, _, _, _, _, _ in
+                        cwd = path ?? ""
+                        showWhereEditor = false
                     }
-                    .padding(16)
-                }
-                .navigationTitle("Where")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { showWhereEditor = false }
-                    }
-                }
+                )
             }
             .tint(neon.accent)
-            .presentationDetents([.medium])
         }
 
         // MARK: Step 2 -- Steps

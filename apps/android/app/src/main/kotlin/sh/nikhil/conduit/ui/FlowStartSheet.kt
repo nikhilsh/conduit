@@ -245,6 +245,7 @@ fun FlowStartSheet(
                             onStartWizard(FlowWizardPrefill.Blank)
                             onDismiss()
                         },
+                        embedded = true,
                         onDismiss = onDismiss,
                     )
                 } else {

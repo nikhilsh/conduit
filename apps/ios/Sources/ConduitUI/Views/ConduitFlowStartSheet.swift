@@ -85,7 +85,8 @@ extension ConduitUI {
                                 Telemetry.breadcrumb("flow_start", "session tab pipeline row tapped", data: [:])
                                 onStartWizard(.blank)
                                 dismiss()
-                            }
+                            },
+                            embedded: true
                         )
                     } else {
                         flowTab
