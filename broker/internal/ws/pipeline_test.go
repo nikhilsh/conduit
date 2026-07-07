@@ -149,6 +149,136 @@ func TestContinueEndpointEmptyBody(t *testing.T) {
 	}
 }
 
+// TestBuildPipelineListItemsStepsAndResult asserts the additive `steps` and
+// `result` fields on the /api/pipelines list summary (#920 — home FlowCard
+// mini topology strip): one entry per top-level step with the derived
+// display status, gate_after, and — once complete — a diffstat-only result.
+func TestBuildPipelineListItemsStepsAndResult(t *testing.T) {
+	p := &pipeline.Pipeline{
+		ID:          "p_test1",
+		Title:       "test pipeline",
+		State:       pipeline.PipelineComplete,
+		CurrentStep: 2,
+		Steps: []pipeline.Step{
+			{Index: 0, AgentType: "claude", Role: "planner", GateAfter: true, SessionID: "sess-0", Phase: "exited(0)"},
+			{Index: 1, AgentType: "codex", Role: "implementer", GateAfter: false, SessionID: "sess-1", Phase: "turn_complete"},
+			{Index: 2, AgentType: "claude", Role: "reviewer", GateAfter: false, SessionID: "sess-2", Phase: "exited(1)"},
+		},
+		Result: &pipeline.PipelineResult{
+			Output:       "done",
+			Finished:     "2026-07-07T00:00:00Z",
+			FilesChanged: 3,
+			Insertions:   10,
+			Deletions:    2,
+		},
+	}
+
+	items := buildPipelineListItems([]*pipeline.Pipeline{p})
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	item := items[0]
+
+	wantSteps := []pipelineStepSummary{
+		{Agent: "claude", Role: "planner", Status: "done", GateAfter: true},
+		{Agent: "codex", Role: "implementer", Status: "done", GateAfter: false},
+		{Agent: "claude", Role: "reviewer", Status: "failed", GateAfter: false},
+	}
+	if len(item.Steps) != len(wantSteps) {
+		t.Fatalf("got %d steps, want %d", len(item.Steps), len(wantSteps))
+	}
+	for i, want := range wantSteps {
+		if got := item.Steps[i]; got != want {
+			t.Errorf("step %d: got %+v, want %+v", i, got, want)
+		}
+	}
+
+	if item.Result == nil {
+		t.Fatal("Result is nil, want non-nil for a complete pipeline")
+	}
+	wantResult := pipelineResultSummary{FilesChanged: 3, Insertions: 10, Deletions: 2, Finished: "2026-07-07T00:00:00Z"}
+	if *item.Result != wantResult {
+		t.Errorf("Result = %+v, want %+v", *item.Result, wantResult)
+	}
+
+	// Existing fields must be untouched by the additive change.
+	if item.ID != p.ID || item.Title != p.Title || item.State != p.State ||
+		item.CurrentStep != p.CurrentStep || item.StepCount != len(p.Steps) {
+		t.Errorf("existing summary fields regressed: %+v", item)
+	}
+}
+
+// TestStepDisplayStatusBuckets covers the six display-status buckets computed
+// by stepDisplayStatus, mirroring PipelineStepDisplayViewModel.state(for:) in
+// ConduitPipelineMonitorView.swift.
+func TestStepDisplayStatusBuckets(t *testing.T) {
+	cases := []struct {
+		name        string
+		step        pipeline.Step
+		state       pipeline.PipelineState
+		currentStep int
+		want        string
+	}{
+		{
+			name:        "queued: no session, ahead of current step",
+			step:        pipeline.Step{Index: 1},
+			state:       pipeline.PipelineRunning,
+			currentStep: 0,
+			want:        "queued",
+		},
+		{
+			name:        "done: no session but index behind current step (fallback)",
+			step:        pipeline.Step{Index: 0},
+			state:       pipeline.PipelineRunning,
+			currentStep: 1,
+			want:        "done",
+		},
+		{
+			name:        "running: session present, phase running",
+			step:        pipeline.Step{Index: 0, SessionID: "s0", Phase: "running"},
+			state:       pipeline.PipelineRunning,
+			currentStep: 0,
+			want:        "running",
+		},
+		{
+			name:        "awaiting_gate: running phase + pipeline at gate on this step",
+			step:        pipeline.Step{Index: 0, SessionID: "s0", Phase: "running"},
+			state:       pipeline.PipelineAwaitingGate,
+			currentStep: 0,
+			want:        "awaiting_gate",
+		},
+		{
+			name:        "awaiting_pick: pipeline awaiting pick on this step",
+			step:        pipeline.Step{Index: 0, SessionID: "s0", Phase: "exited(0)"},
+			state:       pipeline.PipelineAwaitingPick,
+			currentStep: 0,
+			want:        "done", // isDonePhase takes precedence over awaiting_pick per the mirrored Swift order
+		},
+		{
+			name:        "failed: exited(1) phase",
+			step:        pipeline.Step{Index: 0, SessionID: "s0", Phase: "exited(1)"},
+			state:       pipeline.PipelineFailed,
+			currentStep: 0,
+			want:        "failed",
+		},
+		{
+			name:        "done: turn_complete phase (structured-chat backend)",
+			step:        pipeline.Step{Index: 0, SessionID: "s0", Phase: "turn_complete"},
+			state:       pipeline.PipelineComplete,
+			currentStep: 1,
+			want:        "done",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := stepDisplayStatus(tc.step, tc.state, tc.currentStep)
+			if got != tc.want {
+				t.Errorf("stepDisplayStatus() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // resolveConduitRoot attempts to determine the conduit root used by the test
 // server's session.Manager. Since we cannot reach into the session.Manager
 // from outside the package without refactoring, this returns "" and callers
