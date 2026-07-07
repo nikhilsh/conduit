@@ -194,6 +194,10 @@ fun ConduitToggleRow(
     subtitle: String? = null,
     iconTint: Color? = null,
     last: Boolean = false,
+    // Switch track color; defaults to the active accent. The flow gate
+    // toggle passes `neon.yellow` to read amber like its icon -- every
+    // other call site is unaffected by the default.
+    switchTint: Color? = null,
 ) {
     val neon = LocalNeonTheme.current
     ConduitRow(
@@ -206,7 +210,7 @@ fun ConduitToggleRow(
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(checkedTrackColor = neon.accent),
+            colors = SwitchDefaults.colors(checkedTrackColor = switchTint ?: neon.accent),
         )
     }
 }

@@ -1,6 +1,7 @@
 package sh.nikhil.conduit.ui.components
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -50,6 +51,11 @@ fun FlowCard(
     isContinuing: Boolean = false,
     onOpen: () -> Unit = {},
     onContinue: () -> Unit = {},
+    // design_handoff_flow audit §F: long-press to archive a terminal flow.
+    // null (default) keeps every existing call site's tap-only behavior
+    // byte-identical -- scoped to the SAME title/topo region as `onOpen`
+    // (not the whole card) so it doesn't fight the Review/Continue buttons.
+    onLongClick: (() -> Unit)? = null,
 ) {
     val neon = LocalNeonTheme.current
     val state = summary.state
@@ -102,7 +108,13 @@ fun FlowCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onOpen),
+                .let { m ->
+                    if (onLongClick != null) {
+                        m.combinedClickable(onClick = onOpen, onLongClick = onLongClick)
+                    } else {
+                        m.clickable(onClick = onOpen)
+                    }
+                },
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(

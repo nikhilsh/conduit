@@ -3,6 +3,7 @@ package sh.nikhil.conduit.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,22 +28,28 @@ import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.ui.components.ConduitChip
@@ -72,6 +79,10 @@ data class PipelineSummary(
     /** Diffstat-only recap, populated once the pipeline completes (broker
      *  #922). Null on an older broker or a pre-#906 pipeline. */
     val result: PipelineSummaryResult? = null,
+    /** Whether this flow has been archived (broker #932, `pipeline_archive`
+     *  capability). False on an older broker. Mirror of iOS
+     *  `PipelineSummary.archived`. */
+    val archived: Boolean = false,
 )
 
 /**
@@ -194,18 +205,34 @@ fun PipelineListScreen(
     onDismiss: () -> Unit = {},
 ) {
     val neon = LocalNeonTheme.current
+    val pipelineArchive by store.pipelineArchive.collectAsState()
     var pipelines by remember { mutableStateOf<List<PipelineSummary>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    // design_handoff_flow audit §F: smallest-viable way to see archived
+    // flows -- a toggle that refetches with include_archived=1. Off by
+    // default so the everyday list stays uncluttered.
+    var showArchived by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     suspend fun load() {
         isLoading = true
-        val fetched = store.refreshPipelines()
+        val fetched = store.refreshPipelines(includeArchived = showArchived)
         pipelines = fetched
         isLoading = false
-        Telemetry.breadcrumb("pipeline", "list opened", mapOf("count" to fetched.size.toString()))
+        Telemetry.breadcrumb("pipeline", "list opened", mapOf("count" to fetched.size.toString(), "includeArchived" to showArchived.toString()))
     }
 
-    LaunchedEffect(Unit) { load() }
+    fun setArchived(p: PipelineSummary, archived: Boolean) {
+        scope.launch {
+            val ok = store.setPipelineArchived(id = p.id, archived = archived)
+            if (ok) load()
+        }
+    }
+
+    // Reruns on toggle (and once on first composition) -- `load()` itself
+    // emits the "list opened" breadcrumb with the current includeArchived
+    // state, so no separate toggle breadcrumb is needed here.
+    LaunchedEffect(showArchived) { load() }
 
     Box(
         modifier = Modifier
@@ -239,6 +266,30 @@ fun PipelineListScreen(
                 )
             }
 
+            if (pipelineArchive) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 4.dp)
+                        .clickable { showArchived = !showArchived },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Show archived",
+                        fontFamily = neon.sans,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = neon.text,
+                        modifier = Modifier.weight(1f),
+                    )
+                    androidx.compose.material3.Switch(
+                        checked = showArchived,
+                        onCheckedChange = { showArchived = it },
+                        colors = androidx.compose.material3.SwitchDefaults.colors(checkedTrackColor = neon.accent),
+                    )
+                }
+            }
+
             when {
                 isLoading && pipelines.isEmpty() -> EmptyPipelines(neon, loading = true)
                 pipelines.isEmpty() -> EmptyPipelines(neon, loading = false)
@@ -253,6 +304,7 @@ fun PipelineListScreen(
                             PipelineListRow(
                                 pipeline = p,
                                 neon = neon,
+                                archiveEnabled = pipelineArchive,
                                 onTap = {
                                     Telemetry.breadcrumb(
                                         "pipeline", "reentered monitor",
@@ -260,6 +312,8 @@ fun PipelineListScreen(
                                     )
                                     onOpenPipeline(p.id, p.title.ifEmpty { "Flow" })
                                 },
+                                onArchive = { setArchived(p, true) },
+                                onUnarchive = { setArchived(p, false) },
                             )
                         }
                     }
@@ -304,37 +358,69 @@ private fun EmptyPipelines(neon: NeonTheme, loading: Boolean) {
 }
 
 @Composable
-private fun PipelineListRow(pipeline: PipelineSummary, neon: NeonTheme, onTap: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface)
-            .clickable(onClick = onTap)
-            .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                pipeline.title.ifEmpty { "Flow" },
-                fontFamily = neon.sans,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 14.sp,
-                color = neon.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(4.dp))
-            val stepCount = max(pipeline.stepCount, 1)
-            Text(
-                "Step ${min(pipeline.currentStep + 1, stepCount)} / $stepCount",
-                fontFamily = neon.mono,
-                fontSize = 11.sp,
-                color = neon.textDim,
-            )
+private fun PipelineListRow(
+    pipeline: PipelineSummary,
+    neon: NeonTheme,
+    onTap: () -> Unit,
+    archiveEnabled: Boolean = false,
+    onArchive: () -> Unit = {},
+    onUnarchive: () -> Unit = {},
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                // design_handoff_flow audit §F: archived rows render at
+                // reduced opacity so "Show archived" reads as a distinct,
+                // quieter set.
+                .alpha(if (pipeline.archived) 0.55f else 1f)
+                .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface)
+                .combinedClickable(onClick = onTap, onLongClick = { if (archiveEnabled) menuOpen = true })
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    pipeline.title.ifEmpty { "Flow" },
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    color = neon.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(4.dp))
+                val stepCount = max(pipeline.stepCount, 1)
+                Text(
+                    "Step ${min(pipeline.currentStep + 1, stepCount)} / $stepCount",
+                    fontFamily = neon.mono,
+                    fontSize = 11.sp,
+                    color = neon.textDim,
+                )
+            }
+            if (pipeline.archived) {
+                ConduitChip(label = "archived", tint = neon.textFaint)
+            }
+            PipelineListStateChip(state = pipeline.state, neon = neon)
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = neon.textFaint, modifier = Modifier.size(14.dp))
         }
-        PipelineListStateChip(state = pipeline.state, neon = neon)
-        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = neon.textFaint, modifier = Modifier.size(14.dp))
+        if (archiveEnabled) {
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                if (pipeline.archived) {
+                    DropdownMenuItem(
+                        text = { Text("Unarchive") },
+                        onClick = { menuOpen = false; onUnarchive() },
+                    )
+                } else if (PipelineListViewModel.group(pipeline.state) == PipelineListViewModel.Group.TERMINAL) {
+                    DropdownMenuItem(
+                        text = { Text("Archive") },
+                        onClick = { menuOpen = false; onArchive() },
+                    )
+                }
+            }
+        }
     }
 }
 

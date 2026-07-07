@@ -118,10 +118,24 @@ extension ConduitUI {
         private var agentField: some View {
             VStack(alignment: .leading, spacing: 8) {
                 sectionLabel("Agent")
-                let columns = [GridItem(.flexible()), GridItem(.flexible())]
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
-                    ForEach(agentOptions, id: \.self) { opt in
-                        agentTile(opt)
+                // Single row of equal-width tiles (design_handoff_flow audit
+                // §B.3) -- NOT a 2-column grid, which orphaned a 3rd tile on
+                // its own row. 4+ agents split into two balanced equal-width
+                // rows rather than shrinking to illegibility.
+                let opts = agentOptions
+                if opts.count <= 3 {
+                    HStack(spacing: 8) {
+                        ForEach(opts, id: \.self) { opt in agentTile(opt) }
+                    }
+                } else {
+                    let mid = (opts.count + 1) / 2
+                    VStack(spacing: 8) {
+                        HStack(spacing: 8) {
+                            ForEach(Array(opts.prefix(mid)), id: \.self) { opt in agentTile(opt) }
+                        }
+                        HStack(spacing: 8) {
+                            ForEach(Array(opts.suffix(from: mid)), id: \.self) { opt in agentTile(opt) }
+                        }
                     }
                 }
             }
@@ -221,7 +235,8 @@ extension ConduitUI {
                 title: "Pause for my approval",
                 subtitle: "pings your phone to continue",
                 isOn: step.gateAfter,
-                iconTint: neon.yellow
+                iconTint: neon.yellow,
+                switchTint: neon.yellow
             )
             .neonCardSurface(neon, fill: neon.surface2.opacity(0.5), cornerRadius: 12)
         }
@@ -240,7 +255,7 @@ extension ConduitUI {
                 Button {
                     advancedExpanded.toggle()
                 } label: {
-                    ConduitUI.ListRow(icon: "slider.horizontal.3", title: "Advanced", subtitle: "model \u{00B7} reasoning \u{00B7} permissions") {
+                    ConduitUI.ListRow(icon: "gearshape", title: "Advanced", subtitle: "model \u{00B7} reasoning \u{00B7} permissions") {
                         Image(systemName: advancedExpanded ? "chevron.up" : "chevron.down")
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(neon.textDim)

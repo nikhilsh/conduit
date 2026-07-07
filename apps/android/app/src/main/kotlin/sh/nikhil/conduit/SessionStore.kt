@@ -4900,6 +4900,15 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _pipelineResult = MutableStateFlow(false)
     val pipelineResult: StateFlow<Boolean> = _pipelineResult.asStateFlow()
 
+    /**
+     * Whether the broker supports archiving terminal flows
+     * (`GET /api/capabilities` -> `"pipeline_archive": true`, broker #932).
+     * False on old brokers; the Archive/Unarchive affordances hide when
+     * false. Mirror of iOS `SessionStore.pipelineArchive`.
+     */
+    private val _pipelineArchive = MutableStateFlow(false)
+    val pipelineArchive: StateFlow<Boolean> = _pipelineArchive.asStateFlow()
+
     /** Broker advertises transactional mid-session agent switching. */
     private val _switchAgentSupported = MutableStateFlow(false)
     val switchAgentSupported: StateFlow<Boolean> = _switchAgentSupported.asStateFlow()
@@ -5013,6 +5022,10 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // pipeline_result: Monitor Result card on completion; default false on old brokers.
         _pipelineResult.value = runCatching {
             JSONObject(raw).optBoolean("pipeline_result", false)
+        }.getOrDefault(false)
+        // pipeline_archive: archive/unarchive terminal flows (broker #932); default false on old brokers.
+        _pipelineArchive.value = runCatching {
+            JSONObject(raw).optBoolean("pipeline_archive", false)
         }.getOrDefault(false)
     }
 
@@ -5426,14 +5439,15 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * became unreachable the moment its creation sheet was dismissed even
      * though the broker kept it running.
      */
-    suspend fun refreshPipelines(): List<sh.nikhil.conduit.ui.PipelineSummary> = withContext(Dispatchers.IO) {
+    suspend fun refreshPipelines(includeArchived: Boolean = false): List<sh.nikhil.conduit.ui.PipelineSummary> = withContext(Dispatchers.IO) {
         if (_isDemoMode.value) {
             return@withContext DemoData.pipelines
         }
         val ep = _endpoint.value
-        val raw = getJsonOrNull(ep, "/api/pipelines")
+        val path = if (includeArchived) "/api/pipelines?include_archived=1" else "/api/pipelines"
+        val raw = getJsonOrNull(ep, path)
         if (raw == null) {
-            Telemetry.breadcrumb("pipeline", "list fetch failed", mapOf("host" to ep.displayHost))
+            Telemetry.breadcrumb("pipeline", "list fetch failed", mapOf("host" to ep.displayHost, "includeArchived" to includeArchived.toString()))
             return@withContext emptyList()
         }
         val parsed = runCatching<List<sh.nikhil.conduit.ui.PipelineSummary>> {
@@ -5471,6 +5485,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     created = o.optString("created", "").takeIf { it.isNotEmpty() },
                     steps = steps,
                     result = result,
+                    archived = o.optBoolean("archived", false),
                 )
             }
         }.getOrNull()
@@ -5479,6 +5494,54 @@ class SessionStore : ViewModel(), ConduitDelegate {
             return@withContext emptyList()
         }
         parsed
+    }
+
+    /**
+     * Archive (or unarchive) a terminal flow (`POST
+     * /api/pipeline/{id}/archive|unarchive`, broker #932 -- gated on
+     * [pipelineArchive]). Returns true on success; best-effort, mirrors the
+     * `continueFlow`-style POST pattern.
+     */
+    suspend fun setPipelineArchived(id: String, archived: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val ep = _endpoint.value
+        val base = ep.httpBaseUrl ?: return@withContext false
+        val action = if (archived) "archive" else "unarchive"
+        Telemetry.breadcrumb("pipeline", if (archived) "archive_tapped" else "unarchive_tapped", mapOf("id" to id))
+        runCatching {
+            val conn = (URL("$base/api/pipeline/$id/$action").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("Authorization", "Bearer ${ep.token}")
+                setRequestProperty("Content-Type", "application/json")
+                doOutput = true
+                connectTimeout = 7_000
+                readTimeout = 10_000
+            }
+            try {
+                conn.outputStream.use { it.write("{}".toByteArray()) }
+                val ok = conn.responseCode in 200..299
+                if (ok) {
+                    Telemetry.breadcrumb("pipeline", if (archived) "archive_ok" else "unarchive_ok", mapOf("id" to id))
+                } else {
+                    Telemetry.capture(
+                        RuntimeException("flow archive toggle failed"),
+                        message = "flow archive toggle failed",
+                        tags = mapOf("surface" to "android", "phase" to "pipeline"),
+                        extras = mapOf("id" to id, "archived" to archived.toString(), "status" to conn.responseCode.toString()),
+                    )
+                }
+                ok
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrElse { e ->
+            Telemetry.capture(
+                e,
+                message = "flow archive toggle network error",
+                tags = mapOf("surface" to "android", "phase" to "pipeline"),
+                extras = mapOf("id" to id, "archived" to archived.toString()),
+            )
+            false
+        }
     }
 
     /**

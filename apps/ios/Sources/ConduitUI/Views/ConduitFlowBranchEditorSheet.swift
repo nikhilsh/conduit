@@ -45,7 +45,7 @@ extension ConduitUI {
                     }
                     .scrollIndicators(.hidden)
                 }
-                .navigationTitle("If / Else")
+                .navigationTitle("New step \u{00B7} If / Else")
                 .navigationBarTitleDisplayMode(.inline)
                 .safeAreaInset(edge: .bottom) { footer }
             }
@@ -122,13 +122,10 @@ extension ConduitUI {
                     ForEach(step.wrappedValue.branchThen) { sub in
                         subStepRow(sub, arm: .then)
                     }
-                    Button {
+                    addStepGhostButton(tint: neon.green) {
                         viewModel.addSubStep(stepID: stepID, arm: .then)
                         Telemetry.breadcrumb("flow_wizard", "branch then add", data: [:])
-                    } label: {
-                        Text("+ Add step").font(neon.sans(12.5).weight(.semibold)).foregroundStyle(neon.green)
                     }
-                    .buttonStyle(.plain)
                 }
                 .padding(.leading, 12)
                 .overlay(Rectangle().fill(neon.green.opacity(0.27)).frame(width: 2), alignment: .leading)
@@ -151,17 +148,30 @@ extension ConduitUI {
                             subStepRow(sub, arm: .elseArm)
                         }
                     }
-                    Button {
+                    addStepGhostButton(tint: neon.textDim) {
                         viewModel.addSubStep(stepID: stepID, arm: .elseArm)
                         Telemetry.breadcrumb("flow_wizard", "branch else add", data: [:])
-                    } label: {
-                        Text("+ Add step").font(neon.sans(12.5).weight(.semibold)).foregroundStyle(neon.textDim)
                     }
-                    .buttonStyle(.plain)
                 }
                 .padding(.leading, 12)
                 .overlay(Rectangle().fill(neon.lineSoft).frame(width: 2), alignment: .leading)
             }
+        }
+
+        /// design_handoff_flow audit §D.13: shared ghost-button styling
+        /// (plus glyph + label, no fill) for the THEN/ELSE "+ Add step"
+        /// rows -- THEN reads in green, ELSE stays faint.
+        private func addStepGhostButton(tint: Color, action: @escaping () -> Void) -> some View {
+            Button(action: action) {
+                HStack(spacing: 5) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Add step")
+                }
+                .font(neon.sans(12.5).weight(.semibold))
+                .foregroundStyle(tint)
+            }
+            .buttonStyle(.plain)
         }
 
         @ViewBuilder
@@ -192,19 +202,17 @@ extension ConduitUI {
         private var footer: some View {
             VStack(spacing: 0) {
                 Rectangle().fill(neon.border).frame(height: 1)
+                // design_handoff_flow audit §D.12: Discard reads as a
+                // secondary (red) button at 1:2 width against the primary
+                // "Add to flow" -- HStack layoutPriority alone can't express
+                // a ratio, so Discard is pinned to a third of the row.
                 HStack(spacing: 10) {
-                    Button {
+                    ConduitUI.ActionButton("Discard", variant: .secondary, tint: neon.red) {
                         Telemetry.breadcrumb("flow_wizard", "branch discard", data: [:])
                         viewModel.removeStep(id: stepID)
                         dismiss()
-                    } label: {
-                        Text("Discard")
-                            .font(neon.sans(14).weight(.semibold))
-                            .foregroundStyle(neon.red)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
                     }
-                    .buttonStyle(.plain)
+                    .frame(width: discardWidth)
 
                     ConduitUI.ActionButton("Add to flow", variant: .primary, tint: neon.accent) {
                         dismiss()
@@ -213,8 +221,24 @@ extension ConduitUI {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { footerWidth = geo.size.width }
+                            .onChange(of: geo.size.width) { _, newValue in footerWidth = newValue }
+                    }
+                )
             }
             .background(neon.bg.ignoresSafeArea(edges: .bottom))
+        }
+
+        @State private var footerWidth: CGFloat = 0
+        private var discardWidth: CGFloat {
+            // 1:2 ratio vs "Add to flow" -- Discard is one third of the row
+            // (footerWidth already includes the 10pt inter-button spacing),
+            // falling back to a sane fixed width before the first layout
+            // pass reports a real size.
+            footerWidth > 0 ? max(80, (footerWidth - 10) / 3) : 100
         }
     }
 }

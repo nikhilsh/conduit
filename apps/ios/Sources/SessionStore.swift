@@ -2239,6 +2239,12 @@ final class SessionStore {
     /// even if the pipeline is complete.
     private(set) var pipelineResult: Bool = false
 
+    /// Whether the broker supports archiving terminal flows
+    /// (`GET /api/capabilities` -> `"pipeline_archive": true`, broker #932).
+    /// False on old brokers; the Archive/Unarchive affordances hide when
+    /// false so an old broker never sees dead UI.
+    private(set) var pipelineArchive: Bool = false
+
     /// Single-flight + at-most-once-per-(box,version) guard for the
     /// post-connect broker auto-update (Fix: broker auto-update on reconnect).
     /// `reconnect()`/`selectSavedServer()` short-circuit to a WS-only bounce
@@ -2283,6 +2289,7 @@ final class SessionStore {
             let pipeline_branch: Bool?
             let pipeline_loop: Bool?
             let pipeline_result: Bool?
+            let pipeline_archive: Bool?
         }
         Telemetry.breadcrumb(
             "model_catalog", "refresh start",
@@ -2341,6 +2348,8 @@ final class SessionStore {
         pipelineLoop = caps.pipeline_loop ?? false
         // pipeline_result: Monitor Result card on completion; default false on old brokers.
         pipelineResult = caps.pipeline_result ?? false
+        // pipeline_archive: archive/unarchive terminal flows (broker #932); default false on old brokers.
+        pipelineArchive = caps.pipeline_archive ?? false
 
         // WS-H.1: parse the readiness block; nil on old brokers → consumers treat as unknown.
         if let r = caps.readiness {
@@ -2850,20 +2859,68 @@ final class SessionStore {
     /// app-side consumer of `GET /api/pipelines`; before it, a pipeline
     /// became unreachable the moment its creation sheet was dismissed even
     /// though the broker kept it running.
-    func refreshPipelines() async -> [ConduitUI.PipelineSummary] {
+    func refreshPipelines(includeArchived: Bool = false) async -> [ConduitUI.PipelineSummary] {
         if isDemoMode {
             return DemoData.pipelines
         }
-        guard let data = await getJSON(endpoint: endpoint, path: "/api/pipelines") else {
-            Telemetry.breadcrumb("pipeline", "list fetch failed", data: ["host": endpoint.displayHost])
+        let path = includeArchived ? "/api/pipelines?include_archived=1" : "/api/pipelines"
+        guard let data = await getJSON(endpoint: endpoint, path: path) else {
+            Telemetry.breadcrumb("pipeline", "list fetch failed", data: ["host": endpoint.displayHost, "includeArchived": "\(includeArchived)"])
             return []
         }
         struct Envelope: Decodable { let pipelines: [ConduitUI.PipelineSummary] }
         guard let parsed = try? JSONDecoder().decode(Envelope.self, from: data) else {
-            Telemetry.breadcrumb("pipeline", "list decode failed", data: ["host": endpoint.displayHost])
+            Telemetry.breadcrumb("pipeline", "list decode failed", data: ["host": endpoint.displayHost, "includeArchived": "\(includeArchived)"])
             return []
         }
         return parsed.pipelines
+    }
+
+    /// Archive (or unarchive) a terminal flow (`POST
+    /// /api/pipeline/{id}/archive|unarchive`, broker #932 -- gated on
+    /// `pipelineArchive`). Returns true on success; best-effort, mirrors the
+    /// `continueFlow` POST pattern. Old brokers reject archive-only-on-
+    /// terminal server-side; the app also only offers the action on
+    /// terminal flows.
+    @discardableResult
+    func setPipelineArchived(id: String, archived: Bool) async -> Bool {
+        let endpoint = self.endpoint
+        guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return false }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/pipeline/\(id)/\(archived ? "archive" : "unarchive")"
+        guard let url = components?.url else { return false }
+
+        Telemetry.breadcrumb("pipeline", archived ? "archive tapped" : "unarchive tapped", data: ["id": id])
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 15
+        req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = Data("{}".utf8)
+
+        do {
+            let (_, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                Telemetry.capture(
+                    error: NSError(domain: "ios.pipeline", code: 13,
+                        userInfo: [NSLocalizedDescriptionKey: "flow archive toggle failed"]),
+                    message: "flow archive toggle failed",
+                    tags: ["surface": "ios", "phase": "pipeline"],
+                    extras: ["id": id, "archived": "\(archived)"]
+                )
+                return false
+            }
+            Telemetry.breadcrumb("pipeline", archived ? "archive ok" : "unarchive ok", data: ["id": id])
+            return true
+        } catch {
+            Telemetry.capture(
+                error: error,
+                message: "flow archive toggle network error",
+                tags: ["surface": "ios", "phase": "pipeline"],
+                extras: ["id": id, "archived": "\(archived)"]
+            )
+            return false
+        }
     }
 
     /// Fetch a session's persisted transcript read-only over HTTP

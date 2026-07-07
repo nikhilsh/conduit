@@ -1,6 +1,7 @@
 package sh.nikhil.conduit.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,7 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -428,7 +429,7 @@ private fun TaskStep(
                 // subtitle, chevron.
                 ConduitCard(modifier = Modifier.clickable(onClick = onWhereClick)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Folder, contentDescription = null, tint = neon.accent, modifier = Modifier.size(20.dp))
+                        Icon(Icons.Default.Storage, contentDescription = null, tint = neon.green, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(whereTitle, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = neon.text)
@@ -520,7 +521,9 @@ private fun StepsStep(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                GateGlyph(size = 12.dp)
+                if (gateCount > 0) {
+                    GateGlyph(size = 12.dp)
+                }
                 val caption = when {
                     gateCount == 0 -> "runs end-to-end — no gates"
                     gateCount == 1 -> "pauses once for your approval"
@@ -593,7 +596,9 @@ private fun Connector(neon: NeonTheme, gateAfter: Boolean) {
         if (gateAfter) {
             GatePill(label = "Gate — you approve", active = true)
         } else {
-            Text("passes work down ↓", fontFamily = neon.mono, fontSize = 11.sp, color = neon.textFaint)
+            // design_handoff_flow audit §C.9: the ghost token reads quieter
+            // than textFaint for this decorative caption.
+            Text("passes work down ↓", fontFamily = neon.mono, fontSize = 11.sp, color = neon.ghost)
         }
     }
 }
@@ -612,9 +617,9 @@ private fun AddStepControl(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            PillChoice(neon, "Agent step", onAgentStep)
-            PillChoice(neon, "If / Else", onBranchStep)
-            PillChoice(neon, "Cancel", onCancel)
+            PillChoice(neon, "Agent step", accent = true, onClick = onAgentStep)
+            PillChoice(neon, "If / Else", accent = true, onClick = onBranchStep)
+            PillChoice(neon, "Cancel", accent = false, onClick = onCancel)
         }
     } else {
         Row(
@@ -622,21 +627,32 @@ private fun AddStepControl(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Default.Add, contentDescription = null, tint = neon.textDim, modifier = Modifier.size(14.dp))
+            Icon(Icons.Default.Add, contentDescription = null, tint = neon.accent, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(6.dp))
-            Text("Add step", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = neon.textDim)
+            Text("Add step", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = neon.accent)
         }
     }
 }
 
+/** design_handoff_flow audit §C.7: the two committing choices ("Agent step" /
+ *  "If / Else") read as accent-tinted pills; "Cancel" stays a neutral
+ *  hairline pill. */
 @Composable
-private fun PillChoice(neon: NeonTheme, label: String, onClick: () -> Unit) {
+private fun PillChoice(neon: NeonTheme, label: String, accent: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(percent = 50)
     Box(
         modifier = Modifier
-            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(percent = 50))
+            .background(if (accent) neon.accent.copy(alpha = 0.08f) else Color.Transparent, shape)
+            .border(1.dp, if (accent) neon.accent.copy(alpha = 0.4f) else neon.lineSoft, shape)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
-        Text(label, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 12.5.sp, color = neon.text)
+        Text(
+            label,
+            fontFamily = neon.sans,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 12.5.sp,
+            color = if (accent) neon.accent else neon.textFaint,
+        )
     }
 }
