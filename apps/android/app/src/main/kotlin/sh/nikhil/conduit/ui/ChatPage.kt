@@ -118,6 +118,8 @@ import sh.nikhil.conduit.auth.OAuthProvider
 import sh.nikhil.conduit.descriptorFor
 import sh.nikhil.conduit.sortedByConversationTs
 import sh.nikhil.conduit.stripPendingSentinel
+import sh.nikhil.conduit.ui.components.ConduitRunningPill
+import sh.nikhil.conduit.ui.components.runningTaskCount
 import kotlinx.coroutines.launch
 import uniffi.conduit_core.ChatEvent
 import uniffi.conduit_core.ConversationItem
@@ -463,6 +465,10 @@ fun ChatPage(
     val credentialSourceMap by store.credentialSource.collectAsState()
     // §D 401 handling: "Sign in on this box" banner state.
     val agentAuthFailureMap by store.agentAuthFailure.collectAsState()
+    // Running-tasks pill above the composer (design handoff session_tasks
+    // PR2). Gate data doesn't exist yet -- gatedCount is always 0 here.
+    val subagentRosterMap by store.subagentRoster.collectAsState()
+    var showTasksSheet by remember { mutableStateOf(false) }
     var showAgentLogin by remember { mutableStateOf(false) }
     var loginAutoStartProvider by remember { mutableStateOf<OAuthProvider?>(null) }
     val listState = rememberLazyListState()
@@ -1129,6 +1135,23 @@ fun ChatPage(
                         modifier = if (isTablet) Modifier.widthIn(max = chatContentMaxWidth) else Modifier,
                     )
                 }
+            }
+            // Running-tasks pill -- live count of this session's background
+            // tasks from the subagent roster (design handoff session_tasks
+            // PR2). Gate data doesn't exist yet, so gatedCount is always 0;
+            // tapping only records `showTasksSheet` -- the sheet itself is
+            // wired in a follow-up PR.
+            val runningCount = remember(subagentRosterMap, session.id) {
+                runningTaskCount(subagentRosterMap[session.id]?.map { it.status } ?: emptyList())
+            }
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.TopStart,
+            ) {
+                ConduitRunningPill(
+                    runningCount = runningCount,
+                    onTap = { showTasksSheet = true },
+                )
             }
             ConversationComposer(
                 draft = draft,

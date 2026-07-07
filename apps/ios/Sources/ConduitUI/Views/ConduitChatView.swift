@@ -148,6 +148,10 @@ extension ConduitUI {
         /// §D 401 handling: present the agent login sheet when the user taps
         /// "Sign in on this box" on the agent-auth-failure banner.
         @State private var showAgentLogin = false
+        /// RunningPill tap target (design handoff session_tasks PR2). No
+        /// sheet is attached yet -- a follow-up PR wires the Tasks sheet;
+        /// this only records the tap so it isn't silently dropped.
+        @State private var showTasksSheet = false
         /// Consumed by AgentLoginSheet before OAuth starts so a sheet rebuild
         /// after the browser closes cannot launch the provider a second time.
         @State private var loginAutoStartProvider: OAuthProvider?
@@ -1387,12 +1391,42 @@ extension ConduitUI {
             }
         }
 
+        // MARK: - Running-tasks pill
+
+        /// Count of this session's background tasks currently "running",
+        /// from the live subagent roster (design handoff session_tasks
+        /// PR2). Gate data doesn't exist yet, so the pill's `gatedCount`
+        /// stays 0 at this call site.
+        private var runningTaskCount: Int {
+            SubagentEntry.runningCount(in: store.subagentRosters[session.id] ?? [])
+        }
+
+        /// Left-aligned row hosting the RunningPill above the composer.
+        /// The pill itself hides when there's nothing running/gated, so
+        /// this row reserves no space in that case.
+        private var runningPillRow: some View {
+            HStack {
+                ConduitUI.RunningPill(
+                    runningCount: runningTaskCount,
+                    onTap: { showTasksSheet = true }
+                )
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+        }
+
         private var composer: some View {
             VStack(alignment: .leading, spacing: 0) {
                 // "Queued Next" panel: sits above the composer text field,
                 // below any plan/turn-progress UI, visible only while a turn
                 // is active and the user has queued messages.
                 queuedNextPanel
+
+                // RunningPill: persistent capsule showing this session's
+                // live background-task count, sits below "Queued Next" and
+                // above any attach-error/chip row.
+                runningPillRow
 
                 // Picked-file chips + any transient pick/upload error
                 // ride ABOVE the text field so they don't crowd the

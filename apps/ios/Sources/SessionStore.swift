@@ -854,6 +854,14 @@ struct SubagentEntry: Equatable, Identifiable {
         else { return nil }
         return arr.compactMap { SubagentEntry.from(json: $0) }
     }
+
+    /// Count entries whose status counts as "running" for the chat's
+    /// RunningPill (design handoff session_tasks PR2) -- currently just
+    /// "working"; there is no "gate" status in the roster yet, so gated
+    /// counts stay a caller-supplied 0 until that lands.
+    static func runningCount(in roster: [SubagentEntry]) -> Int {
+        roster.filter { $0.status == "working" }.count
+    }
 }
 
 /// One live connection to a single box, owned by `SessionStore` when the
