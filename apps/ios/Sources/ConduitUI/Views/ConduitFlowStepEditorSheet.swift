@@ -130,6 +130,13 @@ extension ConduitUI {
         @ViewBuilder
         private func agentTile(_ opt: String) -> some View {
             let selected = step.wrappedValue.agentType == opt
+            // Design C1 (design_handoff_flow README screen 5 /
+            // flow-proto-editors.jsx): selected = per-agent tint at a soft
+            // fill + a ~40%-tint border + glow, label in the agent's own
+            // tint -- NOT a solid `neon.accent` pill (device feedback: that
+            // rendered as a flat cyan pill with black text, unrelated to
+            // the agent being picked). Unselected stays a neutral surface.
+            let tint = neon.agentTint(forAgent: opt)
             Button {
                 step.wrappedValue.agentType = opt
             } label: {
@@ -142,16 +149,16 @@ extension ConduitUI {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
-                .foregroundStyle(selected ? neon.accentText : neon.textDim)
+                .foregroundStyle(selected ? tint : neon.textDim)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(selected ? neon.accent : Color.clear)
+                        .fill(selected ? tint.opacity(0.11) : neon.surface)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(selected ? neon.accent.opacity(0.4) : neon.lineSoft, lineWidth: 1)
+                        .stroke(selected ? tint.opacity(0.4) : neon.lineSoft, lineWidth: 1)
                 )
-                .neonGlowBox(selected && neon.glow ? neon.glowBox?.tinted(neon.accent) : nil)
+                .neonGlowBox(selected && neon.glow ? neon.glowBox?.tinted(tint) : nil)
             }
             .buttonStyle(.plain)
         }

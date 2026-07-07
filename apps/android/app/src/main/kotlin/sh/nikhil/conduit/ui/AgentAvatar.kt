@@ -74,11 +74,15 @@ fun AgentAvatar(
         contentAlignment = Alignment.Center,
     ) {
         when {
+            // Divided by the optical-size correction (device feedback:
+            // gemini/opencode read visibly smaller than claude/codex at the
+            // same padding, since the source art isn't uniformly cropped)
+            // so every agent occupies the same visual weight.
             logoRes != null -> Image(
                 painter = painterResource(logoRes),
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize().padding(size * 0.16f),
+                modifier = Modifier.fillMaxSize().padding(size * 0.16f / agentGlyphRenderScale(assistant)),
             )
             glyph != null -> Icon(
                 // Claude / Codex get a distinctive brand glyph; other
@@ -135,10 +139,14 @@ fun AgentGlyph(
                 // (BlendMode.SrcIn) replaces the source color entirely
                 // using only the drawable's alpha, so this tints cleanly
                 // even though the source PNG isn't a pure single color.
+                // Scaled by the same optical-size correction as
+                // [AgentAvatar] so gemini/opencode don't read smaller than
+                // claude/codex; stays well inside the outer `size` Box, so
+                // this can't overflow/clip.
                 painter = painterResource(logoRes),
                 contentDescription = null,
                 tint = tint,
-                modifier = Modifier.size(size * 0.62f),
+                modifier = Modifier.size(size * 0.62f * agentGlyphRenderScale(assistant)),
             )
             glyph != null -> Icon(
                 imageVector = glyph,
@@ -180,6 +188,23 @@ private fun agentLogoRes(assistant: String): Int? {
     val ctx = LocalContext.current
     return ctx.resources.getIdentifier(name, "drawable", ctx.packageName).takeIf { it != 0 }
 }
+
+/**
+ * Per-agent optical-size correction for the bundled brand-mark drawables.
+ * The source art isn't uniformly cropped -- gemini's and opencode's marks
+ * carry more effective padding than claude's/codex's at the same
+ * `ContentScale.Fit` frame, so they read visibly smaller even in an
+ * identical container (device feedback). Applied as an extra multiplier by
+ * both [AgentAvatar] and [AgentGlyph] so every agent's logo occupies
+ * roughly the same optical weight at any size. `1f` is a no-op; only the
+ * two under-sized marks are scaled up. Mirror of iOS
+ * `AgentAvatar.glyphRenderScale(forAgent:)`.
+ */
+private fun agentGlyphRenderScale(assistant: String): Float =
+    when (assistant.lowercase()) {
+        "gemini", "opencode" -> 1.25f
+        else -> 1f
+    }
 
 /**
  * Per-agent brand glyph. Claude → a sparkle, Codex → the code-brackets

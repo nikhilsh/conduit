@@ -115,11 +115,16 @@ struct ConduitPipelineListViewModelTests {
 
     // MARK: - Home affordance gate
 
-    @Test func homeAffordanceGatesOnExactlyThreeActiveStates() {
+    @Test func homeAffordanceGatesOnAllNonTerminalStates() {
+        // A just-started flow (`pending`) and the brief inter-step window
+        // (`step_done`) must qualify too -- device feedback: the FLOWS
+        // section never appeared for a live flow because these two were
+        // excluded.
+        #expect(ConduitUI.PipelineListViewModel.isActiveForHomeAffordance("pending"))
         #expect(ConduitUI.PipelineListViewModel.isActiveForHomeAffordance("running"))
+        #expect(ConduitUI.PipelineListViewModel.isActiveForHomeAffordance("step_done"))
         #expect(ConduitUI.PipelineListViewModel.isActiveForHomeAffordance("awaiting_gate"))
         #expect(ConduitUI.PipelineListViewModel.isActiveForHomeAffordance("awaiting_pick"))
-        #expect(!ConduitUI.PipelineListViewModel.isActiveForHomeAffordance("pending"))
         #expect(!ConduitUI.PipelineListViewModel.isActiveForHomeAffordance("complete"))
         #expect(!ConduitUI.PipelineListViewModel.isActiveForHomeAffordance("failed"))
         #expect(!ConduitUI.PipelineListViewModel.isActiveForHomeAffordance("cancelled"))

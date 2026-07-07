@@ -1,6 +1,7 @@
 package sh.nikhil.conduit.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -246,11 +247,23 @@ private fun SectionLabel(neon: NeonTheme, text: String) {
 
 @Composable
 private fun AgentTile(neon: NeonTheme, label: String, selected: Boolean, onClick: () -> Unit) {
+    // Design C1 (design_handoff_flow README screen 5 / flow-proto-editors.jsx):
+    // selected = per-agent tint at a soft fill + a ~40%-tint border + label
+    // in the agent's own tint -- NOT a solid `neon.accent` pill (device
+    // feedback: iOS's mirror rendered a flat cyan pill with black text,
+    // unrelated to the agent picked; Android had the same bug). Unselected
+    // stays a neutral surface with a hairline border.
+    val tint = neonAgentColor(label, neon)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(
-                if (selected) neon.accent else androidx.compose.ui.graphics.Color.Transparent,
+                if (selected) tint.copy(alpha = 0.11f) else neon.surface,
+                RoundedCornerShape(12.dp),
+            )
+            .border(
+                1.dp,
+                if (selected) tint.copy(alpha = 0.4f) else neon.lineSoft,
                 RoundedCornerShape(12.dp),
             )
             .clickable(onClick = onClick)
@@ -265,7 +278,7 @@ private fun AgentTile(neon: NeonTheme, label: String, selected: Boolean, onClick
             fontFamily = neon.mono,
             fontWeight = FontWeight.SemiBold,
             fontSize = 12.sp,
-            color = if (selected) neon.accentText else neon.textDim,
+            color = if (selected) tint else neon.textDim,
         )
     }
 }

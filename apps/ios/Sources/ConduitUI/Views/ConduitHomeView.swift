@@ -24,6 +24,7 @@ extension ConduitUI {
         @Environment(AppearanceStore.self) private var appearance
         @Environment(\.colorScheme) private var colorScheme
         @Environment(\.neonTheme) private var neon
+        @Environment(\.scenePhase) private var scenePhase
 
         @State private var showSettings = false
         @State private var showAddServer = false
@@ -77,6 +78,13 @@ extension ConduitUI {
         /// Flow ids with a "Continue" (gate approval) request in flight --
         /// drives the inline `FlowCard` spinner/disabled state.
         @State private var continuingFlowIDs: Set<String> = []
+        /// Home FLOWS device-feedback fix: the one-shot `.task(id:)` fetch
+        /// never saw a flow started via the wizard, a broker-side state
+        /// change, or a return from the monitor -- the section just stayed
+        /// hidden. A modest 12s tick while Home is visible (same order as
+        /// other Home polling) plus onAppear/scenePhase/wizard-completion
+        /// hooks below keep it current without a dedicated push channel.
+        private let flowSummaryTicker = Timer.publish(every: 12, on: .main, in: .common).autoconnect()
 
         // MARK: Flow (pipeline v2) Start sheet + wizard
         //
@@ -259,9 +267,12 @@ extension ConduitUI {
                     .presentationCornerRadius(26)
                 }
                 .sheet(isPresented: $showFlowWizard) {
-                    ConduitUI.FlowWizardView(prefill: flowWizardPrefill)
-                        .environment(store)
-                        .presentationDetents([.large])
+                    ConduitUI.FlowWizardView(
+                        prefill: flowWizardPrefill,
+                        onFlowStarted: { Task { await refreshFlowSummaries() } }
+                    )
+                    .environment(store)
+                    .presentationDetents([.large])
                 }
                 .sheet(isPresented: $showPipelineList) {
                     // Lists pipelines (`GET /api/pipelines`) and reopens the
@@ -357,14 +368,27 @@ extension ConduitUI {
                     } else if store.harness == .disconnected {
                         store.connect()
                     }
+                    // Home FLOWS device-feedback fix: re-check every time Home
+                    // (re)appears -- e.g. popping back from the pipeline
+                    // monitor `navigationDestination` -- not just on first mount.
+                    Task { await refreshFlowSummaries() }
                 }
                 .task(id: store.endpoint.displayHost) {
-                    // Active-pipeline affordance: refresh on appear / box
-                    // switch only -- no polling loop while Home just sits
-                    // idle. Gated on the broker's `pipeline` capability so
-                    // old brokers stay silent.
-                    guard store.pipelinesEnabled, store.endpoint.isComplete else { return }
-                    pipelineSummaries = await store.refreshPipelines()
+                    // Active-pipeline affordance: refresh on box switch.
+                    // Gated on the broker's `pipeline` capability so old
+                    // brokers stay silent. Ongoing refresh while Home sits
+                    // idle now comes from the onAppear/scenePhase/ticker
+                    // hooks below (device feedback: this used to be the
+                    // ONLY fetch, so a started/finished flow never surfaced).
+                    await refreshFlowSummaries()
+                }
+                .onChange(of: scenePhase) { _, newPhase in
+                    if newPhase == .active {
+                        Task { await refreshFlowSummaries() }
+                    }
+                }
+                .onReceive(flowSummaryTicker) { _ in
+                    Task { await refreshFlowSummaries() }
                 }
                 .tint(neon.accent)
             }
@@ -710,6 +734,18 @@ extension ConduitUI {
         /// just one `FlowCard` per flow instead of one collapsed banner.
         private var homeFlows: [ConduitUI.PipelineSummary] {
             ConduitUI.PipelineListViewModel.sorted(activePipelines + recentTerminalPipelines)
+        }
+
+        /// Refreshes the Home FLOWS affordance's pipeline summaries
+        /// (`GET /api/pipelines`). Gated on the broker's `pipeline`
+        /// capability + a complete endpoint, same guard the original
+        /// one-shot `.task(id:)` fetch used. Called from every place a flow
+        /// can transition without Home already re-rendering from a WS push:
+        /// initial appear, home reappearing, scenePhase -> active, a modest
+        /// periodic tick, and right after the wizard starts a flow.
+        private func refreshFlowSummaries() async {
+            guard store.pipelinesEnabled, store.endpoint.isComplete else { return }
+            pipelineSummaries = await store.refreshPipelines()
         }
 
         /// Inline "Continue" (gate approval) from a Home `FlowCard` --

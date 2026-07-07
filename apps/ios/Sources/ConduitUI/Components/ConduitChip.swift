@@ -32,21 +32,27 @@ extension ConduitUI {
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .foregroundStyle(foreground)
-            .conduitGlassCapsule(tint: capsuleTint)
+            .background {
+                // Selected chips need a genuinely SOLID bright fill for
+                // contrast (device feedback: the step editor's selected
+                // ROLE chip rendered dark-on-dark). `conduitGlassCapsule`'s
+                // tint overlay is a translucent 6% wash over the dark glass
+                // material -- fine for the unselected soft-chip look, but
+                // not solid enough to pair with a bright `accentText`
+                // label. Draw the solid fill ourselves underneath the glass
+                // layer instead.
+                if isSelected {
+                    Capsule().fill(tint ?? neon.accent)
+                }
+            }
+            .conduitGlassCapsule(tint: isSelected ? nil : tint)
         }
 
         private var foreground: Color {
             if isSelected {
-                return ConduitUI.Palette.textOnAccent.color
+                return neon.accentText
             }
             return tint ?? ConduitUI.Palette.textPrimary.color
-        }
-
-        private var capsuleTint: Color? {
-            if isSelected {
-                return tint ?? neon.accent
-            }
-            return tint
         }
     }
 }

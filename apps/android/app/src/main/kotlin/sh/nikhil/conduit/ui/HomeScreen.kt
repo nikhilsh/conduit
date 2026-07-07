@@ -53,6 +53,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -62,9 +63,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -139,6 +144,11 @@ fun HomeScreen(
     // Opens the onboarding guide from the no-boxes CTA. Default no-op so
     // existing call sites compile without change.
     onOpenOnboarding: () -> Unit = {},
+    // Home FLOWS device-feedback fix: bumped by the caller (AppRoot) right
+    // after a flow is created or its monitor/wizard is dismissed, so the
+    // FLOWS section refreshes without waiting for the periodic tick below.
+    // Default 0 so existing call sites compile without change.
+    refreshPipelinesTick: Int = 0,
 ) {
     val endpoint by store.endpoint.collectAsState()
     val harness by store.harness.collectAsState()
@@ -164,15 +174,46 @@ fun HomeScreen(
     val brokerReadiness by store.brokerReadiness.collectAsState()
     val pendingBrokerUpdate by store.pendingBrokerUpdate.collectAsState()
 
-    // Active-pipeline affordance: refresh on appear / box switch only -- no
-    // polling loop while Home just sits idle. Gated on the broker's
+    // Active-pipeline affordance (device feedback: the FLOWS section never
+    // appeared for a live flow -- the original fetch ran ONCE on appear /
+    // box switch and never again, so starting a flow, backing out of the
+    // monitor, or a broker-side state change never refreshed it). Now
+    // refreshed on appear/box-switch, on every ON_RESUME (mirrors iOS
+    // scenePhase -> active), on an explicit tick from the caller right
+    // after a flow starts or its wizard/monitor dismisses, and on a modest
+    // periodic tick while Home is composed. Gated on the broker's
     // `pipeline` capability so old brokers stay silent.
     val pipelinesEnabled by store.pipelinesEnabled.collectAsState()
     var pipelineSummaries by remember { mutableStateOf<List<PipelineSummary>>(emptyList()) }
-    LaunchedEffect(endpoint.displayHost, pipelinesEnabled) {
+    val scope = rememberCoroutineScope()
+    suspend fun refreshFlowSummaries() {
         if (pipelinesEnabled && endpoint.isComplete) {
             pipelineSummaries = store.refreshPipelines()
         }
+    }
+    LaunchedEffect(endpoint.displayHost, pipelinesEnabled, refreshPipelinesTick) {
+        refreshFlowSummaries()
+    }
+    // Periodic tick (~12s, same order as other Home polling) while Home is
+    // composed -- picks up broker-side state changes (gate resolved on
+    // another device, a step completing) without a dedicated push channel.
+    LaunchedEffect(endpoint.displayHost, pipelinesEnabled) {
+        while (pipelinesEnabled && endpoint.isComplete) {
+            delay(12_000L)
+            refreshFlowSummaries()
+        }
+    }
+    // App-foreground refresh (mirrors iOS scenePhase -> active): a flow may
+    // have progressed while the app was backgrounded.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                scope.launch { refreshFlowSummaries() }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     val activePipelines = remember(pipelineSummaries) {
         pipelineSummaries.filter { PipelineListViewModel.isActiveForHomeAffordance(it.state) }
@@ -225,7 +266,6 @@ fun HomeScreen(
     // composition via GET <endpoint>/api/capabilities with a short timeout.
     // null = not yet probed, true = reachable, false = offline.
     val reachabilityMap = remember { mutableStateMapOf<String, Boolean>() }
-    val scope = rememberCoroutineScope()
     val endpoint_ by store.endpoint.collectAsState()
     LaunchedEffect(savedServers) {
         savedServers.forEach { server ->

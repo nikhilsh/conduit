@@ -31,7 +31,9 @@ extension ConduitUI {
             return ZStack {
                 Circle().fill(tint.opacity(0.18))
                 if let agent {
-                    AgentGlyph(assistant: agent, size: size * 0.55)
+                    // Bumped 0.55 -> 0.6 (device feedback: glyphs read too
+                    // small relative to their tinted-circle container).
+                    AgentGlyph(assistant: agent, size: size * 0.6)
                 }
             }
             .frame(width: size, height: size)

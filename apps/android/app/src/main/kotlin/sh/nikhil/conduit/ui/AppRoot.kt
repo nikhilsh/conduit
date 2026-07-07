@@ -80,6 +80,11 @@ fun AppRoot(
     var flowStartInitialTab by remember { mutableStateOf(FlowStartTab.SESSION) }
     var flowWizardPrefill by remember { mutableStateOf<FlowWizardPrefill?>(null) }
     var pipelineMonitorTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // Home FLOWS device-feedback fix: bumped whenever a flow is created or
+    // its wizard/builder/monitor overlay dismisses back to Home, so
+    // HomeScreen's LaunchedEffect re-fetches immediately instead of waiting
+    // for its periodic tick.
+    var pipelineRefreshTick by remember { mutableStateOf(0) }
     var showApprovals by remember { mutableStateOf(false) }
     var boxHealthTarget by remember { mutableStateOf<sh.nikhil.conduit.SavedServer?>(null) }
     // Read-only transcript drilldown from History. The full saved row
@@ -205,6 +210,7 @@ fun AppRoot(
                                     onboardingEntry = FeatureFlags.OnboardingEntry.replay
                                     showOnboarding = true
                                 },
+                                refreshPipelinesTick = pipelineRefreshTick,
                             )
                         }
                     }
@@ -267,6 +273,7 @@ fun AppRoot(
                             onboardingEntry = FeatureFlags.OnboardingEntry.replay
                             showOnboarding = true
                         },
+                        refreshPipelinesTick = pipelineRefreshTick,
                     )
                 }
             }
@@ -506,6 +513,7 @@ fun AppRoot(
             onCreated = { id, title ->
                 showPipelineBuilder = false
                 pipelineMonitorTarget = Pair(id, title)
+                pipelineRefreshTick++
             },
             onBack = { showPipelineBuilder = false },
         )
@@ -536,6 +544,10 @@ fun AppRoot(
             onCreated = { id, title ->
                 flowWizardPrefill = null
                 pipelineMonitorTarget = Pair(id, title)
+                // Home FLOWS device-feedback fix: refresh immediately so the
+                // just-started flow's card is there the moment the user
+                // backs out of the monitor, not up to 12s later.
+                pipelineRefreshTick++
             },
             onBack = { flowWizardPrefill = null },
         )
@@ -543,13 +555,13 @@ fun AppRoot(
 
     // Pipeline monitor screen.
     pipelineMonitorTarget?.let { (id, title) ->
-        BackHandler(enabled = true) { pipelineMonitorTarget = null }
+        BackHandler(enabled = true) { pipelineMonitorTarget = null; pipelineRefreshTick++ }
         PipelineMonitorScreen(
             store = store,
             pipelineId = id,
             pipelineTitle = title,
             onOpenSession = { sessionId -> pipelineMonitorTarget = null; store.select(sessionId) },
-            onBack = { pipelineMonitorTarget = null },
+            onBack = { pipelineMonitorTarget = null; pipelineRefreshTick++ },
         )
     }
 

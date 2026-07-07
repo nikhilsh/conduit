@@ -134,12 +134,18 @@ object PipelineListViewModel {
     }
 
     /**
-     * Home's "any pipeline active" affordance gate -- explicitly the three
-     * live states (running / awaiting_gate / awaiting_pick), not every
-     * non-terminal state, per spec.
+     * Home's "any pipeline active" affordance gate -- every non-terminal
+     * broker state (`pending` / `running` / `step_done` / `awaiting_gate` /
+     * `awaiting_pick`; see `broker/internal/pipeline/pipeline.go`).
+     * Originally just the three "awaiting/running" states, which missed a
+     * just-started flow sitting in `pending` and the brief `step_done`
+     * window between steps -- a live flow could sit in either without ever
+     * qualifying for the Home FLOWS section (device feedback). Mirror of
+     * iOS `isActiveForHomeAffordance`.
      */
     fun isActiveForHomeAffordance(state: String): Boolean =
-        state == "running" || state == "awaiting_gate" || state == "awaiting_pick"
+        state == "pending" || state == "running" || state == "step_done" ||
+            state == "awaiting_gate" || state == "awaiting_pick"
 
     /**
      * Home's "recently finished" affordance gate: a pipeline that reached
