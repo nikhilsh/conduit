@@ -43,10 +43,20 @@ extension ConduitUI {
         /// (broker #922). Absent on an older broker or a pre-#906 pipeline.
         var result: PipelineSummaryResult? = nil
         /// Whether this flow has been archived (broker #932, `pipeline_archive`
-        /// capability). Absent/false on an older broker -- must be `var`, not
-        /// `let`: a `let` optional-with-default is silently excluded from the
-        /// compiler-synthesized `init(from:)` (Swift never reads the key).
-        var archived: Bool = false
+        /// capability). OPTIONAL because the broker omits the key entirely
+        /// when false (`omitempty`) and older brokers never send it — a
+        /// non-optional `var` with a default is still decoded by the
+        /// synthesized `init(from:)` and makes the key REQUIRED
+        /// (keyNotFound on real payloads). Optionals decode via
+        /// `decodeIfPresent`, tolerating absence. Read `isArchived`.
+        var archivedFlag: Bool? = nil
+
+        enum CodingKeys: String, CodingKey {
+            case id, title, state, current_step, step_count, created, steps, result
+            case archivedFlag = "archived"
+        }
+
+        var isArchived: Bool { archivedFlag ?? false }
     }
 
     /// One step's mini-topology entry on a `GET /api/pipelines` list item
@@ -195,7 +205,7 @@ extension ConduitUI {
                                 pipelineRow(p)
                                     .contextMenu {
                                         if store.pipelineArchive {
-                                            if p.archived {
+                                            if p.isArchived {
                                                 Button {
                                                     setArchived(p, archived: false)
                                                 } label: {
@@ -293,7 +303,7 @@ extension ConduitUI {
                         .foregroundStyle(neon.textDim)
                 }
                 Spacer(minLength: 8)
-                if p.archived {
+                if p.isArchived {
                     ConduitUI.Chip(label: "archived", tint: neon.textFaint)
                 }
                 stateChip(p.state)
@@ -306,7 +316,7 @@ extension ConduitUI {
             .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
             // design_handoff_flow audit §F: archived rows render at reduced
             // opacity so "Show archived" reads as a distinct, quieter set.
-            .opacity(p.archived ? 0.55 : 1.0)
+            .opacity(p.isArchived ? 0.55 : 1.0)
         }
 
         private func stateChip(_ state: String) -> some View {
