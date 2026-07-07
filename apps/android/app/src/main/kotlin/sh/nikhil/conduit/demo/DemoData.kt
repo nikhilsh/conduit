@@ -18,6 +18,16 @@ import uniffi.conduit_core.SessionStatus
 object DemoData {
 
     // -------------------------------------------------------------------------
+    // Box
+    //
+    // Fake paired-box name shown wherever the Start sheet / Flow wizard's
+    // "Where" row needs a box in demo mode (no real SavedServer exists).
+    // Mirrors iOS DemoData.boxName value-for-value.
+    // -------------------------------------------------------------------------
+
+    const val boxName: String = "Demo Box"
+
+    // -------------------------------------------------------------------------
     // Terminal lines
     //
     // Canned faux-terminal output for DemoTerminalPage. Each entry is a

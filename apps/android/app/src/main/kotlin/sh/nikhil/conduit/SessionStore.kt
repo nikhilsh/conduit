@@ -578,7 +578,73 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // Reset the demo-only capability override (see activateDemo()) --
         // the next real /api/capabilities fetch re-derives the true value.
         _pipelineGatePreview.value = false
+        // Drop any locally-created fake flow(s) from the Flow wizard so
+        // re-entering demo starts fresh.
+        _demoExtraPipelines.value = emptyList()
+        _demoExtraPipelineStatus.value = emptyMap()
         Telemetry.breadcrumb("demo", "deactivated")
+    }
+
+    // MARK: - Demo fake flows (Flow wizard "Start flow", no network)
+
+    /** Locally-created flows started from the Flow wizard while in demo
+     *  mode -- prepended to [sh.nikhil.conduit.demo.DemoData.pipelines] for
+     *  the Home FLOWS section. Reset on activate/deactivateDemo. */
+    private val _demoExtraPipelines = MutableStateFlow<List<sh.nikhil.conduit.ui.PipelineSummary>>(emptyList())
+    val demoExtraPipelines: StateFlow<List<sh.nikhil.conduit.ui.PipelineSummary>> = _demoExtraPipelines.asStateFlow()
+
+    private val _demoExtraPipelineStatus = MutableStateFlow<Map<String, sh.nikhil.conduit.ui.Pipeline>>(emptyMap())
+    val demoExtraPipelineStatus: StateFlow<Map<String, sh.nikhil.conduit.ui.Pipeline>> = _demoExtraPipelineStatus.asStateFlow()
+
+    /** Looks up detail for a demo flow id -- a locally-created fake flow
+     *  first, falling back to the static
+     *  [sh.nikhil.conduit.demo.DemoData.pipelineStatus] fixtures. */
+    fun demoPipelineStatus(id: String): sh.nikhil.conduit.ui.Pipeline? =
+        _demoExtraPipelineStatus.value[id] ?: DemoData.pipelineStatus(id)
+
+    /** Builds a local fake "running" flow from the Flow wizard's task +
+     *  steps (step 0 running, the rest queued) -- no network, mirrors the
+     *  shape `/api/pipeline` would return. Prepends it to the demo FLOWS
+     *  list and returns its id + status for the caller to open the Monitor
+     *  with ([sh.nikhil.conduit.ui.PipelineMonitorScreen]'s `demoStatus`). */
+    fun demoStartFlow(
+        title: String,
+        task: String,
+        cwd: String,
+        steps: List<sh.nikhil.conduit.ui.PipelineStepDraft>,
+    ): Pair<String, sh.nikhil.conduit.ui.Pipeline> {
+        val agentSteps = steps.filter { it.kind.isEmpty() }
+        val id = "demo-fake-${_demoExtraPipelines.value.size + 1}"
+        val now = Instant.now().toString()
+        val effectiveTitle = title.ifEmpty { "Flow" }
+        val summarySteps = agentSteps.mapIndexed { i, s ->
+            sh.nikhil.conduit.ui.PipelineSummaryStep(
+                agent = s.agentType, role = s.role,
+                status = if (i == 0) "running" else "queued", gateAfter = s.gateAfter,
+            )
+        }
+        val summary = sh.nikhil.conduit.ui.PipelineSummary(
+            id = id, title = effectiveTitle, state = "running", currentStep = 0,
+            stepCount = agentSteps.size, created = now, steps = summarySteps, result = null,
+        )
+        val statusSteps = agentSteps.mapIndexed { i, s ->
+            sh.nikhil.conduit.ui.PipelineStep(
+                index = i, agentType = s.agentType, role = s.role,
+                promptTemplate = s.promptTemplate, inputFromPrev = s.inputFromPrev, gateAfter = s.gateAfter,
+                sessionId = if (i == 0) "$id-step-0" else null,
+                phase = if (i == 0) "running" else null,
+                started = if (i == 0) now else null, ended = null,
+            )
+        }
+        val status = sh.nikhil.conduit.ui.Pipeline(
+            id = id, title = effectiveTitle, task = task,
+            cwd = cwd.ifEmpty { "/home/user/projects/demo" }, base = "main",
+            state = "running", currentStep = 0, steps = statusSteps, gate = null, result = null,
+        )
+        _demoExtraPipelines.value = listOf(summary) + _demoExtraPipelines.value
+        _demoExtraPipelineStatus.value = _demoExtraPipelineStatus.value + (id to status)
+        Telemetry.breadcrumb("demo", "fake_flow_started", mapOf("id" to id, "steps" to agentSteps.size.toString()))
+        return id to status
     }
 
     private val _endpoint = MutableStateFlow(Endpoint())

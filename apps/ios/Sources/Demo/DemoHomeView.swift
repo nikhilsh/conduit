@@ -54,6 +54,15 @@ private struct DemoPhoneShell: View {
     @State private var selectedFlowID: String?
     @State private var showingAppearance = false
 
+    // MARK: Flow Start sheet + wizard (demo) -- same seam as
+    // `ConduitHomeView`'s bottom-bar "+" / FLOWS header "+ New flow", just
+    // routed at zero network (see `SessionStore.demoStartFlow`).
+    @State private var showFlowStart = false
+    @State private var flowStartInitialTab: ConduitUI.FlowStartSheet.Tab = .session
+    @State private var pendingFlowWizardPrefill: ConduitUI.FlowWizardPrefill?
+    @State private var showFlowWizard = false
+    @State private var flowWizardPrefill: ConduitUI.FlowWizardPrefill = .blank
+
     private var selectedSession: ProjectSession? {
         guard let id = selectedSessionID else { return nil }
         return DemoData.sessions.first { $0.id == id }
@@ -65,9 +74,18 @@ private struct DemoPhoneShell: View {
                 GlassAppBackground()
                 VStack(spacing: 0) {
                     demoBanner(neon: neon)
-                    DemoFlowsSection(onOpen: { selectedFlowID = $0.id })
+                    DemoFlowsSection(
+                        pipelines: store.demoPipelinesList,
+                        onOpen: { selectedFlowID = $0.id },
+                        onNewFlow: {
+                            Telemetry.breadcrumb("demo", "flows header new flow tapped", data: [:])
+                            flowStartInitialTab = .flow
+                            showFlowStart = true
+                        }
+                    )
                     DemoSessionList(onSelect: { selectedSessionID = $0.id })
                         .padding(.top, 8)
+                    demoBottomBar
                 }
             }
             .navigationTitle("")
@@ -119,7 +137,7 @@ private struct DemoPhoneShell: View {
                 }
             }
             .navigationDestination(item: $selectedFlowID) { id in
-                if let status = DemoData.pipelineStatus(id: id) {
+                if let status = store.demoPipelineStatus(id: id) {
                     ConduitUI.PipelineMonitorView(
                         pipelineID: id,
                         pipelineTitle: status.title,
@@ -132,10 +150,53 @@ private struct DemoPhoneShell: View {
                 ConduitUI.AppearanceSheet()
                     .environment(appearance)
             }
+            .sheet(isPresented: $showFlowStart, onDismiss: {
+                if let prefill = pendingFlowWizardPrefill {
+                    pendingFlowWizardPrefill = nil
+                    flowWizardPrefill = prefill
+                    showFlowWizard = true
+                }
+            }) {
+                ConduitUI.FlowStartSheet(initialTab: flowStartInitialTab) { prefill in
+                    // Demo mode always opens the wizard on the Task screen
+                    // (step 1), even for a built-in template whose real
+                    // prefill jumps straight to Steps -- lets a reviewer
+                    // (and the Appetize tour) see both screens with real
+                    // content instead of skipping the Task screen.
+                    var demoPrefill = prefill
+                    demoPrefill.startStep = 1
+                    pendingFlowWizardPrefill = demoPrefill
+                    showFlowStart = false
+                }
+                .environment(store)
+                .presentationDetents([.medium, .large])
+                .presentationCornerRadius(26)
+            }
+            .sheet(isPresented: $showFlowWizard) {
+                ConduitUI.FlowWizardView(prefill: flowWizardPrefill)
+                    .environment(store)
+                    .presentationDetents([.large])
+            }
         }
         .onAppear {
             Telemetry.breadcrumb("demo", "home_appeared")
         }
+    }
+
+    private var demoBottomBar: some View {
+        HStack {
+            Spacer()
+            ConduitUI.GlassMorphContainer(spacing: 14) {
+                ConduitUI.PillButton(systemImage: "plus", size: 44, tint: neon.accent, isProminent: true) {
+                    Telemetry.breadcrumb("demo", "plus button tapped", data: [:])
+                    flowStartInitialTab = .session
+                    showFlowStart = true
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 4)
     }
 }
 
@@ -148,6 +209,11 @@ private struct DemoTabletShell: View {
     @State private var selectedSession: ProjectSession? = DemoData.sessions.first
     @State private var selectedFlowID: String? = nil
     @State private var showingAppearance = false
+    @State private var showFlowStart = false
+    @State private var flowStartInitialTab: ConduitUI.FlowStartSheet.Tab = .flow
+    @State private var pendingFlowWizardPrefill: ConduitUI.FlowWizardPrefill?
+    @State private var showFlowWizard = false
+    @State private var flowWizardPrefill: ConduitUI.FlowWizardPrefill = .blank
 
     var body: some View {
         NavigationSplitView {
@@ -183,7 +249,15 @@ private struct DemoTabletShell: View {
                 demoBanner(neon: neon)
                     .padding(.horizontal, 10)
                     .padding(.bottom, 8)
-                DemoFlowsSection(onOpen: { selectedFlowID = $0.id })
+                DemoFlowsSection(
+                    pipelines: store.demoPipelinesList,
+                    onOpen: { selectedFlowID = $0.id },
+                    onNewFlow: {
+                        Telemetry.breadcrumb("demo", "flows header new flow tapped", data: [:])
+                        flowStartInitialTab = .flow
+                        showFlowStart = true
+                    }
+                )
                 DemoSessionList(onSelect: { selectedSession = $0 })
             }
             .background(neon.appBg)
@@ -204,7 +278,7 @@ private struct DemoTabletShell: View {
             get: { selectedFlowID != nil },
             set: { if !$0 { selectedFlowID = nil } }
         )) {
-            if let id = selectedFlowID, let status = DemoData.pipelineStatus(id: id) {
+            if let id = selectedFlowID, let status = store.demoPipelineStatus(id: id) {
                 NavigationStack {
                     ConduitUI.PipelineMonitorView(
                         pipelineID: id,
@@ -219,6 +293,33 @@ private struct DemoTabletShell: View {
         .sheet(isPresented: $showingAppearance) {
             ConduitUI.AppearanceSheet()
                 .environment(appearance)
+        }
+        // Same Start sheet -> wizard chain as the phone shell (§ demo Flow
+        // parity), presented over the split view rather than pushed --
+        // matches how the flow monitor sheet above already works here.
+        .sheet(isPresented: $showFlowStart, onDismiss: {
+            if let prefill = pendingFlowWizardPrefill {
+                pendingFlowWizardPrefill = nil
+                flowWizardPrefill = prefill
+                showFlowWizard = true
+            }
+        }) {
+            ConduitUI.FlowStartSheet(initialTab: flowStartInitialTab) { prefill in
+                // See the phone shell's matching comment: demo mode always
+                // opens the wizard on the Task screen first.
+                var demoPrefill = prefill
+                demoPrefill.startStep = 1
+                pendingFlowWizardPrefill = demoPrefill
+                showFlowStart = false
+            }
+            .environment(store)
+            .presentationDetents([.medium, .large])
+            .presentationCornerRadius(26)
+        }
+        .sheet(isPresented: $showFlowWizard) {
+            ConduitUI.FlowWizardView(prefill: flowWizardPrefill)
+                .environment(store)
+                .presentationDetents([.large])
         }
         .onAppear {
             Telemetry.breadcrumb("demo", "home_appeared_tablet")
@@ -266,19 +367,36 @@ private func demoBanner(neon: NeonTheme) -> some View {
 
 private struct DemoFlowsSection: View {
     @Environment(\.neonTheme) private var neon
+    /// `store.demoPipelinesList` -- the static `DemoData.pipelines`
+    /// fixtures plus any fake flow the demo wizard started locally.
+    var pipelines: [ConduitUI.PipelineSummary]
     var onOpen: (ConduitUI.PipelineSummary) -> Void
+    /// "+ New flow" header action -- opens the real Flow Start sheet
+    /// (mirrors `ConduitHomeView.flowsSectionHeader`), zero network.
+    var onNewFlow: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("FLOWS")
-                .font(neon.mono(12).weight(.semibold))
-                .tracking(2)
-                .foregroundStyle(neon.accent)
-                .neonTextGlow(neon.glow ? neon.textGlow : nil)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+            HStack {
+                Text("FLOWS")
+                    .font(neon.mono(12).weight(.semibold))
+                    .tracking(2)
+                    .foregroundStyle(neon.accent)
+                    .neonTextGlow(neon.glow ? neon.textGlow : nil)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 8)
+                Button(action: onNewFlow) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "plus").font(.system(size: 12, weight: .semibold))
+                        Text("New flow").font(neon.sans(13).weight(.semibold))
+                    }
+                    .foregroundStyle(neon.accent)
+                }
+                .buttonStyle(.plain)
+            }
 
-            ForEach(DemoData.pipelines, id: \.id) { flow in
+            ForEach(pipelines, id: \.id) { flow in
                 ConduitUI.FlowCard(
                     summary: flow,
                     onOpen: {
