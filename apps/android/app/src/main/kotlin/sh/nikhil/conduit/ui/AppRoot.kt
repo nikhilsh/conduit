@@ -186,6 +186,7 @@ fun AppRoot(
                                 onOpenApprovals = { showApprovals = true },
                                 onOpenBoxHealth = { server -> boxHealthTarget = server },
                                 onOpenPipelines = { showPipelineList = true },
+                                onOpenPipeline = { id, title -> pipelineMonitorTarget = Pair(id, title) },
                                 onNewPipeline = { showPipelineBuilder = true },
                                 onFanOut = { showFanOut = true },
                                 // The tablet rail header already shows a Settings
@@ -244,6 +245,7 @@ fun AppRoot(
                         onOpenApprovals = { showApprovals = true },
                         onOpenBoxHealth = { server -> boxHealthTarget = server },
                         onOpenPipelines = { showPipelineList = true },
+                        onOpenPipeline = { id, title -> pipelineMonitorTarget = Pair(id, title) },
                         onNewPipeline = { showPipelineBuilder = true },
                         onFanOut = { showFanOut = true },
                         onOpenOnboarding = {

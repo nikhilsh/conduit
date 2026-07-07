@@ -70,6 +70,13 @@ extension ConduitUI {
         /// (`GET /api/pipelines`, refreshed on appear -- no polling loop while
         /// Home is the visible surface).
         @State private var pipelineSummaries: [ConduitUI.PipelineSummary] = []
+        /// Flow (pipeline) tapped from the Home FLOWS section -- pushes
+        /// straight to its monitor (`ConduitUI.PipelineMonitorView`), unlike
+        /// the "+ New flow" / palette entries which open the full list.
+        @State private var selectedFlowPipeline: ConduitUI.PipelineSummary?
+        /// Flow ids with a "Continue" (gate approval) request in flight --
+        /// drives the inline `FlowCard` spinner/disabled state.
+        @State private var continuingFlowIDs: Set<String> = []
 
         var body: some View {
             @Bindable var store = store
@@ -98,6 +105,13 @@ extension ConduitUI {
                         // navigation push so the affordance keeps
                         // working post-cutover.
                         SessionsScreen().environment(store)
+                    }
+                    .navigationDestination(item: $selectedFlowPipeline) { flow in
+                        ConduitUI.PipelineMonitorView(
+                            pipelineID: flow.id,
+                            pipelineTitle: flow.title.isEmpty ? "Flow" : flow.title
+                        )
+                        .environment(store)
                     }
                 }
                 .sheet(isPresented: $showSettings) {
@@ -410,6 +424,49 @@ extension ConduitUI {
             .listRowBackground(Color.clear)
         }
 
+        /// FLOWS section header -- same visual shape as `sectionHeader`
+        /// (mono uppercase accent label + trailing "+ New flow" action) but
+        /// with its OWN tappable title (opens the full `PipelineListView`,
+        /// per the design handoff), which `sectionHeader` doesn't support
+        /// (adding that there would make "Active sessions" / "Boxes" tap
+        /// too -- not wanted).
+        private var flowsSectionHeader: some View {
+            HStack {
+                Button {
+                    Telemetry.breadcrumb("pipeline", "flows section label tapped", data: [:])
+                    showPipelineList = true
+                } label: {
+                    Text("FLOWS")
+                        .font(neon.mono(12).weight(.semibold))
+                        .tracking(2)
+                        .foregroundStyle(neon.accent)
+                        .neonTextGlow(neon.glow ? neon.textGlow : nil)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                .buttonStyle(.plain)
+                Spacer(minLength: 8)
+                Button {
+                    showPipelineBuilder = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "plus").font(.system(size: 12, weight: .semibold))
+                        Text("New flow").font(neon.sans(12.5).weight(.semibold))
+                    }
+                    .foregroundStyle(neon.accent)
+                    .padding(.vertical, 13)
+                    .padding(.horizontal, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, -13)
+                .padding(.horizontal, -8)
+            }
+            .textCase(nil)
+            .listRowInsets(EdgeInsets(top: 14, leading: 14, bottom: 6, trailing: 14))
+            .listRowBackground(Color.clear)
+        }
+
         /// A paired-machine ("box") row: tinted server glyph, name, endpoint sub,
         /// and a status word. The active (connected) machine is pinned first and
         /// styled active — an `ACTIVE` badge + `connected` and a green-tinted
@@ -603,6 +660,63 @@ extension ConduitUI {
             pipelineSummaries.filter { ConduitUI.PipelineListViewModel.isRecentTerminal($0) }
         }
 
+        /// Flows shown in the Home FLOWS section: the same qualifying sets
+        /// as the old single-banner affordance (active + recent-terminal),
+        /// just one `FlowCard` per flow instead of one collapsed banner.
+        private var homeFlows: [ConduitUI.PipelineSummary] {
+            ConduitUI.PipelineListViewModel.sorted(activePipelines + recentTerminalPipelines)
+        }
+
+        /// Inline "Continue" (gate approval) from a Home `FlowCard` --
+        /// `POST /api/pipeline/{id}/continue`, same endpoint + approve-as-is
+        /// semantics as the monitor's gate Continue
+        /// (`ConduitPipelineMonitorView.continuePipeline`), just without the
+        /// handoff-edit affordance (that only exists inside the monitor).
+        private func continueFlow(_ flow: ConduitUI.PipelineSummary) {
+            guard !continuingFlowIDs.contains(flow.id) else { return }
+            let endpoint = store.endpoint
+            guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/pipeline/\(flow.id)/continue"
+            guard let url = components?.url else { return }
+
+            continuingFlowIDs.insert(flow.id)
+            Telemetry.breadcrumb("pipeline", "flow card continue tapped", data: ["id": flow.id])
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 15
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = Data("{}".utf8)
+
+            Task { @MainActor in
+                defer { continuingFlowIDs.remove(flow.id) }
+                do {
+                    let (_, resp) = try await URLSession.shared.data(for: req)
+                    guard let http = resp as? HTTPURLResponse else { return }
+                    if http.statusCode >= 200 && http.statusCode < 300 {
+                        Telemetry.breadcrumb("pipeline", "flow card continue ok", data: ["id": flow.id])
+                        pipelineSummaries = await store.refreshPipelines()
+                    } else {
+                        Telemetry.capture(
+                            error: NSError(domain: "ios.pipeline", code: 12,
+                                userInfo: [NSLocalizedDescriptionKey: "flow card continue failed"]),
+                            message: "flow card continue failed",
+                            tags: ["surface": "ios", "phase": "pipeline"],
+                            extras: ["id": flow.id, "status": "\(http.statusCode)"]
+                        )
+                    }
+                } catch {
+                    Telemetry.capture(
+                        error: error,
+                        message: "flow card continue network error",
+                        tags: ["surface": "ios", "phase": "pipeline"],
+                        extras: ["id": flow.id]
+                    )
+                }
+            }
+        }
+
         /// One-line preview of the latest activity in a session for the
         /// home card. Pulls the most recent NON-user transcript item from
         /// `store.conversationLog` (assistant reply or tool action) — the
@@ -690,21 +804,31 @@ extension ConduitUI {
                     }
                 }
 
-                // Pipeline affordance (§ "a running pipeline is
-                // unreachable once its sheet is dismissed" + "can't see a
-                // pipeline finished on home"): surfaces when a pipeline is
-                // genuinely running/gated/picking (accent-styled) OR
-                // finished within the last 24h (dim, terminal-styled).
-                // Never a fabricated count. Tapping opens the full
-                // Pipelines list.
-                if !activePipelines.isEmpty || !recentTerminalPipelines.isEmpty {
+                // FLOWS (design_handoff_flow README "Screens > 1. Home"):
+                // one FlowCard per flow that needs you / is active / just
+                // finished (same qualifying sets the old pipeline banner
+                // used -- isActiveForHomeAffordance + isRecentTerminal).
+                // Placed ABOVE "Active sessions"; replaces the old single
+                // PipelinesBannerCard affordance. Never a fabricated count.
+                if !homeFlows.isEmpty {
                     Section {
-                        PipelinesBannerCard(active: activePipelines, recentTerminal: recentTerminalPipelines) {
-                            showPipelineList = true
+                        ForEach(homeFlows) { flow in
+                            ConduitUI.FlowCard(
+                                summary: flow,
+                                isContinuing: continuingFlowIDs.contains(flow.id),
+                                onOpen: {
+                                    Telemetry.breadcrumb("pipeline", "flow card opened",
+                                        data: ["id": flow.id, "state": flow.state])
+                                    selectedFlowPipeline = flow
+                                },
+                                onContinue: { continueFlow(flow) }
+                            )
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                         }
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
+                    } header: {
+                        flowsSectionHeader
                     }
                 }
 
@@ -1093,113 +1217,6 @@ private struct NeedsYouBannerCard: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(titleText)
         .accessibilityHint("Opens the session waiting on you")
-    }
-}
-
-/// Home's pipeline affordance: a card that appears when at least one
-/// pipeline is either currently active (running / awaiting_gate /
-/// awaiting_pick) or finished (complete/failed) within the last 24h
-/// (`ConduitUI.PipelineListViewModel.isActiveForHomeAffordance` /
-/// `.isRecentTerminal`). Tapping opens the full `PipelineListView`.
-///
-/// An active pipeline always wins the headline (styled accent, "today"
-/// treatment) since it needs attention soonest; a recent-terminal-only set
-/// gets a dim card with a state chip (complete = green tint, failed = red)
-/// instead. One compact card regardless of how many pipelines qualify --
-/// extras collapse into a "N more" trailer rather than growing Home into a
-/// pipeline feed.
-// Made non-private (was file-private) so ConduitTabletHome's Result-card
-// tablet parity fix (#907, pairs with #905's flagged gap) can reuse the
-// same banner instead of forking a variant.
-struct PipelinesBannerCard: View {
-    let active: [ConduitUI.PipelineSummary]
-    let recentTerminal: [ConduitUI.PipelineSummary]
-    let onOpen: () -> Void
-    @Environment(\.neonTheme) private var neon
-
-    /// The pipeline the card headlines on -- the first active one if any,
-    /// else the most recent terminal one (list is already sorted
-    /// recency-first by the caller's `refreshPipelines`/list ordering, but
-    /// we don't depend on that -- just take the first).
-    private var headline: ConduitUI.PipelineSummary? { active.first ?? recentTerminal.first }
-
-    private var isActiveHeadline: Bool { !active.isEmpty }
-
-    private var extraCount: Int { active.count + recentTerminal.count - 1 }
-
-    private var titleText: String {
-        guard let headline else { return "" }
-        if isActiveHeadline {
-            return active.count == 1 ? "1 pipeline running" : "\(active.count) pipelines running"
-        }
-        let base = headline.state == "failed" ? "Pipeline failed" : "Pipeline complete"
-        return extraCount > 0 ? "\(base) · \(extraCount) more" : base
-    }
-
-    private var subText: String {
-        guard let headline else { return "" }
-        if headline.title.isEmpty {
-            return "step \(headline.current_step + 1) / \(max(headline.step_count, 1))"
-        }
-        return headline.title
-    }
-
-    /// Card tint: accent while anything is active, else the terminal
-    /// state's color (green for complete, red for failed).
-    private var tint: Color {
-        guard isActiveHeadline else {
-            return headline?.state == "failed" ? neon.red : neon.green
-        }
-        return neon.accent
-    }
-
-    var body: some View {
-        Button(action: onOpen) {
-            HStack(spacing: 11) {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(tint.opacity(0.14))
-                    .frame(width: 34, height: 34)
-                    .overlay(
-                        Image(systemName: isActiveHeadline ? "arrow.triangle.merge" : (headline?.state == "failed" ? "xmark.circle" : "checkmark.circle"))
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(tint)
-                    )
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(titleText)
-                        .font(neon.sans(13).weight(.semibold))
-                        .foregroundStyle(isActiveHeadline ? neon.text : neon.textDim)
-                        .lineLimit(1)
-                    Text(subText)
-                        .font(neon.mono(10.5))
-                        .foregroundStyle(neon.textDim)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                Spacer(minLength: 6)
-                Text("View")
-                    .font(neon.sans(12.5).weight(.semibold))
-                    .foregroundStyle(isActiveHeadline ? neon.bg : tint)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(
-                        Capsule()
-                            .fill(isActiveHeadline ? AnyShapeStyle(tint) : AnyShapeStyle(tint.opacity(0.14)))
-                    )
-            }
-            .padding(.horizontal, 13)
-            .padding(.vertical, 9)
-            .neonCardSurface(
-                neon,
-                fill: tint.opacity(neon.dark ? (isActiveHeadline ? 0.07 : 0.05) : (isActiveHeadline ? 0.05 : 0.04)),
-                cornerRadius: 12,
-                border: tint.opacity(isActiveHeadline ? 0.27 : 0.2),
-                glowTint: isActiveHeadline && neon.glow ? tint : nil
-            )
-        }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(titleText)
-        .accessibilityHint("Opens the pipelines list")
     }
 }
 

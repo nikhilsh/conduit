@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Dns
@@ -43,6 +44,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,6 +60,7 @@ import sh.nikhil.conduit.SessionNaming
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.VisibleSession
+import sh.nikhil.conduit.ui.components.FlowCard
 import sh.nikhil.conduit.firstUserMessageOf
 import sh.nikhil.conduit.latestActivityPreviewOf
 
@@ -69,7 +72,17 @@ import sh.nikhil.conduit.latestActivityPreviewOf
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit, onOpenPipelines: () -> Unit = {}) {
+fun NeonTabletHome(
+    store: SessionStore,
+    onOpenSession: (String) -> Unit,
+    onOpenPipelines: () -> Unit = {},
+    // FLOWS section: a card tap opens that flow's monitor directly (id +
+    // title); "+ New flow" opens the builder. Defaults are no-ops so this
+    // (currently unreferenced -- AppRoot's tablet path reuses `HomeScreen`)
+    // composable still compiles for any future caller.
+    onOpenPipeline: (id: String, title: String) -> Unit = { _, _ -> },
+    onNewPipeline: () -> Unit = {},
+) {
     val neon = LocalNeonTheme.current
     val sessions by store.sessions.collectAsState()
     val lifecycle by store.sessionLifecycle.collectAsState()
@@ -101,6 +114,10 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit, onOpenP
     val recentTerminalPipelines = remember(pipelineSummaries) {
         pipelineSummaries.filter { PipelineListViewModel.isRecentTerminal(it) }
     }
+    val homeFlows = remember(activePipelines, recentTerminalPipelines) {
+        PipelineListViewModel.sorted(activePipelines + recentTerminalPipelines)
+    }
+    val continuingFlowIds = remember { mutableStateMapOf<String, Boolean>() }
 
     // Rename dialog state (hoisted above the grid so the AlertDialog floats
     // over the full NeonTabletHome surface, not buried inside a grid cell).
@@ -145,6 +162,46 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit, onOpenP
         }
     }
 
+    // Inline "Continue" (gate approval) from a tablet FlowCard -- same
+    // endpoint + approve-as-is semantics as the phone Home / monitor
+    // Continue (PipelineMonitorScreen).
+    fun continueFlow(flow: PipelineSummary) {
+        if (continuingFlowIds.containsKey(flow.id)) return
+        val base = endpoint.httpBaseUrl ?: return
+        continuingFlowIds[flow.id] = true
+        Telemetry.breadcrumb("pipeline", "flow card continue tapped", mapOf("pipeline_id" to flow.id))
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val conn = (java.net.URL("$base/api/pipeline/${flow.id}/continue").openConnection() as java.net.HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        doOutput = true
+                        setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                        setRequestProperty("Content-Type", "application/json")
+                        connectTimeout = 10_000
+                        readTimeout = 20_000
+                    }
+                    conn.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }
+                    val code = conn.responseCode
+                    conn.disconnect()
+                    if (code !in 200..299) error("HTTP $code")
+                }
+            }
+            continuingFlowIds.remove(flow.id)
+            if (result.isSuccess) {
+                Telemetry.breadcrumb("pipeline", "flow card continue ok", mapOf("pipeline_id" to flow.id))
+                pipelineSummaries = store.refreshPipelines()
+            } else {
+                Telemetry.capture(
+                    error = result.exceptionOrNull() ?: Exception("flow card continue failed"),
+                    message = "flow card continue error",
+                    tags = mapOf("surface" to "android", "phase" to "pipeline-home"),
+                    extras = mapOf("pipeline_id" to flow.id),
+                )
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -176,14 +233,58 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit, onOpenP
         }
         Spacer(Modifier.size(16.dp))
 
-        // Same slot as phone Home: above "Active sessions", below the header.
-        if (activePipelines.isNotEmpty() || recentTerminalPipelines.isNotEmpty()) {
-            ActivePipelinesBannerCard(
-                neon = neon,
-                active = activePipelines,
-                recentTerminal = recentTerminalPipelines,
-                onOpen = onOpenPipelines,
-            )
+        // FLOWS: same slot as phone Home -- above "Active sessions", below
+        // the header. Never a fabricated count -- hidden when no flow
+        // qualifies.
+        if (homeFlows.isNotEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "FLOWS".uppercase(),
+                    fontFamily = neon.mono,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    color = neon.accent,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.clickable {
+                        Telemetry.breadcrumb("pipeline", "flows section label tapped")
+                        onOpenPipelines()
+                    },
+                )
+                Spacer(Modifier.weight(1f))
+                Row(
+                    modifier = Modifier.clickable(onClick = onNewPipeline),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Icon(Icons.Filled.Add, null, modifier = Modifier.size(14.dp), tint = neon.accent)
+                    Text(
+                        "New flow",
+                        fontFamily = neon.sans,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.5.sp,
+                        color = neon.accent,
+                    )
+                }
+            }
+            Spacer(Modifier.size(10.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                homeFlows.forEach { flow ->
+                    FlowCard(
+                        summary = flow,
+                        isContinuing = continuingFlowIds.containsKey(flow.id),
+                        onOpen = {
+                            Telemetry.breadcrumb(
+                                "pipeline",
+                                "flow card opened",
+                                mapOf("pipeline_id" to flow.id, "state" to flow.state),
+                            )
+                            onOpenPipeline(flow.id, flow.title)
+                        },
+                        onContinue = { continueFlow(flow) },
+                    )
+                }
+            }
             Spacer(Modifier.size(16.dp))
         }
 

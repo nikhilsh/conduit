@@ -26,8 +26,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Cancel
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.History
@@ -49,6 +47,7 @@ import androidx.compose.material3.SnackbarHostState
 import sh.nikhil.conduit.ui.components.ActionPillVariant
 import sh.nikhil.conduit.ui.components.ConduitActionPill
 import sh.nikhil.conduit.ui.components.ConduitChip
+import sh.nikhil.conduit.ui.components.FlowCard
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -122,6 +121,10 @@ fun HomeScreen(
     // Active-pipeline affordance tap -- opens `PipelineListScreen`. Default
     // no-op so existing call sites compile without change.
     onOpenPipelines: () -> Unit = {},
+    // FLOWS section: a card tap opens that flow's monitor directly (id +
+    // title) -- distinct from [onOpenPipelines], which opens the full list.
+    // Default no-op so existing call sites compile without change.
+    onOpenPipeline: (id: String, title: String) -> Unit = { _, _ -> },
     // "+" long-press quick-action menu (device feedback: a pipeline / fan-out
     // was only reachable via the command palette). Plain tap still calls
     // [onNewSession] unchanged. Defaults are no-ops so existing call sites
@@ -183,6 +186,15 @@ fun HomeScreen(
     val recentTerminalPipelines = remember(pipelineSummaries) {
         pipelineSummaries.filter { PipelineListViewModel.isRecentTerminal(it) }
     }
+    // FLOWS section: same qualifying sets as the old single-banner
+    // affordance (active + recent-terminal), just one FlowCard per flow
+    // instead of one collapsed banner.
+    val homeFlows = remember(activePipelines, recentTerminalPipelines) {
+        PipelineListViewModel.sorted(activePipelines + recentTerminalPipelines)
+    }
+    // Flow ids with a "Continue" (gate approval) request in flight -- drives
+    // the inline FlowCard spinner/disabled state.
+    val continuingFlowIds = remember { mutableStateMapOf<String, Boolean>() }
 
     // Pending exit target for the session-row long-press confirmation.
     // Mirror of iOS PR #128's `pendingDelete` on ConduitHomeView — we
@@ -242,6 +254,47 @@ fun HomeScreen(
                 if (!reachable) {
                     Telemetry.breadcrumb("boxes", "reachability probe offline", mapOf("server" to server.name))
                 }
+            }
+        }
+    }
+
+    // Inline "Continue" (gate approval) from a Home FlowCard -- POST
+    // /api/pipeline/{id}/continue, same endpoint + approve-as-is semantics
+    // as the monitor's gate Continue (PipelineMonitorScreen), just without
+    // the handoff-edit affordance (that only exists inside the monitor).
+    fun continueFlow(flow: PipelineSummary) {
+        if (continuingFlowIds.containsKey(flow.id)) return
+        val base = endpoint.httpBaseUrl ?: return
+        continuingFlowIds[flow.id] = true
+        Telemetry.breadcrumb("pipeline", "flow card continue tapped", mapOf("pipeline_id" to flow.id))
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val conn = (java.net.URL("$base/api/pipeline/${flow.id}/continue").openConnection() as java.net.HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        doOutput = true
+                        setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                        setRequestProperty("Content-Type", "application/json")
+                        connectTimeout = 10_000
+                        readTimeout = 20_000
+                    }
+                    conn.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }
+                    val code = conn.responseCode
+                    conn.disconnect()
+                    if (code !in 200..299) error("HTTP $code")
+                }
+            }
+            continuingFlowIds.remove(flow.id)
+            if (result.isSuccess) {
+                Telemetry.breadcrumb("pipeline", "flow card continue ok", mapOf("pipeline_id" to flow.id))
+                pipelineSummaries = store.refreshPipelines()
+            } else {
+                Telemetry.capture(
+                    error = result.exceptionOrNull() ?: Exception("flow card continue failed"),
+                    message = "flow card continue error",
+                    tags = mapOf("surface" to "android", "phase" to "pipeline-home"),
+                    extras = mapOf("pipeline_id" to flow.id),
+                )
             }
         }
     }
@@ -342,21 +395,68 @@ fun HomeScreen(
             )
         }
 
-        // Pipeline affordance (fix for a running pipeline becoming
-        // unreachable once its creation sheet is dismissed, PLUS a
-        // finished pipeline going invisible the instant it settles):
-        // surfaces when a pipeline is genuinely running/gated/picking OR
-        // finished within the last 24h, never a fabricated count. Tapping
-        // opens the full Pipelines list.
-        if (activePipelines.isNotEmpty() || recentTerminalPipelines.isNotEmpty()) {
+        // FLOWS (design_handoff_flow README "Screens > 1. Home"): one
+        // FlowCard per flow that needs you / is active / just finished
+        // (same qualifying sets the old pipeline banner used). Placed
+        // ABOVE "Active sessions"; replaces the old single
+        // ActivePipelinesBannerCard affordance. Never a fabricated count.
+        if (homeFlows.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
-            ActivePipelinesBannerCard(
-                neon = neon,
-                active = activePipelines,
-                recentTerminal = recentTerminalPipelines,
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "FLOWS",
+                    fontFamily = neon.mono,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                    letterSpacing = 2.sp,
+                    color = neon.accent,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.clickable {
+                        Telemetry.breadcrumb("pipeline", "flows section label tapped")
+                        onOpenPipelines()
+                    },
+                )
+                Spacer(Modifier.weight(1f))
+                Row(
+                    modifier = Modifier.clickable(onClick = onNewPipeline),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Icon(Icons.Default.Add, null, modifier = Modifier.size(14.dp), tint = neon.accent)
+                    Text(
+                        "New flow",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontFamily = neon.sans,
+                        fontWeight = FontWeight.SemiBold,
+                        color = neon.accent,
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Column(
                 modifier = Modifier.padding(horizontal = 14.dp),
-                onOpen = onOpenPipelines,
-            )
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                homeFlows.forEach { flow ->
+                    FlowCard(
+                        summary = flow,
+                        isContinuing = continuingFlowIds.containsKey(flow.id),
+                        onOpen = {
+                            Telemetry.breadcrumb(
+                                "pipeline",
+                                "flow card opened",
+                                mapOf("pipeline_id" to flow.id, "state" to flow.state),
+                            )
+                            onOpenPipeline(flow.id, flow.title)
+                        },
+                        onContinue = { continueFlow(flow) },
+                    )
+                }
+            }
         }
 
         // Broker-update banner (session-safe). SSH boxes: show when
@@ -1267,102 +1367,6 @@ private fun NeedsYouBannerCard(
             variant = ActionPillVariant.Solid,
             tint = neon.claude,
             onClick = onReview,
-        )
-    }
-}
-
-/**
- * Home's pipeline affordance: a card shown when at least one pipeline is
- * either currently active (running / awaiting_gate / awaiting_pick,
- * [PipelineListViewModel.isActiveForHomeAffordance]) or finished
- * (complete/failed) within the last 24h
- * ([PipelineListViewModel.isRecentTerminal]). Tapping opens the full
- * `PipelineListScreen`.
- *
- * An active pipeline always wins the headline (accent, "today" styling)
- * since it needs attention soonest; a recent-terminal-only set gets a dim
- * card with a state-tinted icon instead (green for complete, red for
- * failed). One compact card regardless of how many pipelines qualify --
- * extras collapse into a "N more" trailer rather than growing Home into a
- * pipeline feed. Mirror of iOS `PipelinesBannerCard`.
- */
-@Composable
-// Made non-private (was file-private) so NeonTabletHome's Result-card
-// tablet parity fix (#907, pairs with #905's flagged gap) can reuse the
-// same banner instead of forking a variant.
-fun ActivePipelinesBannerCard(
-    neon: NeonTheme,
-    active: List<PipelineSummary>,
-    recentTerminal: List<PipelineSummary>,
-    modifier: Modifier = Modifier,
-    onOpen: () -> Unit,
-) {
-    val headline = active.firstOrNull() ?: recentTerminal.firstOrNull() ?: return
-    val isActiveHeadline = active.isNotEmpty()
-    val extraCount = active.size + recentTerminal.size - 1
-
-    val tint = when {
-        isActiveHeadline -> neon.accent
-        headline.state == "failed" -> neon.red
-        else -> neon.green
-    }
-    val title = when {
-        isActiveHeadline -> if (active.size == 1) "1 pipeline running" else "${active.size} pipelines running"
-        headline.state == "failed" -> if (extraCount > 0) "Pipeline failed · $extraCount more" else "Pipeline failed"
-        else -> if (extraCount > 0) "Pipeline complete · $extraCount more" else "Pipeline complete"
-    }
-    val sub = headline.title.ifEmpty { "step ${headline.currentStep + 1} / ${maxOf(headline.stepCount, 1)}" }
-    val icon = when {
-        isActiveHeadline -> Icons.AutoMirrored.Filled.CallSplit
-        headline.state == "failed" -> Icons.Filled.Cancel
-        else -> Icons.Filled.CheckCircle
-    }
-
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .neonCardSurface(
-                neon = neon,
-                shape = RoundedCornerShape(12.dp),
-                fill = tint.copy(alpha = if (isActiveHeadline) 0.07f else 0.05f),
-                borderColor = tint.copy(alpha = if (isActiveHeadline) 0.27f else 0.2f),
-                glowTint = if (isActiveHeadline) tint else null,
-            )
-            .clickable(onClick = onOpen)
-            .padding(horizontal = 13.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(11.dp),
-    ) {
-        Box(
-            modifier = Modifier.size(34.dp).background(tint.copy(alpha = 0.14f), RoundedCornerShape(9.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(icon, null, modifier = Modifier.size(18.dp), tint = tint)
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleSmall,
-                fontFamily = neon.sans,
-                fontWeight = FontWeight.SemiBold,
-                color = if (isActiveHeadline) neon.text else neon.textDim,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                sub,
-                fontFamily = neon.mono,
-                fontSize = 10.5.sp,
-                color = neon.textDim,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        ConduitActionPill(
-            label = "View",
-            variant = if (isActiveHeadline) ActionPillVariant.Solid else ActionPillVariant.Soft,
-            tint = tint,
-            onClick = onOpen,
         )
     }
 }
