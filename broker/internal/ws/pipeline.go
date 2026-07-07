@@ -10,7 +10,10 @@ package ws
 //	POST   /api/pipeline/{id}/resume   re-spawn failed step; 409 if not failed
 //	POST   /api/pipeline/{id}/pick     pick fanout winner; 409 if not awaiting_pick
 //	DELETE /api/pipeline/{id}          cancel; kills live child; state → CANCELLED
+//	POST   /api/pipeline/{id}/archive  archive; 409 if not in a terminal state
+//	POST   /api/pipeline/{id}/unarchive unarchive; always allowed
 //	GET    /api/pipelines              list: [{id, title, state, current_step, step_count, steps, result}]
+//	                                    excludes archived by default; ?include_archived=1 includes them
 //
 //	GET    /api/pipeline-templates        list all templates
 //	POST   /api/pipeline-templates        create a template
@@ -447,6 +450,78 @@ func (s *Server) serveDeletePipeline(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "cancelled": true})
 }
 
+// ── POST /api/pipeline/{id}/archive ─────────────────────────────────────────
+
+func (s *Server) serveArchivePipeline(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	// Path: /api/pipeline/{id}/archive
+	tail := strings.TrimPrefix(r.URL.Path, "/api/pipeline/")
+	id := strings.TrimSuffix(tail, "/archive")
+	id = strings.TrimSpace(id)
+	if id == "" || strings.Contains(id, "/") {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "missing or invalid pipeline id")
+		return
+	}
+
+	p, err := pipeline.Load(s.Sessions.ConduitRoot(), id)
+	if err != nil {
+		writeAPIError(w, http.StatusNotFound, "not_found", "pipeline not found: "+id)
+		return
+	}
+	log.Printf("pipeline: archive %s (state=%s)", id, p.State)
+	orch := s.pipelineOrchestrator()
+	if err := orch.Archive(p); err != nil {
+		if errors.Is(err, pipeline.ErrNotTerminal) {
+			writeAPIError(w, http.StatusConflict, "not_terminal", "pipeline is not in a terminal state")
+			return
+		}
+		log.Printf("pipeline: archive %s: %v", id, err)
+		writeAPIError(w, http.StatusInternalServerError, "pipeline_archive_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": p.ID, "archived": p.Archived})
+}
+
+// ── POST /api/pipeline/{id}/unarchive ───────────────────────────────────────
+
+func (s *Server) serveUnarchivePipeline(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	// Path: /api/pipeline/{id}/unarchive
+	tail := strings.TrimPrefix(r.URL.Path, "/api/pipeline/")
+	id := strings.TrimSuffix(tail, "/unarchive")
+	id = strings.TrimSpace(id)
+	if id == "" || strings.Contains(id, "/") {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "missing or invalid pipeline id")
+		return
+	}
+
+	p, err := pipeline.Load(s.Sessions.ConduitRoot(), id)
+	if err != nil {
+		writeAPIError(w, http.StatusNotFound, "not_found", "pipeline not found: "+id)
+		return
+	}
+	log.Printf("pipeline: unarchive %s (state=%s)", id, p.State)
+	orch := s.pipelineOrchestrator()
+	if err := orch.Unarchive(p); err != nil {
+		log.Printf("pipeline: unarchive %s: %v", id, err)
+		writeAPIError(w, http.StatusInternalServerError, "pipeline_unarchive_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": p.ID, "archived": p.Archived})
+}
+
 // ── GET /api/pipelines ───────────────────────────────────────────────────────
 
 // pipelineStepSummary is the mini-topology-strip view of one top-level step,
@@ -481,6 +556,9 @@ type pipelineListItem struct {
 	// Result is populated only once State == pipeline.PipelineComplete.
 	// Additive (#920).
 	Result *pipelineResultSummary `json:"result,omitempty"`
+	// Archived mirrors pipeline.Pipeline.Archived. Only ever true — the
+	// default (unarchived) list omits the field entirely via omitempty.
+	Archived bool `json:"archived,omitempty"`
 }
 
 // stepDisplayStatus computes the coarse per-step status shown in the mini
@@ -591,9 +669,26 @@ func buildPipelineListItems(pipelines []*pipeline.Pipeline) []pipelineListItem {
 			Created:     p.Created,
 			Steps:       steps,
 			Result:      result,
+			Archived:    p.Archived,
 		})
 	}
 	return items
+}
+
+// filterArchivedPipelines drops archived pipelines unless includeArchived is
+// true. Split out from serveListPipelines for direct unit testing, same
+// rationale as buildPipelineListItems above.
+func filterArchivedPipelines(pipelines []*pipeline.Pipeline, includeArchived bool) []*pipeline.Pipeline {
+	if includeArchived {
+		return pipelines
+	}
+	out := make([]*pipeline.Pipeline, 0, len(pipelines))
+	for _, p := range pipelines {
+		if !p.Archived {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (s *Server) serveListPipelines(w http.ResponseWriter, r *http.Request) {
@@ -606,6 +701,8 @@ func (s *Server) serveListPipelines(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "list_failed", err.Error())
 		return
 	}
+	includeArchived := r.URL.Query().Get("include_archived") == "1"
+	pipelines = filterArchivedPipelines(pipelines, includeArchived)
 	writeJSON(w, http.StatusOK, map[string]any{"pipelines": buildPipelineListItems(pipelines)})
 }
 
@@ -911,6 +1008,8 @@ func (s *Server) servePipelineTemplateRouter(w http.ResponseWriter, r *http.Requ
 //	POST   /api/pipeline/{id}/continue → serveContinuePipeline
 //	POST   /api/pipeline/{id}/resume   → serveResumePipeline
 //	POST   /api/pipeline/{id}/pick     → servePickPipeline
+//	POST   /api/pipeline/{id}/archive  → serveArchivePipeline
+//	POST   /api/pipeline/{id}/unarchive → serveUnarchivePipeline
 //	DELETE /api/pipeline/{id}          → serveDeletePipeline
 func (s *Server) servePipelineRouter(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -925,6 +1024,10 @@ func (s *Server) servePipelineRouter(w http.ResponseWriter, r *http.Request) {
 		s.serveResumePipeline(w, r)
 	case strings.HasSuffix(path, "/pick"):
 		s.servePickPipeline(w, r)
+	case strings.HasSuffix(path, "/unarchive"):
+		s.serveUnarchivePipeline(w, r)
+	case strings.HasSuffix(path, "/archive"):
+		s.serveArchivePipeline(w, r)
 	case r.Method == http.MethodDelete:
 		s.serveDeletePipeline(w, r)
 	case r.Method == http.MethodGet:

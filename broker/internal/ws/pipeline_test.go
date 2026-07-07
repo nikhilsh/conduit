@@ -208,6 +208,58 @@ func TestBuildPipelineListItemsStepsAndResult(t *testing.T) {
 	}
 }
 
+// TestFilterArchivedPipelines verifies the GET /api/pipelines default
+// (excludes archived) and ?include_archived=1 (includes them) behaviors.
+func TestFilterArchivedPipelines(t *testing.T) {
+	live := &pipeline.Pipeline{ID: "p_live", State: pipeline.PipelineRunning}
+	archived := &pipeline.Pipeline{ID: "p_archived", State: pipeline.PipelineComplete, Archived: true}
+	all := []*pipeline.Pipeline{live, archived}
+
+	got := filterArchivedPipelines(all, false)
+	if len(got) != 1 || got[0].ID != "p_live" {
+		t.Errorf("default filter: got %v, want only p_live", ids(got))
+	}
+
+	got = filterArchivedPipelines(all, true)
+	if len(got) != 2 {
+		t.Errorf("include_archived: got %v, want both pipelines", ids(got))
+	}
+}
+
+func ids(pipelines []*pipeline.Pipeline) []string {
+	out := make([]string, len(pipelines))
+	for i, p := range pipelines {
+		out[i] = p.ID
+	}
+	return out
+}
+
+// TestBuildPipelineListItemsArchivedField verifies the additive `archived`
+// field: omitted (false) for a non-archived pipeline, true for an archived one.
+func TestBuildPipelineListItemsArchivedField(t *testing.T) {
+	notArchived := &pipeline.Pipeline{ID: "p_1", State: pipeline.PipelineComplete}
+	isArchived := &pipeline.Pipeline{ID: "p_2", State: pipeline.PipelineComplete, Archived: true}
+
+	items := buildPipelineListItems([]*pipeline.Pipeline{notArchived, isArchived})
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want 2", len(items))
+	}
+	if items[0].Archived {
+		t.Error("items[0].Archived = true, want false")
+	}
+	if !items[1].Archived {
+		t.Error("items[1].Archived = false, want true")
+	}
+
+	data, err := json.Marshal(items[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(data), `"archived"`) {
+		t.Errorf("archived field present in JSON for non-archived item; got %s", string(data))
+	}
+}
+
 // TestStepDisplayStatusBuckets covers the six display-status buckets computed
 // by stepDisplayStatus, mirroring PipelineStepDisplayViewModel.state(for:) in
 // ConduitPipelineMonitorView.swift.
@@ -327,6 +379,36 @@ func TestPipelineGatePreviewCapability(t *testing.T) {
 	}
 }
 
+// TestCapabilitiesPipelineArchive verifies the capabilities endpoint
+// advertises pipeline_archive=true (both features.* and the root mirror).
+func TestCapabilitiesPipelineArchive(t *testing.T) {
+	srv, tok := newTestServer(t)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/capabilities?token="+url.QueryEscape(tok), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET capabilities: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("capabilities status=%d", resp.StatusCode)
+	}
+	var body struct {
+		Features struct {
+			PipelineArchive bool `json:"pipeline_archive"`
+		} `json:"features"`
+		PipelineArchive bool `json:"pipeline_archive"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode capabilities: %v", err)
+	}
+	if !body.Features.PipelineArchive {
+		t.Error("features.pipeline_archive is false; want true")
+	}
+	if !body.PipelineArchive {
+		t.Error("root pipeline_archive mirror is false; want true")
+	}
+}
+
 // setupFailedPipeline creates a pipeline JSON on disk in the failed state
 // at step 0. Returns the pipeline ID and the conduit root.
 func setupFailedPipeline(t *testing.T, conduitRoot string) string {
@@ -409,6 +491,92 @@ func TestResumeEndpointFailedPipeline(t *testing.T) {
 	}
 	if resp.StatusCode == http.StatusConflict {
 		t.Fatalf("got 409 not_failed for a pipeline that is actually failed")
+	}
+}
+
+// setupCompletePipeline creates a pipeline JSON on disk in the complete state.
+// Returns the pipeline ID.
+func setupCompletePipeline(t *testing.T, conduitRoot string) string {
+	t.Helper()
+	p := &pipeline.Pipeline{
+		ID:          pipeline.NewID(),
+		Title:       "test complete pipeline",
+		Task:        "do things",
+		CWD:         "/tmp",
+		State:       pipeline.PipelineComplete,
+		CurrentStep: 0,
+		Steps: []pipeline.Step{
+			{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: pipeline.InputNone, SessionID: "sess-0", Phase: "exited(0)"},
+		},
+	}
+	if err := p.Save(conduitRoot); err != nil {
+		t.Fatalf("save test pipeline: %v", err)
+	}
+	return p.ID
+}
+
+// TestArchiveEndpoint409WhenNotTerminal verifies POST /api/pipeline/{id}/archive
+// returns 409 "not_terminal" for a pipeline that is not in a terminal state.
+func TestArchiveEndpoint409WhenNotTerminal(t *testing.T) {
+	srv, tok := newTestServer(t)
+	conduitRoot := resolveConduitRoot(t, srv.URL, tok)
+	if conduitRoot == "" {
+		t.Skip("conduitRoot not deterministic in this environment")
+	}
+
+	// Awaiting-gate is not a terminal state.
+	pipelineID := setupPipelineAtGate(t, conduitRoot)
+	req, _ := http.NewRequest(http.MethodPost,
+		srv.URL+"/api/pipeline/"+pipelineID+"/archive?token="+url.QueryEscape(tok),
+		nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST archive: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("expected 409; got %d", resp.StatusCode)
+	}
+	var body struct {
+		Error struct{ Code string } `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if body.Error.Code != "not_terminal" {
+		t.Errorf("error code=%q, want not_terminal", body.Error.Code)
+	}
+}
+
+// TestArchiveUnarchiveEndpointRoundTrip exercises the full HTTP path: archive
+// a complete pipeline, then unarchive it, asserting no 404/409 along the way.
+func TestArchiveUnarchiveEndpointRoundTrip(t *testing.T) {
+	srv, tok := newTestServer(t)
+	conduitRoot := resolveConduitRoot(t, srv.URL, tok)
+	if conduitRoot == "" {
+		t.Skip("conduitRoot not deterministic in this environment")
+	}
+
+	pipelineID := setupCompletePipeline(t, conduitRoot)
+
+	archiveReq, _ := http.NewRequest(http.MethodPost,
+		srv.URL+"/api/pipeline/"+pipelineID+"/archive?token="+url.QueryEscape(tok), nil)
+	resp, err := http.DefaultClient.Do(archiveReq)
+	if err != nil {
+		t.Fatalf("POST archive: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("archive status=%d, want 200", resp.StatusCode)
+	}
+
+	unarchiveReq, _ := http.NewRequest(http.MethodPost,
+		srv.URL+"/api/pipeline/"+pipelineID+"/unarchive?token="+url.QueryEscape(tok), nil)
+	resp, err = http.DefaultClient.Do(unarchiveReq)
+	if err != nil {
+		t.Fatalf("POST unarchive: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unarchive status=%d, want 200", resp.StatusCode)
 	}
 }
 

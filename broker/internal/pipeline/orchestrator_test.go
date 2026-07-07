@@ -571,6 +571,109 @@ func TestResumeNotFailedReturnsError(t *testing.T) {
 	}
 }
 
+// ── Archive/Unarchive tests ──────────────────────────────────────────────────
+
+// TestArchiveRequiresTerminalState verifies Archive rejects a pipeline that
+// is still pending or running with ErrNotTerminal.
+func TestArchiveRequiresTerminalState(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone},
+	})
+
+	// Pipeline is in pending state — Archive must reject.
+	if err := orch.Archive(p); !errors.Is(err, ErrNotTerminal) {
+		t.Errorf("Archive on pending: got %v, want ErrNotTerminal", err)
+	}
+
+	// Start it so it's running.
+	if err := orch.Start(p); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := orch.Archive(p); !errors.Is(err, ErrNotTerminal) {
+		t.Errorf("Archive on running: got %v, want ErrNotTerminal", err)
+	}
+	if p.Archived {
+		t.Error("Archived=true after a rejected Archive call")
+	}
+}
+
+// TestArchiveUnarchiveRoundtrip verifies Archive sets + persists the flag on
+// a terminal pipeline, and Unarchive clears + persists it again.
+func TestArchiveUnarchiveRoundtrip(t *testing.T) {
+	for _, state := range []PipelineState{PipelineComplete, PipelineFailed, PipelineCancelled} {
+		t.Run(string(state), func(t *testing.T) {
+			dir := t.TempDir()
+			sm := newFakeSessionManager()
+			orch := NewOrchestrator(dir, sm, nil)
+
+			p := makeTestPipeline(t, dir, []Step{
+				{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone},
+			})
+			p.State = state
+			if err := p.Save(dir); err != nil {
+				t.Fatalf("save: %v", err)
+			}
+
+			if err := orch.Archive(p); err != nil {
+				t.Fatalf("Archive: %v", err)
+			}
+			if !p.Archived {
+				t.Error("Archived=false in memory after Archive")
+			}
+			reloaded, err := Load(dir, p.ID)
+			if err != nil {
+				t.Fatalf("Load after archive: %v", err)
+			}
+			if !reloaded.Archived {
+				t.Error("archived flag not persisted to disk")
+			}
+
+			if err := orch.Unarchive(p); err != nil {
+				t.Fatalf("Unarchive: %v", err)
+			}
+			if p.Archived {
+				t.Error("Archived=true in memory after Unarchive")
+			}
+			reloaded2, err := Load(dir, p.ID)
+			if err != nil {
+				t.Fatalf("Load after unarchive: %v", err)
+			}
+			if reloaded2.Archived {
+				t.Error("archived flag still true on disk after Unarchive")
+			}
+		})
+	}
+}
+
+// TestArchiveUnarchiveIdempotent verifies double-archive and double-unarchive
+// are no-op successes rather than errors.
+func TestArchiveUnarchiveIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	sm := newFakeSessionManager()
+	orch := NewOrchestrator(dir, sm, nil)
+
+	p := makeTestPipeline(t, dir, []Step{
+		{Index: 0, AgentType: "claude", PromptTemplate: "step 0", InputFromPrev: InputNone},
+	})
+	p.State = PipelineFailed
+	if err := orch.Archive(p); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	if err := orch.Archive(p); err != nil {
+		t.Fatalf("Archive again: %v", err)
+	}
+	if err := orch.Unarchive(p); err != nil {
+		t.Fatalf("Unarchive: %v", err)
+	}
+	if err := orch.Unarchive(p); err != nil {
+		t.Fatalf("Unarchive again: %v", err)
+	}
+}
+
 // TestGateNilSerializesOmitted verifies that Gate=nil omits the field in JSON
 // (json:"gate,omitempty" check).
 func TestGateNilSerializesOmitted(t *testing.T) {
