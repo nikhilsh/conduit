@@ -520,7 +520,7 @@ extension ConduitUI {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "plus").font(.system(size: 12, weight: .semibold))
-                        Text("New flow").font(neon.sans(12.5).weight(.semibold))
+                        Text("New flow").font(neon.sans(14).weight(.semibold))
                     }
                     .foregroundStyle(neon.accent)
                     .padding(.vertical, 13)
@@ -798,6 +798,20 @@ extension ConduitUI {
             }
         }
 
+        /// Home FlowCard context-menu "Archive" (design_handoff_flow audit
+        /// §F). On success drops the card from the local list immediately
+        /// (matches the "remove from the local list + refresh" spec) and
+        /// re-syncs from the broker.
+        private func archiveFlow(_ flow: ConduitUI.PipelineSummary) {
+            Task { @MainActor in
+                let ok = await store.setPipelineArchived(id: flow.id, archived: true)
+                if ok {
+                    pipelineSummaries.removeAll { $0.id == flow.id }
+                    pipelineSummaries = await store.refreshPipelines()
+                }
+            }
+        }
+
         /// One-line preview of the latest activity in a session for the
         /// home card. Pulls the most recent NON-user transcript item from
         /// `store.conversationLog` (assistant reply or tool action) — the
@@ -904,6 +918,19 @@ extension ConduitUI {
                                 },
                                 onContinue: { continueFlow(flow) }
                             )
+                            .contextMenu {
+                                // design_handoff_flow audit §F: archive is only
+                                // offered on TERMINAL flows, and only when the
+                                // broker advertises the capability (old broker
+                                // = no archive UI anywhere).
+                                if store.pipelineArchive, ConduitUI.PipelineListViewModel.group(for: flow.state) == .terminal {
+                                    Button {
+                                        archiveFlow(flow)
+                                    } label: {
+                                        Label("Archive", systemImage: "archivebox")
+                                    }
+                                }
+                            }
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))

@@ -184,6 +184,7 @@ fun HomeScreen(
     // periodic tick while Home is composed. Gated on the broker's
     // `pipeline` capability so old brokers stay silent.
     val pipelinesEnabled by store.pipelinesEnabled.collectAsState()
+    val pipelineArchive by store.pipelineArchive.collectAsState()
     var pipelineSummaries by remember { mutableStateOf<List<PipelineSummary>>(emptyList()) }
     val scope = rememberCoroutineScope()
     suspend fun refreshFlowSummaries() {
@@ -338,6 +339,19 @@ fun HomeScreen(
         }
     }
 
+    // Home FlowCard context-menu "Archive" (design_handoff_flow audit §F).
+    // On success drops the card from the local list immediately (matches
+    // the "remove from the local list + refresh" spec) and re-syncs.
+    fun archiveFlow(flow: PipelineSummary) {
+        scope.launch {
+            val ok = store.setPipelineArchived(id = flow.id, archived = true)
+            if (ok) {
+                pipelineSummaries = pipelineSummaries.filter { it.id != flow.id }
+                pipelineSummaries = store.refreshPipelines()
+            }
+        }
+    }
+
     val neon = LocalNeonTheme.current
 
     // Read real insets top AND bottom (design handoff §4.1): statusBarsPadding
@@ -468,9 +482,9 @@ fun HomeScreen(
                     Icon(Icons.Default.Add, null, modifier = Modifier.size(14.dp), tint = neon.accent)
                     Text(
                         "New flow",
-                        style = MaterialTheme.typography.titleSmall,
                         fontFamily = neon.sans,
                         fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
                         color = neon.accent,
                     )
                 }
@@ -481,19 +495,40 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 homeFlows.forEach { flow ->
-                    FlowCard(
-                        summary = flow,
-                        isContinuing = continuingFlowIds.containsKey(flow.id),
-                        onOpen = {
-                            Telemetry.breadcrumb(
-                                "pipeline",
-                                "flow card opened",
-                                mapOf("pipeline_id" to flow.id, "state" to flow.state),
-                            )
-                            onOpenPipeline(flow.id, flow.title)
-                        },
-                        onContinue = { continueFlow(flow) },
-                    )
+                    // design_handoff_flow audit §F: archive is only offered
+                    // on TERMINAL flows, and only when the broker advertises
+                    // the capability (old broker = no archive UI anywhere).
+                    val archivable = pipelineArchive && PipelineListViewModel.group(flow.state) == PipelineListViewModel.Group.TERMINAL
+                    var menuOpen by remember(flow.id) { mutableStateOf(false) }
+                    val onFlowCardLongClick: (() -> Unit)? = if (archivable) {
+                        { menuOpen = true }
+                    } else {
+                        null
+                    }
+                    Box {
+                        FlowCard(
+                            summary = flow,
+                            isContinuing = continuingFlowIds.containsKey(flow.id),
+                            onOpen = {
+                                Telemetry.breadcrumb(
+                                    "pipeline",
+                                    "flow card opened",
+                                    mapOf("pipeline_id" to flow.id, "state" to flow.state),
+                                )
+                                onOpenPipeline(flow.id, flow.title)
+                            },
+                            onContinue = { continueFlow(flow) },
+                            onLongClick = onFlowCardLongClick,
+                        )
+                        if (archivable) {
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Archive") },
+                                    onClick = { menuOpen = false; archiveFlow(flow) },
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

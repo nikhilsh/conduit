@@ -15,9 +15,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -27,7 +24,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -103,18 +100,36 @@ fun FlowStepEditorSheet(
                     modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
-                    // Agent
+                    // Agent -- single row of equal-width tiles (design_handoff_flow
+                    // audit §B.3), NOT a 2-column grid that orphaned a 3rd tile on
+                    // its own row. 4+ agents split into two balanced equal-width
+                    // rows rather than shrinking to illegibility.
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         SectionLabel(neon, "Agent")
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(2),
-                            modifier = Modifier.heightIn(max = 200.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            items(agentOptions) { opt ->
-                                AgentTile(neon = neon, label = opt, selected = step.agentType == opt) {
-                                    update { it.copy(agentType = opt) }
+                        if (agentOptions.size <= 3) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                agentOptions.forEach { opt ->
+                                    AgentTile(neon = neon, label = opt, selected = step.agentType == opt, modifier = Modifier.weight(1f)) {
+                                        update { it.copy(agentType = opt) }
+                                    }
+                                }
+                            }
+                        } else {
+                            val mid = (agentOptions.size + 1) / 2
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    agentOptions.take(mid).forEach { opt ->
+                                        AgentTile(neon = neon, label = opt, selected = step.agentType == opt, modifier = Modifier.weight(1f)) {
+                                            update { it.copy(agentType = opt) }
+                                        }
+                                    }
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    agentOptions.drop(mid).forEach { opt ->
+                                        AgentTile(neon = neon, label = opt, selected = step.agentType == opt, modifier = Modifier.weight(1f)) {
+                                            update { it.copy(agentType = opt) }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -167,6 +182,7 @@ fun FlowStepEditorSheet(
                             checked = step.gateAfter,
                             onCheckedChange = { checked -> update { it.copy(gateAfter = checked) } },
                             iconTint = neon.yellow,
+                            switchTint = neon.yellow,
                         )
                     }
 
@@ -176,7 +192,7 @@ fun FlowStepEditorSheet(
                             modifier = Modifier.fillMaxWidth().clickable { advancedExpanded = !advancedExpanded },
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(Icons.Default.Tune, contentDescription = null, tint = neon.accent, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Settings, contentDescription = null, tint = neon.accent, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("Advanced", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = neon.text)
@@ -246,7 +262,7 @@ private fun SectionLabel(neon: NeonTheme, text: String) {
 }
 
 @Composable
-private fun AgentTile(neon: NeonTheme, label: String, selected: Boolean, onClick: () -> Unit) {
+private fun AgentTile(neon: NeonTheme, label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     // Design C1 (design_handoff_flow README screen 5 / flow-proto-editors.jsx):
     // selected = per-agent tint at a soft fill + a ~40%-tint border + label
     // in the agent's own tint -- NOT a solid `neon.accent` pill (device
@@ -255,8 +271,7 @@ private fun AgentTile(neon: NeonTheme, label: String, selected: Boolean, onClick
     // stays a neutral surface with a hairline border.
     val tint = neonAgentColor(label, neon)
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
             .background(
                 if (selected) tint.copy(alpha = 0.11f) else neon.surface,
                 RoundedCornerShape(12.dp),

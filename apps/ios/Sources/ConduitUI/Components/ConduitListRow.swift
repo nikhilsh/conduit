@@ -69,29 +69,35 @@ extension ConduitUI {
 
     /// Toggle row. The switch tints to the active Neon palette accent
     /// (via [NeonTintedToggle]) instead of the legacy copper brand.
+    /// `switchTint` overrides the switch color (defaults to the accent);
+    /// the flow gate row passes `neon.yellow` to read amber like its
+    /// icon -- every other call site is unaffected by the default.
     static func toggleRow(
         icon: String,
         title: String,
         subtitle: String? = nil,
         isOn: Binding<Bool>,
-        iconTint: Color? = nil
+        iconTint: Color? = nil,
+        switchTint: Color? = nil
     ) -> some View {
         ListRow(icon: icon, title: title, subtitle: subtitle, iconTint: iconTint) {
-            NeonTintedToggle(isOn: isOn)
+            NeonTintedToggle(isOn: isOn, switchTint: switchTint)
         }
     }
 
-    /// A `Toggle` whose accent follows the active Neon palette. Wraps the
-    /// switch so the tint can read `\.neonTheme` from the environment
-    /// (the static row factories can't, being plain functions).
+    /// A `Toggle` whose accent follows the active Neon palette by default.
+    /// `switchTint` overrides the color (e.g. amber for a gate toggle).
+    /// Wraps the switch so the tint can read `\.neonTheme` from the
+    /// environment (the static row factories can't, being plain functions).
     struct NeonTintedToggle: View {
         let isOn: Binding<Bool>
+        var switchTint: Color? = nil
         @Environment(\.neonTheme) private var neon
 
         var body: some View {
             Toggle("", isOn: isOn)
                 .labelsHidden()
-                .tint(neon.accent)
+                .tint(switchTint ?? neon.accent)
         }
     }
 

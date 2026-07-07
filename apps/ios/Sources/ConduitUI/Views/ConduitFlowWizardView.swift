@@ -185,9 +185,9 @@ extension ConduitUI {
                             // mono "<dir> · <branch>" subtitle, chevron.
                             Button { showWhereEditor = true } label: {
                                 HStack(spacing: 12) {
-                                    Image(systemName: "folder")
+                                    Image(systemName: "server.rack")
                                         .font(.body)
-                                        .foregroundStyle(neon.accent)
+                                        .foregroundStyle(neon.green)
                                         .frame(width: 20)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(whereTitle)
@@ -390,9 +390,11 @@ extension ConduitUI {
                 if step.gateAfter {
                     ConduitUI.GatePill(label: "Gate \u{2014} you approve", active: true)
                 } else {
+                    // design_handoff_flow audit §C.9: the ghost token reads
+                    // quieter than textFaint for this decorative caption.
                     Text("passes work down \u{2193}")
                         .font(neon.mono(11))
-                        .foregroundStyle(neon.textFaint)
+                        .foregroundStyle(neon.ghost)
                 }
                 Spacer()
             }
@@ -405,17 +407,17 @@ extension ConduitUI {
         private var addStepControl: some View {
             if addStepMenuExpanded {
                 HStack(spacing: 8) {
-                    pillChoice("Agent step") {
+                    pillChoice("Agent step", style: .accent) {
                         viewModel.addStep()
                         addStepMenuExpanded = false
                         Telemetry.breadcrumb("flow_wizard", "add step agent", data: [:])
                     }
-                    pillChoice("If / Else") {
+                    pillChoice("If / Else", style: .accent) {
                         viewModel.addControlFlowStep(kind: "branch")
                         addStepMenuExpanded = false
                         Telemetry.breadcrumb("flow_wizard", "add step branch", data: [:])
                     }
-                    pillChoice("Cancel") { addStepMenuExpanded = false }
+                    pillChoice("Cancel", style: .neutral) { addStepMenuExpanded = false }
                 }
             } else {
                 Button {
@@ -426,7 +428,7 @@ extension ConduitUI {
                         Text("Add step")
                     }
                     .font(neon.sans(13).weight(.semibold))
-                    .foregroundStyle(neon.textDim)
+                    .foregroundStyle(neon.accent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                 }
@@ -434,14 +436,24 @@ extension ConduitUI {
             }
         }
 
-        private func pillChoice(_ label: String, action: @escaping () -> Void) -> some View {
+        /// Pill choice style (design_handoff_flow audit §C.7): the two
+        /// committing choices ("Agent step" / "If / Else") read as
+        /// accent-tinted pills; "Cancel" stays a neutral hairline pill.
+        private enum PillChoiceStyle { case accent, neutral }
+
+        private func pillChoice(_ label: String, style: PillChoiceStyle, action: @escaping () -> Void) -> some View {
             Button(action: action) {
                 Text(label)
                     .font(neon.sans(12.5).weight(.semibold))
-                    .foregroundStyle(neon.text)
+                    .foregroundStyle(style == .accent ? neon.accent : neon.textFaint)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .conduitGlassCapsule(tint: nil)
+                    .background(
+                        Capsule().fill(style == .accent ? neon.accent.opacity(0.08) : Color.clear)
+                    )
+                    .overlay(
+                        Capsule().stroke(style == .accent ? neon.accent.opacity(0.4) : neon.lineSoft, lineWidth: 1)
+                    )
             }
             .buttonStyle(.plain)
         }
@@ -450,7 +462,9 @@ extension ConduitUI {
             VStack(spacing: 10) {
                 Rectangle().fill(neon.border).frame(height: 1)
                 HStack(spacing: 6) {
-                    ConduitUI.GateGlyph(size: 12)
+                    if gateCount > 0 {
+                        ConduitUI.GateGlyph(size: 12)
+                    }
                     Text(gateSummaryCaption)
                         .font(neon.mono(11.5))
                         .foregroundStyle(neon.textDim)

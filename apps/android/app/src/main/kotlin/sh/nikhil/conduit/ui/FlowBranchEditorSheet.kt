@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.RemoveCircle
@@ -73,7 +74,7 @@ fun FlowBranchEditorSheet(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "If / Else",
+                        "New step · If / Else",
                         fontFamily = neon.sans,
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp,
@@ -92,26 +93,28 @@ fun FlowBranchEditorSheet(
                     ThenSection(neon, viewModel, stepId, step)
                     ElseSection(neon, viewModel, stepId, step)
                 }
+                // design_handoff_flow audit §D.12: Discard reads as a
+                // secondary (red) button at 1:2 width against the primary
+                // "Add to flow" -- RowScope.weight expresses the ratio
+                // directly (no GeometryReader needed on this platform).
                 Row(
                     modifier = Modifier.fillMaxWidth().background(neon.bg).padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text(
-                        "Discard",
-                        fontFamily = neon.sans,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp,
-                        color = neon.red,
-                        modifier = Modifier
-                            .clickable {
+                    Box(modifier = Modifier.weight(1f)) {
+                        ConduitButton(
+                            title = "Discard",
+                            onClick = {
                                 Telemetry.breadcrumb("flow_wizard", "branch_discard", emptyMap())
                                 viewModel.removeStep(stepId)
                                 onDismiss()
-                            }
-                            .padding(vertical = 12.dp, horizontal = 8.dp),
-                    )
-                    Box(modifier = Modifier.weight(1f)) {
+                            },
+                            variant = ButtonVariant.Secondary,
+                            tint = neon.red,
+                        )
+                    }
+                    Box(modifier = Modifier.weight(2f)) {
                         ConduitButton(title = "Add to flow", onClick = onDismiss, variant = ButtonVariant.Primary, tint = neon.accent)
                     }
                 }
@@ -205,17 +208,10 @@ private fun ThenSection(neon: NeonTheme, viewModel: PipelineBuilderViewModel, st
             step.branchThen.forEach { sub ->
                 SubStepRow(neon, sub) { viewModel.removeSubStep(stepId, PipelineSubStepArm.THEN, sub.id) }
             }
-            Text(
-                "+ Add step",
-                fontFamily = neon.sans,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 12.5.sp,
-                color = neon.green,
-                modifier = Modifier.clickable {
-                    viewModel.addSubStep(stepId, PipelineSubStepArm.THEN)
-                    Telemetry.breadcrumb("flow_wizard", "branch_then_add", emptyMap())
-                },
-            )
+            AddStepGhostButton(neon = neon, tint = neon.green) {
+                viewModel.addSubStep(stepId, PipelineSubStepArm.THEN)
+                Telemetry.breadcrumb("flow_wizard", "branch_then_add", emptyMap())
+            }
         }
     }
 }
@@ -241,18 +237,26 @@ private fun ElseSection(neon: NeonTheme, viewModel: PipelineBuilderViewModel, st
                     SubStepRow(neon, sub) { viewModel.removeSubStep(stepId, PipelineSubStepArm.ELSE_ARM, sub.id) }
                 }
             }
-            Text(
-                "+ Add step",
-                fontFamily = neon.sans,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 12.5.sp,
-                color = neon.textDim,
-                modifier = Modifier.clickable {
-                    viewModel.addSubStep(stepId, PipelineSubStepArm.ELSE_ARM)
-                    Telemetry.breadcrumb("flow_wizard", "branch_else_add", emptyMap())
-                },
-            )
+            AddStepGhostButton(neon = neon, tint = neon.textDim) {
+                viewModel.addSubStep(stepId, PipelineSubStepArm.ELSE_ARM)
+                Telemetry.breadcrumb("flow_wizard", "branch_else_add", emptyMap())
+            }
         }
+    }
+}
+
+/** design_handoff_flow audit §D.13: shared ghost-button styling (plus glyph
+ *  + label, no fill) for the THEN/ELSE "+ Add step" rows -- THEN reads in
+ *  green, ELSE stays faint. */
+@Composable
+private fun AddStepGhostButton(neon: NeonTheme, tint: Color, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        modifier = Modifier.clickable(onClick = onClick),
+    ) {
+        Icon(Icons.Default.Add, contentDescription = null, tint = tint, modifier = Modifier.size(12.dp))
+        Text("Add step", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 12.5.sp, color = tint)
     }
 }
 

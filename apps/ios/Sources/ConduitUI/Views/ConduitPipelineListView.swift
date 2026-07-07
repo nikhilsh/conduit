@@ -42,6 +42,21 @@ extension ConduitUI {
         /// Diffstat-only recap, populated once the pipeline completes
         /// (broker #922). Absent on an older broker or a pre-#906 pipeline.
         var result: PipelineSummaryResult? = nil
+        /// Whether this flow has been archived (broker #932, `pipeline_archive`
+        /// capability). OPTIONAL because the broker omits the key entirely
+        /// when false (`omitempty`) and older brokers never send it — a
+        /// non-optional `var` with a default is still decoded by the
+        /// synthesized `init(from:)` and makes the key REQUIRED
+        /// (keyNotFound on real payloads). Optionals decode via
+        /// `decodeIfPresent`, tolerating absence. Read `isArchived`.
+        var archivedFlag: Bool? = nil
+
+        enum CodingKeys: String, CodingKey {
+            case id, title, state, current_step, step_count, created, steps, result
+            case archivedFlag = "archived"
+        }
+
+        var isArchived: Bool { archivedFlag ?? false }
     }
 
     /// One step's mini-topology entry on a `GET /api/pipelines` list item
@@ -151,17 +166,60 @@ extension ConduitUI {
         @State private var pipelines: [PipelineSummary] = []
         @State private var isLoading = true
         @State private var selectedPipeline: PipelineSummary?
+        /// design_handoff_flow audit §F: smallest-viable way to see archived
+        /// flows -- a toggle that refetches with `include_archived=1`. Off by
+        /// default so the everyday list stays uncluttered.
+        @State private var showArchived = false
 
         var body: some View {
             NavigationStack {
                 ZStack {
                     GlassAppBackground()
-                    if pipelines.isEmpty {
+                    // Keep the "Show archived" toggle reachable even when the
+                    // non-archived set is empty (otherwise a user with zero
+                    // active/terminal flows could never reveal archived ones).
+                    if pipelines.isEmpty && !store.pipelineArchive {
                         emptyState
                     } else {
                         List {
+                            if store.pipelineArchive {
+                                Toggle("Show archived", isOn: $showArchived)
+                                    .font(neon.sans(13).weight(.semibold))
+                                    .foregroundStyle(neon.text)
+                                    .tint(neon.accent)
+                                    .listRowBackground(Color.clear)
+                                    .listRowSeparator(.hidden)
+                                    .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
+                                    .onChange(of: showArchived) { _, newValue in
+                                        Telemetry.breadcrumb("pipeline", "show archived toggled", data: ["on": "\(newValue)"])
+                                        Task { await load() }
+                                    }
+                            }
+                            if pipelines.isEmpty {
+                                emptyState
+                                    .listRowBackground(Color.clear)
+                                    .listRowSeparator(.hidden)
+                                    .frame(minHeight: 240)
+                            }
                             ForEach(PipelineListViewModel.sorted(pipelines)) { p in
                                 pipelineRow(p)
+                                    .contextMenu {
+                                        if store.pipelineArchive {
+                                            if p.isArchived {
+                                                Button {
+                                                    setArchived(p, archived: false)
+                                                } label: {
+                                                    Label("Unarchive", systemImage: "tray.and.arrow.up")
+                                                }
+                                            } else if PipelineListViewModel.group(for: p.state) == .terminal {
+                                                Button {
+                                                    setArchived(p, archived: true)
+                                                } label: {
+                                                    Label("Archive", systemImage: "archivebox")
+                                                }
+                                            }
+                                        }
+                                    }
                                     .listRowBackground(Color.clear)
                                     .listRowSeparator(.hidden)
                                     .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
@@ -197,6 +255,16 @@ extension ConduitUI {
             .appearanceColorScheme()
             .tint(neon.accent)
             .task { await load() }
+        }
+
+        /// Archive/unarchive from the list's context menu. On success
+        /// refetches (honoring the current `showArchived` state) so the row
+        /// disappears (archived, not showing archived) or updates its chip.
+        private func setArchived(_ p: PipelineSummary, archived: Bool) {
+            Task { @MainActor in
+                let ok = await store.setPipelineArchived(id: p.id, archived: archived)
+                if ok { await load() }
+            }
         }
 
         private var emptyState: some View {
@@ -235,6 +303,9 @@ extension ConduitUI {
                         .foregroundStyle(neon.textDim)
                 }
                 Spacer(minLength: 8)
+                if p.isArchived {
+                    ConduitUI.Chip(label: "archived", tint: neon.textFaint)
+                }
                 stateChip(p.state)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
@@ -243,6 +314,9 @@ extension ConduitUI {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
+            // design_handoff_flow audit §F: archived rows render at reduced
+            // opacity so "Show archived" reads as a distinct, quieter set.
+            .opacity(p.isArchived ? 0.55 : 1.0)
         }
 
         private func stateChip(_ state: String) -> some View {
@@ -263,9 +337,9 @@ extension ConduitUI {
         private func load() async {
             isLoading = true
             defer { isLoading = false }
-            let fetched = await store.refreshPipelines()
+            let fetched = await store.refreshPipelines(includeArchived: showArchived)
             pipelines = fetched
-            Telemetry.breadcrumb("pipeline", "list opened", data: ["count": "\(fetched.count)"])
+            Telemetry.breadcrumb("pipeline", "list opened", data: ["count": "\(fetched.count)", "includeArchived": "\(showArchived)"])
         }
     }
 }

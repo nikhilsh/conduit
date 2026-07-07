@@ -7,14 +7,13 @@ import SwiftUI
 // a new flow: a segmented Session/Flow control (default Session) replaces
 // the old separate "New session" / "New pipeline" affordances.
 //
-// Session tab hosts the EXISTING `AgentPickerSheet` flow unmodified (its own
-// NavigationStack/title/Cancel) -- deliberately NOT rewritten, per the PR
-// scope. This nests a NavigationStack inside this sheet's own chrome, which
-// reads as two stacked headers ("Start" + segmented control, then
-// AgentPickerSheet's own "New session" title) -- flagged for on-device
-// verification; functionally correct (its own `dismiss()` still tears down
-// this whole sheet since `\.dismiss` resolves to the nearest presentation,
-// not the nearest NavigationStack).
+// Session tab is a compact native form (design_handoff_flow audit, screen 2):
+// a 2-per-row agent-card grid, a task input, the wizard's "Where" row, and a
+// pinned "Start session" button tinted with the selected agent -- NOT the
+// full `AgentPickerSheet` (that sheet's own model/effort/permission config is
+// out of scope here; this tab always creates with the agent's defaults, same
+// as picking "Start without a folder" used to). `AgentPickerSheet` itself
+// stays for its other call sites (the "+" button, deep-link post-pair).
 
 extension ConduitUI {
 
@@ -44,6 +43,7 @@ extension ConduitUI {
         enum Tab: String { case session, flow }
 
         @Environment(SessionStore.self) private var store
+        @Environment(FeatureFlags.self) private var flags
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
 
@@ -57,6 +57,14 @@ extension ConduitUI {
         @State private var templates: [PipelineTemplate] = []
         @State private var isLoadingTemplates = false
 
+        // MARK: Compact Session tab state
+        @State private var sessionAgentKind: String = "claude"
+        @State private var sessionTask: String = ""
+        @State private var sessionCwd: String = ""
+        @State private var sessionBranch: String = "main"
+        @State private var showSessionWhereEditor = false
+        @State private var isStartingSession = false
+
         init(initialTab: Tab = .session, onStartWizard: @escaping (FlowWizardPrefill) -> Void) {
             self.onStartWizard = onStartWizard
             self._tab = State(initialValue: initialTab)
@@ -65,11 +73,13 @@ extension ConduitUI {
         var body: some View {
             VStack(spacing: 0) {
                 header
-                Picker("", selection: $tab) {
-                    Text("Session").tag(Tab.session)
-                    Text("Flow").tag(Tab.flow)
-                }
-                .pickerStyle(.segmented)
+                NeonSegmentedPill(
+                    segments: [
+                        NeonSegmentedPill<Tab>.Segment(id: .session, label: "Session"),
+                        NeonSegmentedPill<Tab>.Segment(id: .flow, label: "Flow"),
+                    ],
+                    selection: $tab
+                )
                 .padding(.horizontal, 16)
                 .padding(.top, 2)
                 .padding(.bottom, 10)
@@ -80,14 +90,7 @@ extension ConduitUI {
 
                 Group {
                     if tab == .session {
-                        ConduitUI.AgentPickerSheet(
-                            onOpenPipelineBuilder: {
-                                Telemetry.breadcrumb("flow_start", "session tab pipeline row tapped", data: [:])
-                                onStartWizard(.blank)
-                                dismiss()
-                            },
-                            embedded: true
-                        )
+                        sessionTab
                     } else {
                         flowTab
                     }
@@ -120,6 +123,193 @@ extension ConduitUI {
             .padding(.horizontal, 16)
             .padding(.top, 16)
             .padding(.bottom, 4)
+        }
+
+        // MARK: Compact Session tab
+        //
+        // design_handoff_flow audit §A.1: a compact native form, not the
+        // full AgentPickerSheet. Wired to the SAME session-create path
+        // (`store.createSession`) with model/effort/permission left at
+        // their defaults -- advanced knobs are out of this tab's scope.
+
+        private var sessionTab: some View {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        sectionLabel("Agent")
+                        LazyVGrid(
+                            columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)],
+                            spacing: 10
+                        ) {
+                            ForEach(sessionAgentKinds, id: \.self) { kind in
+                                sessionAgentCard(kind)
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        sectionLabel("Task")
+                        TextField("What should the agent do?", text: $sessionTask, axis: .vertical)
+                            .font(neon.sans(15))
+                            .foregroundStyle(neon.text)
+                            .lineLimit(4...7)
+                            .frame(minHeight: 96, alignment: .top)
+                            .textFieldStyle(.plain)
+                            .padding(12)
+                            .neonCardSurface(neon, fill: neon.surface2, cornerRadius: 14)
+                            .tint(neon.accent)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        sectionLabel("Where")
+                        Button { showSessionWhereEditor = true } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "server.rack")
+                                    .font(.body)
+                                    .foregroundStyle(neon.green)
+                                    .frame(width: 20)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(sessionWhereTitle)
+                                        .font(neon.sans(15).weight(.semibold))
+                                        .foregroundStyle(neon.text)
+                                    Text("\(sessionCwdDisplay) \u{00B7} \(sessionBranch.isEmpty ? "main" : sessionBranch)")
+                                        .font(neon.mono(12))
+                                        .foregroundStyle(neon.textDim)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                Spacer(minLength: 8)
+                                Image(systemName: "chevron.right")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(neon.textDim)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
+                    }
+                }
+                .padding(16)
+                .padding(.bottom, 76)
+            }
+            .scrollIndicators(.hidden)
+            .sheet(isPresented: $showSessionWhereEditor) { sessionWhereEditorSheet }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 0) {
+                    Rectangle().fill(neon.border).frame(height: 1)
+                    ConduitUI.ActionButton(
+                        "Start session",
+                        variant: .primary,
+                        tint: neon.agentTint(forAgent: sessionAgentKind)
+                    ) {
+                        startSession()
+                    }
+                    .disabled(isStartingSession || !store.harness.canIssueCommands)
+                    .opacity(isStartingSession || !store.harness.canIssueCommands ? 0.6 : 1)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 12)
+                }
+                .background(neon.bg.ignoresSafeArea(edges: .bottom))
+            }
+        }
+
+        /// Hardcoded first-class agents plus any extra broker-descriptor
+        /// agents, filtered by `flags.enabledAgents` -- mirrors
+        /// `ConduitAgentPickerSheet.allAgentKinds`.
+        private var sessionAgentKinds: [String] {
+            let enabled = Set(flags.enabledAgents.map { $0.lowercased() })
+            let base: [String] = ["claude", "codex"].filter { enabled.contains($0) }
+            let extras = store.agentDescriptors.keys
+                .filter { !["claude", "codex"].contains($0.lowercased()) && enabled.contains($0.lowercased()) }
+                .sorted()
+            return base + extras
+        }
+
+        private func sessionAgentCard(_ kind: String) -> some View {
+            let tint = neon.agentTint(forAgent: kind)
+            let selected = sessionAgentKind == kind
+            let name = sessionAgentName(kind)
+            let modelTitle = ConduitUI.ForkOptions.defaultModelTitle(forCatalog: store.modelCatalog[kind])
+                ?? store.agentDescriptors[kind.lowercased()]?.displayName ?? ""
+            return Button {
+                sessionAgentKind = kind
+            } label: {
+                HStack(spacing: 10) {
+                    ConduitUI.AgentDot(agent: kind, size: 30)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(name)
+                            .font(neon.sans(15).weight(.bold))
+                            .foregroundStyle(neon.text)
+                        Text(modelTitle)
+                            .font(neon.mono(10.5))
+                            .foregroundStyle(selected ? tint : neon.textFaint)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .neonCardSurface(
+                    neon,
+                    fill: selected ? tint.opacity(neon.dark ? 0.14 : 0.10) : neon.surface,
+                    cornerRadius: 14,
+                    border: selected ? tint.opacity(0.66) : neon.lineSoft,
+                    glowTint: selected ? tint : nil
+                )
+            }
+            .buttonStyle(.plain)
+        }
+
+        private func sessionAgentName(_ kind: String) -> String {
+            switch kind.lowercased() {
+            case "claude": return "Claude"
+            case "codex": return "Codex"
+            default:
+                let desc = store.agentDescriptors[kind.lowercased()]
+                return (desc?.displayName.isEmpty == false) ? desc!.displayName : kind.capitalized
+            }
+        }
+
+        private var sessionWhereTitle: String {
+            store.savedServers.first(where: { $0.endpoint == store.endpoint })?.name ?? store.endpoint.displayHost
+        }
+
+        private var sessionCwdDisplay: String {
+            sessionCwd.isEmpty ? "no folder" : (sessionCwd as NSString).lastPathComponent
+        }
+
+        /// Reuses the SAME directory/box picker `AgentPickerSheet` and the
+        /// wizard's "Where" step use (`directoryOnly` mode).
+        private var sessionWhereEditorSheet: some View {
+            NavigationStack {
+                ConduitUI.DirectoryPicker(
+                    agentKind: sessionAgentKind,
+                    directoryOnly: true,
+                    branch: $sessionBranch,
+                    onCreate: { path, _, _, _, _, _ in
+                        sessionCwd = path ?? ""
+                        showSessionWhereEditor = false
+                    }
+                )
+            }
+            .tint(neon.accent)
+        }
+
+        private func startSession() {
+            guard !isStartingSession else { return }
+            isStartingSession = true
+            let trimmedTask = sessionTask.trimmingCharacters(in: .whitespacesAndNewlines)
+            Telemetry.breadcrumb("flow_start", "session tab start tapped",
+                data: ["agent": sessionAgentKind, "hasTask": "\(!trimmedTask.isEmpty)", "hasCwd": "\(!sessionCwd.isEmpty)"])
+            store.createSession(
+                assistant: sessionAgentKind,
+                startupCwd: sessionCwd.isEmpty ? nil : sessionCwd,
+                initialPrompt: trimmedTask.isEmpty ? nil : trimmedTask
+            )
+            dismiss()
         }
 
         // MARK: Flow tab

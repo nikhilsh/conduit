@@ -65,7 +65,7 @@ struct NeonSegmentedPill<Tab: Hashable>: View {
     struct Segment: Identifiable {
         let id: Tab
         let label: String
-        let systemImage: String
+        var systemImage: String? = nil
     }
 
     let segments: [Segment]
@@ -80,8 +80,10 @@ struct NeonSegmentedPill<Tab: Hashable>: View {
                     withAnimation(.easeOut(duration: 0.18)) { selection = seg.id }
                 } label: {
                     HStack(spacing: 5) {
-                        Image(systemName: seg.systemImage)
-                            .font(.system(size: 11, weight: .semibold))
+                        if let systemImage = seg.systemImage {
+                            Image(systemName: systemImage)
+                                .font(.system(size: 11, weight: .semibold))
+                        }
                         Text(seg.label)
                             .font(neon.mono(12).weight(.semibold))
                     }
