@@ -147,13 +147,16 @@ for (const { platform, publicKey } of TARGETS) {
       await session.waitForTimeout(5_000);
       await shot('demo-chat');
 
-      // 4. Terminal tab — faux shell output.
-      await session.tap({ element: { attributes: { text: 'Terminal' } } });
+      // 4. Terminal tab — faux shell output. matchIndex: with the pill
+      // segments' pinned accessibility labels (#941) iOS reports a second
+      // "Terminal" match from the demo chat content; index 0 is the tab
+      // pill (first in the tree).
+      await session.tap({ element: { attributes: { text: 'Terminal' } } }, { matchIndex: 0 });
       await session.waitForTimeout(3_000);
       await shot('demo-terminal');
 
       // 5. Browser tab — bundled preview.html in a WebView (allow load time).
-      await session.tap({ element: { attributes: { text: 'Browser' } } });
+      await session.tap({ element: { attributes: { text: 'Browser' } } }, { matchIndex: 0 });
       await session.waitForTimeout(6_000);
       await shot('demo-browser');
     });
