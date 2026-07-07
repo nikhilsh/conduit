@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Terminal
@@ -37,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -108,10 +110,17 @@ private fun DemoPhoneLayout(store: SessionStore, onExitDemo: () -> Unit) {
     var selectedSession by remember { mutableStateOf<ProjectSession?>(null) }
     var selectedFlowId by remember { mutableStateOf<String?>(null) }
     var showingAppearance by remember { mutableStateOf(false) }
+    // Flow Start sheet + wizard (demo) -- same seam as the real Home's
+    // bottom-bar "+" / FLOWS header "+ New flow", just routed at zero
+    // network (see SessionStore.demoStartFlow).
+    var showFlowStart by remember { mutableStateOf(false) }
+    var flowStartInitialTab by remember { mutableStateOf(FlowStartTab.SESSION) }
+    var flowWizardPrefill by remember { mutableStateOf<FlowWizardPrefill?>(null) }
+    val extraPipelines by store.demoExtraPipelines.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize().background(neon.appBg)) {
         val flowId = selectedFlowId
-        val flowStatus = flowId?.let { DemoData.pipelineStatus(it) }
+        val flowStatus = flowId?.let { store.demoPipelineStatus(it) }
         if (flowId != null && flowStatus != null) {
             BackHandler(enabled = true) { selectedFlowId = null }
             PipelineMonitorScreen(
@@ -141,11 +150,26 @@ private fun DemoPhoneLayout(store: SessionStore, onExitDemo: () -> Unit) {
                     },
                 )
                 DemoBanner(neon = neon)
-                DemoFlowsSection(neon = neon, onOpenFlow = { selectedFlowId = it })
+                DemoFlowsSection(
+                    neon = neon,
+                    pipelines = extraPipelines + DemoData.pipelines,
+                    onOpenFlow = { selectedFlowId = it },
+                    onNewFlow = {
+                        Telemetry.breadcrumb("demo", "flows_header_new_flow_tapped")
+                        flowStartInitialTab = FlowStartTab.FLOW
+                        showFlowStart = true
+                    },
+                )
                 DemoSessionListContent(
                     neon = neon,
                     onSelect = { selectedSession = it },
                 )
+                Spacer(modifier = Modifier.weight(1f))
+                DemoBottomBar(neon = neon, onPlusTap = {
+                    Telemetry.breadcrumb("demo", "plus_button_tapped")
+                    flowStartInitialTab = FlowStartTab.SESSION
+                    showFlowStart = true
+                })
             }
         } else {
             val session = selectedSession!!
@@ -176,6 +200,36 @@ private fun DemoPhoneLayout(store: SessionStore, onExitDemo: () -> Unit) {
             onDismiss = { showingAppearance = false },
         )
     }
+
+    if (showFlowStart) {
+        FlowStartSheet(
+            store = store,
+            initialTab = flowStartInitialTab,
+            onStartWizard = { prefill ->
+                showFlowStart = false
+                // Demo mode always opens the wizard on the Task screen
+                // (step 1), even for a built-in template whose real prefill
+                // jumps straight to Steps -- lets a reviewer (and the
+                // Appetize tour) see both screens with real content instead
+                // of skipping the Task screen.
+                flowWizardPrefill = prefill.copy(startStep = 1)
+            },
+            onDismiss = { showFlowStart = false },
+        )
+    }
+
+    flowWizardPrefill?.let { prefill ->
+        BackHandler(enabled = true) { flowWizardPrefill = null }
+        FlowWizardScreen(
+            store = store,
+            prefill = prefill,
+            onCreated = { id, _ ->
+                flowWizardPrefill = null
+                selectedFlowId = id
+            },
+            onBack = { flowWizardPrefill = null },
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +243,12 @@ private fun DemoTabletLayout(store: SessionStore, onExitDemo: () -> Unit) {
     var selectedSession by remember { mutableStateOf(DemoData.sessions.firstOrNull()) }
     var selectedFlowId by remember { mutableStateOf<String?>(null) }
     var showingAppearance by remember { mutableStateOf(false) }
+    // Same Start sheet -> wizard chain as the phone layout, presented as a
+    // full-screen Dialog here too (matches the flow monitor's own presentation).
+    var showFlowStart by remember { mutableStateOf(false) }
+    var flowStartInitialTab by remember { mutableStateOf(FlowStartTab.FLOW) }
+    var flowWizardPrefill by remember { mutableStateOf<FlowWizardPrefill?>(null) }
+    val extraPipelines by store.demoExtraPipelines.collectAsState()
 
     Row(modifier = Modifier.fillMaxSize().background(neon.appBg).statusBarsPadding()) {
         // Rail / sidebar
@@ -243,7 +303,16 @@ private fun DemoTabletLayout(store: SessionStore, onExitDemo: () -> Unit) {
                 }
             }
             DemoBanner(neon = neon, compact = true)
-            DemoFlowsSection(neon = neon, onOpenFlow = { selectedFlowId = it })
+            DemoFlowsSection(
+                neon = neon,
+                pipelines = extraPipelines + DemoData.pipelines,
+                onOpenFlow = { selectedFlowId = it },
+                onNewFlow = {
+                    Telemetry.breadcrumb("demo", "flows_header_new_flow_tapped")
+                    flowStartInitialTab = FlowStartTab.FLOW
+                    showFlowStart = true
+                },
+            )
             DemoSessionListContent(
                 neon = neon,
                 onSelect = { selectedSession = it; selectedFlowId = null },
@@ -263,7 +332,7 @@ private fun DemoTabletLayout(store: SessionStore, onExitDemo: () -> Unit) {
         // or the flow Monitor when a FLOWS card was tapped.
         Column(modifier = Modifier.weight(1f).fillMaxSize()) {
             val flowId = selectedFlowId
-            val flowStatus = flowId?.let { DemoData.pipelineStatus(it) }
+            val flowStatus = flowId?.let { store.demoPipelineStatus(it) }
             val session = selectedSession
             if (flowId != null && flowStatus != null) {
                 PipelineMonitorScreen(
@@ -293,6 +362,36 @@ private fun DemoTabletLayout(store: SessionStore, onExitDemo: () -> Unit) {
         AppearanceSheet(
             appearance = appearance,
             onDismiss = { showingAppearance = false },
+        )
+    }
+
+    if (showFlowStart) {
+        FlowStartSheet(
+            store = store,
+            initialTab = flowStartInitialTab,
+            onStartWizard = { prefill ->
+                showFlowStart = false
+                // Demo mode always opens the wizard on the Task screen
+                // (step 1), even for a built-in template whose real prefill
+                // jumps straight to Steps -- lets a reviewer (and the
+                // Appetize tour) see both screens with real content instead
+                // of skipping the Task screen.
+                flowWizardPrefill = prefill.copy(startStep = 1)
+            },
+            onDismiss = { showFlowStart = false },
+        )
+    }
+
+    flowWizardPrefill?.let { prefill ->
+        BackHandler(enabled = true) { flowWizardPrefill = null }
+        FlowWizardScreen(
+            store = store,
+            prefill = prefill,
+            onCreated = { id, _ ->
+                flowWizardPrefill = null
+                selectedFlowId = id
+            },
+            onBack = { flowWizardPrefill = null },
         )
     }
 }
@@ -419,6 +518,36 @@ private fun DemoBanner(neon: NeonTheme, compact: Boolean = false) {
     }
 }
 
+/**
+ * Bottom action bar's "+" (phone layout only, mirrors the real Home's
+ * accent-filled circle button, HomeScreen.kt) -- opens the Flow Start sheet
+ * on the Session tab. No mic/search peers here (demo has no voice
+ * dictation / command palette).
+ */
+@Composable
+private fun DemoBottomBar(neon: NeonTheme, onPlusTap: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(neon.accent, CircleShape)
+                .clickable(onClick = onPlusTap),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = "Start",
+                tint = neon.accentText,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Flows section (demo)
 //
@@ -430,23 +559,52 @@ private fun DemoBanner(neon: NeonTheme, compact: Boolean = false) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun DemoFlowsSection(neon: NeonTheme, onOpenFlow: (String) -> Unit) {
+private fun DemoFlowsSection(
+    neon: NeonTheme,
+    /** `store.demoExtraPipelines + DemoData.pipelines` -- the static fixtures
+     *  plus any fake flow the demo wizard started locally. */
+    pipelines: List<sh.nikhil.conduit.ui.PipelineSummary>,
+    onOpenFlow: (String) -> Unit,
+    /** "+ New flow" header action -- opens the real Flow Start sheet
+     *  (mirrors HomeScreen.kt's flows header), zero network. */
+    onNewFlow: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(
-            "FLOWS",
-            fontFamily = neon.mono,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 12.sp,
-            letterSpacing = 2.sp,
-            color = neon.accent,
-            maxLines = 1,
-        )
-        DemoData.pipelines.forEach { flow ->
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "FLOWS",
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+                letterSpacing = 2.sp,
+                color = neon.accent,
+                maxLines = 1,
+                modifier = Modifier.weight(1f),
+            )
+            Row(
+                modifier = Modifier.clickable(onClick = onNewFlow),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Icon(Icons.Default.Add, null, modifier = Modifier.size(12.dp), tint = neon.accent)
+                Text(
+                    "New flow",
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                    color = neon.accent,
+                )
+            }
+        }
+        pipelines.forEach { flow ->
             FlowCard(
                 summary = flow,
                 onOpen = {

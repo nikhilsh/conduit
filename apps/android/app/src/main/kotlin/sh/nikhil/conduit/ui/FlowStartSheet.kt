@@ -168,12 +168,16 @@ fun FlowStartSheet(
     val neon = LocalNeonTheme.current
     val endpoint by store.endpoint.collectAsState()
     val pipelineTemplatesEnabled by store.pipelineTemplates.collectAsState()
+    val isDemoMode by store.isDemoMode.collectAsState()
     var tab by remember { mutableStateOf(initialTab) }
     var templates by remember { mutableStateOf<List<PipelineTemplateDraft>>(emptyList()) }
     var isLoadingTemplates by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     fun loadTemplates() {
+        // Demo mode is zero-network -- built-in recipes only, saved
+        // templates never fetched.
+        if (isDemoMode) return
         if (!pipelineTemplatesEnabled || templates.isNotEmpty() || isLoadingTemplates) return
         val base = endpoint.httpBaseUrl ?: return
         isLoadingTemplates = true
@@ -288,6 +292,7 @@ private fun SessionTab(
     val enabled by appearance.enabledAgents.collectAsState()
     val savedServers by store.savedServers.collectAsState()
     val endpoint by store.endpoint.collectAsState()
+    val isDemoMode by store.isDemoMode.collectAsState()
     val agentList = sh.nikhil.conduit.FeatureFlags.visibleAgents(agentListFor(descriptors), enabled)
 
     var selectedAgent by remember { mutableStateOf("claude") }
@@ -297,7 +302,11 @@ private fun SessionTab(
     var showWhereEditor by remember { mutableStateOf(false) }
     var isStarting by remember { mutableStateOf(false) }
 
-    val whereTitle = savedServers.firstOrNull { it.endpoint == endpoint }?.name ?: endpoint.displayHost
+    val whereTitle = if (isDemoMode) {
+        sh.nikhil.conduit.demo.DemoData.boxName
+    } else {
+        savedServers.firstOrNull { it.endpoint == endpoint }?.name ?: endpoint.displayHost
+    }
     val tint = neonAgentColor(selectedAgent, neon)
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -338,7 +347,13 @@ private fun SessionTab(
             }
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("WHERE", fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 0.6.sp, color = neon.textFaint)
-                ConduitCard(modifier = Modifier.clickable { showWhereEditor = true }) {
+                ConduitCard(modifier = Modifier.clickable {
+                    if (isDemoMode) {
+                        Telemetry.breadcrumb("flow_start", "session_where_row_demo_no_op", emptyMap())
+                    } else {
+                        showWhereEditor = true
+                    }
+                }) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Storage, contentDescription = null, tint = neon.green, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(12.dp))
@@ -360,8 +375,16 @@ private fun SessionTab(
                 title = "Start session",
                 onClick = {
                     if (isStarting) return@ConduitButton
-                    isStarting = true
                     val trimmedTask = task.trim()
+                    if (isDemoMode) {
+                        // No network in demo mode -- createSession() would
+                        // no-op anyway (no client), but breadcrumb explicitly
+                        // so the tap is visible in Sentry.
+                        Telemetry.breadcrumb("flow_start", "session_tab_start_demo_no_op", mapOf("agent" to selectedAgent))
+                        onDismiss()
+                        return@ConduitButton
+                    }
+                    isStarting = true
                     Telemetry.breadcrumb(
                         "flow_start", "session_tab_start_tapped",
                         mapOf("agent" to selectedAgent, "hasTask" to (trimmedTask.isNotEmpty()).toString(), "hasCwd" to (cwd.isNotEmpty()).toString()),

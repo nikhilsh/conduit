@@ -117,6 +117,10 @@ extension ConduitUI {
         let id: String
         let state: String
         let currentStep: Int
+        /// Demo mode only: the locally-built fixture status for this fake
+        /// flow, forwarded straight into `PipelineMonitorView.demoStatus`
+        /// so the wizard's demo "Start flow" never touches the network.
+        var demoStatus: ConduitUI.PipelineStatus? = nil
     }
 
     // MARK: - Template models

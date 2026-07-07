@@ -66,7 +66,7 @@ extension ConduitUI {
                 }
                 .navigationDestination(isPresented: $navigateToMonitor) {
                     if let p = createdPipeline {
-                        ConduitUI.PipelineMonitorView(pipelineID: p.id, pipelineTitle: derivedTitle)
+                        ConduitUI.PipelineMonitorView(pipelineID: p.id, pipelineTitle: derivedTitle, demoStatus: p.demoStatus)
                             .environment(store)
                     }
                 }
@@ -183,7 +183,13 @@ extension ConduitUI {
                             // A custom row (not `ConduitUI.navRow`, whose
                             // canned subtitle isn't mono) -- box name title,
                             // mono "<dir> · <branch>" subtitle, chevron.
-                            Button { showWhereEditor = true } label: {
+                            Button {
+                                if store.isDemoMode {
+                                    Telemetry.breadcrumb("flow_wizard", "where row demo no-op", data: [:])
+                                } else {
+                                    showWhereEditor = true
+                                }
+                            } label: {
                                 HStack(spacing: 12) {
                                     Image(systemName: "server.rack")
                                         .font(.body)
@@ -258,7 +264,8 @@ extension ConduitUI {
         }
 
         private var whereTitle: String {
-            store.savedServers.first(where: { $0.endpoint == store.endpoint })?.name ?? store.endpoint.displayHost
+            if store.isDemoMode { return DemoData.boxName }
+            return store.savedServers.first(where: { $0.endpoint == store.endpoint })?.name ?? store.endpoint.displayHost
         }
 
         private var cwdDisplay: String {
@@ -566,6 +573,22 @@ extension ConduitUI {
             let trimTitle = derivedTitle
             let trimTaskValue = trimmedTask
             guard !trimTaskValue.isEmpty else { return }
+
+            if store.isDemoMode {
+                // No network in demo mode -- build a local fake "running"
+                // flow (step 1 running) and open the Monitor against its
+                // fixture status, mirroring the `demo-flow-1`/-2 seam.
+                Telemetry.breadcrumb("flow_wizard", "demo start flow",
+                    data: ["steps": "\(viewModel.steps.count)", "gates": "\(gateCount)"])
+                let (id, status) = store.demoStartFlow(
+                    title: trimTitle, task: trimTaskValue,
+                    cwd: cwd.trimmingCharacters(in: .whitespacesAndNewlines), steps: viewModel.steps
+                )
+                createdPipeline = CreatedPipeline(id: id, state: status.state, currentStep: status.current_step, demoStatus: status)
+                navigateToMonitor = true
+                onFlowStarted?()
+                return
+            }
 
             let endpoint = store.endpoint
             guard endpoint.isComplete, let base = endpoint.httpBaseURL else {

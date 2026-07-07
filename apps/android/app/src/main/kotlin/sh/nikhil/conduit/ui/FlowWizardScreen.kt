@@ -77,6 +77,7 @@ fun FlowWizardScreen(
     val endpoint by store.endpoint.collectAsState()
     val sessions by store.sessions.collectAsState()
     val savedServers by store.savedServers.collectAsState()
+    val isDemoMode by store.isDemoMode.collectAsState()
     val scope = rememberCoroutineScope()
 
     val viewModel = remember { PipelineBuilderViewModel(initialSteps = prefill.steps ?: listOf(PipelineStepDraft())) }
@@ -142,6 +143,20 @@ fun FlowWizardScreen(
     }
 
     fun submitFlow() {
+        if (isDemoMode) {
+            // No network in demo mode -- build a local fake "running" flow
+            // (step 1 running) and open the Monitor against its fixture
+            // status, mirroring the demo-flow-1/-2 seam.
+            Telemetry.breadcrumb(
+                "flow_wizard", "demo_start_flow",
+                mapOf("steps" to viewModel.steps.size.toString(), "gates" to gateCount.toString()),
+            )
+            val (id, _) = store.demoStartFlow(
+                title = derivedTitle, task = trimmedTask, cwd = cwd.trim(), steps = viewModel.steps,
+            )
+            onCreated(id, derivedTitle)
+            return
+        }
         val base = endpoint.httpBaseUrl ?: run {
             errorMessage = "No active endpoint"
             return
@@ -229,11 +244,20 @@ fun FlowWizardScreen(
                         neon = neon,
                         task = task,
                         onTaskChange = { task = it },
-                        whereTitle = savedServers.firstOrNull { it.endpoint == endpoint }?.name
-                            ?: endpoint.displayHost,
+                        whereTitle = if (isDemoMode) {
+                            sh.nikhil.conduit.demo.DemoData.boxName
+                        } else {
+                            savedServers.firstOrNull { it.endpoint == endpoint }?.name ?: endpoint.displayHost
+                        },
                         cwd = cwd,
                         baseBranch = baseBranch,
-                        onWhereClick = { showWhereEditor = true },
+                        onWhereClick = {
+                            if (isDemoMode) {
+                                Telemetry.breadcrumb("flow_wizard", "where_row_demo_no_op", emptyMap())
+                            } else {
+                                showWhereEditor = true
+                            }
+                        },
                         onNext = {
                             Telemetry.breadcrumb("flow_wizard", "next_tapped", mapOf("task_len" to trimmedTask.length.toString()))
                             stepIndex = 2

@@ -8,6 +8,13 @@ import Foundation
 
 enum DemoData {
 
+    // MARK: - Box
+    //
+    // Fake paired-box name shown wherever the Start sheet / Flow wizard's
+    // "Where" row needs a box in demo mode (no real `SavedServer` exists).
+
+    static let boxName = "Demo Box"
+
     // MARK: - Terminal lines
     //
     // Canned faux-terminal output for DemoTerminalView. Each entry is a

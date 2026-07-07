@@ -162,7 +162,13 @@ extension ConduitUI {
 
                     VStack(alignment: .leading, spacing: 6) {
                         sectionLabel("Where")
-                        Button { showSessionWhereEditor = true } label: {
+                        Button {
+                            if store.isDemoMode {
+                                Telemetry.breadcrumb("flow_start", "session where row demo no-op", data: [:])
+                            } else {
+                                showSessionWhereEditor = true
+                            }
+                        } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: "server.rack")
                                     .font(.body)
@@ -274,7 +280,8 @@ extension ConduitUI {
         }
 
         private var sessionWhereTitle: String {
-            store.savedServers.first(where: { $0.endpoint == store.endpoint })?.name ?? store.endpoint.displayHost
+            if store.isDemoMode { return DemoData.boxName }
+            return store.savedServers.first(where: { $0.endpoint == store.endpoint })?.name ?? store.endpoint.displayHost
         }
 
         private var sessionCwdDisplay: String {
@@ -497,6 +504,9 @@ extension ConduitUI {
         // MARK: Templates network (GET /api/pipeline-templates)
 
         private func loadTemplates() {
+            // Demo mode is zero-network -- built-in recipes only, saved
+            // templates never fetched.
+            guard !store.isDemoMode else { return }
             guard store.pipelineTemplates, templates.isEmpty, !isLoadingTemplates else { return }
             let endpoint = store.endpoint
             guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return }

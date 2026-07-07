@@ -969,7 +969,71 @@ final class SessionStore {
         // Reset the demo-only capability override (see activateDemo()) --
         // the next real `/api/capabilities` fetch re-derives the true value.
         pipelineGatePreview = false
+        // Drop any locally-created fake flow(s) from the Flow wizard so
+        // re-entering demo starts fresh.
+        demoExtraPipelines = []
+        demoExtraPipelineStatus = [:]
         Telemetry.breadcrumb("demo", "deactivated")
+    }
+
+    // MARK: - Demo fake flows (Flow wizard "Start flow", no network)
+
+    /// Locally-created flows started from the Flow wizard while in demo
+    /// mode -- prepended to `DemoData.pipelines` for the Home FLOWS section.
+    /// Reset on activate/deactivateDemo.
+    private(set) var demoExtraPipelines: [ConduitUI.PipelineSummary] = []
+    private(set) var demoExtraPipelineStatus: [String: ConduitUI.PipelineStatus] = [:]
+
+    /// Demo home's FLOWS list: any locally-started fake flows first, then
+    /// the static `DemoData.pipelines` fixtures.
+    var demoPipelinesList: [ConduitUI.PipelineSummary] {
+        demoExtraPipelines + DemoData.pipelines
+    }
+
+    /// Looks up detail for a demo flow id -- a locally-created fake flow
+    /// first, falling back to the static `DemoData.pipelineStatus(id:)`
+    /// fixtures.
+    func demoPipelineStatus(id: String) -> ConduitUI.PipelineStatus? {
+        demoExtraPipelineStatus[id] ?? DemoData.pipelineStatus(id: id)
+    }
+
+    /// Builds a local fake "running" flow from the Flow wizard's task +
+    /// steps (step 0 running, the rest queued) -- no network, mirrors the
+    /// shape `/api/pipeline` would return. Prepends it to
+    /// `demoPipelinesList` and returns its id + status for the caller to
+    /// open the Monitor with (`PipelineMonitorView.demoStatus`).
+    @discardableResult
+    func demoStartFlow(title: String, task: String, cwd: String, steps: [ConduitUI.PipelineStep]) -> (id: String, status: ConduitUI.PipelineStatus) {
+        let agentSteps = steps.filter { $0.kind.isEmpty }
+        let id = "demo-fake-\(demoExtraPipelines.count + 1)"
+        let now = ISO8601DateFormatter().string(from: Date())
+        let summarySteps = agentSteps.enumerated().map { i, s in
+            ConduitUI.PipelineSummaryStep(agent: s.agentType, role: s.role, status: i == 0 ? "running" : "queued", gate_after: s.gateAfter)
+        }
+        let summary = ConduitUI.PipelineSummary(
+            id: id, title: title.isEmpty ? "Flow" : title, state: "running", current_step: 0,
+            step_count: agentSteps.count, created: now, steps: summarySteps, result: nil
+        )
+        let statusSteps = agentSteps.enumerated().map { i, s in
+            ConduitUI.PipelineStepStatus(
+                index: i, agent_type: s.agentType, role: s.role,
+                prompt_template: s.promptTemplate, input_from_prev: s.inputFromPrev, gate_after: s.gateAfter,
+                session_id: i == 0 ? "\(id)-step-0" : nil,
+                phase: i == 0 ? "running" : nil,
+                started: i == 0 ? now : nil, ended: nil,
+                retries: nil, prev_session_ids: nil, fanout: nil, kind: nil,
+                spliced_from: nil, loop: nil, output: nil
+            )
+        }
+        let status = ConduitUI.PipelineStatus(
+            id: id, title: title.isEmpty ? "Flow" : title, task: task,
+            cwd: cwd.isEmpty ? "/home/user/projects/demo" : cwd, base: "main",
+            state: "running", current_step: 0, steps: statusSteps, gate: nil, result: nil
+        )
+        demoExtraPipelines.insert(summary, at: 0)
+        demoExtraPipelineStatus[id] = status
+        Telemetry.breadcrumb("demo", "fake flow started", data: ["id": id, "steps": "\(agentSteps.count)"])
+        return (id, status)
     }
 
     var harness: HarnessState = .disconnected

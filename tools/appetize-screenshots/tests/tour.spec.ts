@@ -53,7 +53,63 @@ for (const { platform, publicKey } of TARGETS) {
       await session.waitForTimeout(6_000);
       await shot('demo-home');
 
-      // 2b. Flow monitor — demo home's FLOWS section seeds two fixture
+      // 2a. Flow Start sheet — opened via the FLOWS header's "+ New flow"
+      // text action (not the bottom-bar icon-only "+" pill, which has no
+      // `text` attribute for Appetize to target; the header action reaches
+      // the same real ConduitFlowStartSheet/FlowStartSheet with zero
+      // network). It opens with the Flow tab already selected; tapping
+      // "Flow" again exercises the segmented control same as a reviewer
+      // would.
+      await session.tap({ element: { attributes: { text: 'New flow' } } });
+      await session.waitForTimeout(3_000);
+      await session.tap({ element: { attributes: { text: 'Flow' } } });
+      await session.waitForTimeout(2_000);
+      await shot('demo-flow-start');
+
+      // 2b. Pick the "Research → Design → Build" built-in recipe. Demo mode
+      // forces the wizard to open on the Task screen (this template's real
+      // prefill jumps straight to Steps) so the tour shows both screens —
+      // the task field arrives pre-filled with the template's own task
+      // string, so "Next" is enabled with no typing required.
+      await session.tap({ element: { attributes: { text: 'Research → Design → Build' } } });
+      await session.waitForTimeout(3_000);
+      await shot('demo-flow-wizard-task');
+
+      await session.tap({ element: { attributes: { text: 'Next · choose steps' } } });
+      await session.waitForTimeout(2_000);
+      await shot('demo-flow-wizard-steps');
+
+      // 2c. Step editor — tap the first step card, screenshot, "Done" back
+      // to Steps.
+      await session.tap({ element: { attributes: { text: '1. Research' } } });
+      await session.waitForTimeout(2_500);
+      await shot('demo-flow-step-editor');
+      await session.tap({ element: { attributes: { text: 'Done' } } });
+      await session.waitForTimeout(1_500);
+
+      // 2d. Add step → If/Else branch editor, then Discard so no fake flow
+      // is left half-built (the wizard's real "Start flow" no-network path
+      // is exercised separately, not by this tour). The built-in recipe is
+      // always exactly 3 steps, so the appended branch is deterministically
+      // step 4 — "4. If / Else" targets the new step card, not the "Add
+      // step" pill choice (bare "If / Else").
+      await session.tap({ element: { attributes: { text: 'Add step' } } });
+      await session.waitForTimeout(1_000);
+      await session.tap({ element: { attributes: { text: 'If / Else' } } });
+      await session.waitForTimeout(1_000);
+      await session.tap({ element: { attributes: { text: '4. If / Else' } } });
+      await session.waitForTimeout(2_000);
+      await shot('demo-flow-branch');
+      await session.tap({ element: { attributes: { text: 'Discard' } } });
+      await session.waitForTimeout(1_500);
+
+      // 2e. Dismiss the wizard — back to demo home. No fake flow was
+      // started, so the existing flow-monitor tap target below (the
+      // `demo-flow-1` fixture card) is unaffected.
+      await session.tap({ element: { attributes: { text: 'Cancel' } } });
+      await session.waitForTimeout(2_500);
+
+      // 2f. Flow monitor — demo home's FLOWS section seeds two fixture
       // pipelines (DemoData.pipelines); this one is `awaiting_gate`, so the
       // gate review card should be visible in the shot.
       await session.tap({ element: { attributes: { text: 'Add rate limiter to broker' } } });
