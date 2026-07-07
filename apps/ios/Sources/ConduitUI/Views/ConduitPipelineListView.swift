@@ -31,6 +31,40 @@ extension ConduitUI {
         let current_step: Int
         let step_count: Int
         let created: String?
+        /// Per-step topology summary carried on each list item since broker
+        /// #922 -- absent (nil) on an older broker. `FlowCard` uses this for
+        /// a real `TopoMini` strip (agent dots + gate glyphs + per-step
+        /// status) instead of the step_count-only degraded rendering. Must
+        /// be `var`, not `let`: a `let` optional-with-default is silently
+        /// EXCLUDED from the compiler-synthesized `init(from:)` (Swift never
+        /// reads the JSON key at all -- see `PipelineStatus.result`).
+        var steps: [PipelineSummaryStep]? = nil
+        /// Diffstat-only recap, populated once the pipeline completes
+        /// (broker #922). Absent on an older broker or a pre-#906 pipeline.
+        var result: PipelineSummaryResult? = nil
+    }
+
+    /// One step's mini-topology entry on a `GET /api/pipelines` list item
+    /// (broker #922 `pipelineStepSummary`). Mirrors the same
+    /// phase+pipeline-context mapping `PipelineStepDisplayViewModel.state`
+    /// computes from the full detail payload, precomputed broker-side.
+    struct PipelineSummaryStep: Decodable, Hashable {
+        let agent: String
+        let role: String
+        /// "queued" | "running" | "done" | "failed" | "awaiting_gate" | "awaiting_pick"
+        let status: String
+        let gate_after: Bool
+    }
+
+    /// Diffstat-only slice of `PipelineResult` carried on a completed list
+    /// item (broker #922) -- output is deliberately omitted from the list
+    /// endpoint (see `PipelineResult` for the full detail-view shape).
+    struct PipelineSummaryResult: Decodable, Hashable {
+        let files_changed: Int
+        let insertions: Int
+        let deletions: Int
+        /// Absent when the broker predates #922 (`omitempty`).
+        var finished: String? = nil
     }
 
     /// Pure sort/group helpers for the pipeline list -- lives off SwiftUI so
@@ -139,7 +173,7 @@ extension ConduitUI {
                         .refreshable { await load() }
                     }
                 }
-                .navigationTitle("Pipelines")
+                .navigationTitle("Flows")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
@@ -150,7 +184,7 @@ extension ConduitUI {
                 .navigationDestination(item: $selectedPipeline) { p in
                     ConduitUI.PipelineMonitorView(
                         pipelineID: p.id,
-                        pipelineTitle: p.title.isEmpty ? "Pipeline" : p.title
+                        pipelineTitle: p.title.isEmpty ? "Flow" : p.title
                     )
                     .environment(store)
                 }
@@ -164,17 +198,17 @@ extension ConduitUI {
             VStack(spacing: 12) {
                 if isLoading {
                     ProgressView().tint(neon.accent)
-                    Text("Loading pipelines...")
+                    Text("Loading flows...")
                         .font(neon.sans(14))
                         .foregroundStyle(neon.textDim)
                 } else {
                     Image(systemName: "arrow.triangle.merge")
                         .font(.system(size: 28, weight: .semibold))
                         .foregroundStyle(neon.textFaint)
-                    Text("No pipelines yet")
+                    Text("No flows yet")
                         .font(neon.sans(15).weight(.semibold))
                         .foregroundStyle(neon.text)
-                    Text("Pipelines you create keep running here even after you close the sheet.")
+                    Text("Flows you create keep running here even after you close the sheet.")
                         .font(neon.sans(13))
                         .foregroundStyle(neon.textDim)
                         .multilineTextAlignment(.center)
@@ -187,7 +221,7 @@ extension ConduitUI {
         private func pipelineRow(_ p: PipelineSummary) -> some View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(p.title.isEmpty ? "Pipeline" : p.title)
+                    Text(p.title.isEmpty ? "Flow" : p.title)
                         .font(neon.sans(14).weight(.semibold))
                         .foregroundStyle(neon.text)
                         .lineLimit(1)

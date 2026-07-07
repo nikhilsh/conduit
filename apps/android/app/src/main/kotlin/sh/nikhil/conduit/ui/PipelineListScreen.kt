@@ -64,6 +64,38 @@ data class PipelineSummary(
     val currentStep: Int,
     val stepCount: Int,
     val created: String?,
+    /** Per-step topology summary carried on each list item since broker
+     *  #922 -- null on an older broker. [FlowCard] uses this for a real
+     *  `TopoMini` strip (agent dots + gate glyphs + per-step status)
+     *  instead of the stepCount-only degraded rendering. */
+    val steps: List<PipelineSummaryStep>? = null,
+    /** Diffstat-only recap, populated once the pipeline completes (broker
+     *  #922). Null on an older broker or a pre-#906 pipeline. */
+    val result: PipelineSummaryResult? = null,
+)
+
+/**
+ * One step's mini-topology entry on a `GET /api/pipelines` list item
+ * (broker #922 `pipelineStepSummary`). Mirrors iOS `PipelineSummaryStep`.
+ */
+data class PipelineSummaryStep(
+    val agent: String,
+    val role: String,
+    /** "queued" | "running" | "done" | "failed" | "awaiting_gate" | "awaiting_pick" */
+    val status: String,
+    val gateAfter: Boolean,
+)
+
+/**
+ * Diffstat-only slice of `PipelineResult` carried on a completed list item
+ * (broker #922) -- output is deliberately omitted. Mirrors iOS
+ * `PipelineSummaryResult`.
+ */
+data class PipelineSummaryResult(
+    val filesChanged: Int,
+    val insertions: Int,
+    val deletions: Int,
+    val finished: String?,
 )
 
 /**
@@ -192,7 +224,7 @@ fun PipelineListScreen(
                 }
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    "Pipelines",
+                    "Flows",
                     fontFamily = neon.mono,
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp,
@@ -220,7 +252,7 @@ fun PipelineListScreen(
                                         "pipeline", "reentered monitor",
                                         mapOf("id_prefix" to p.id.take(8)),
                                     )
-                                    onOpenPipeline(p.id, p.title.ifEmpty { "Pipeline" })
+                                    onOpenPipeline(p.id, p.title.ifEmpty { "Flow" })
                                 },
                             )
                         }
@@ -241,12 +273,12 @@ private fun EmptyPipelines(neon: NeonTheme, loading: Boolean) {
         if (loading) {
             CircularProgressIndicator(color = neon.accent)
             Spacer(Modifier.height(12.dp))
-            Text("Loading pipelines...", fontFamily = neon.sans, fontSize = 14.sp, color = neon.textDim)
+            Text("Loading flows...", fontFamily = neon.sans, fontSize = 14.sp, color = neon.textDim)
         } else {
             Icon(Icons.AutoMirrored.Filled.CallSplit, null, tint = neon.textFaint, modifier = Modifier.size(28.dp))
             Spacer(Modifier.height(12.dp))
             Text(
-                "No pipelines yet",
+                "No flows yet",
                 fontFamily = neon.sans,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 15.sp,
@@ -254,7 +286,7 @@ private fun EmptyPipelines(neon: NeonTheme, loading: Boolean) {
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "Pipelines you create keep running here even after you close the sheet.",
+                "Flows you create keep running here even after you close the sheet.",
                 fontFamily = neon.sans,
                 fontSize = 13.sp,
                 color = neon.textDim,
@@ -278,7 +310,7 @@ private fun PipelineListRow(pipeline: PipelineSummary, neon: NeonTheme, onTap: (
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                pipeline.title.ifEmpty { "Pipeline" },
+                pipeline.title.ifEmpty { "Flow" },
                 fontFamily = neon.sans,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 14.sp,

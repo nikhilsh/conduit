@@ -78,6 +78,23 @@ extension ConduitUI {
         /// drives the inline `FlowCard` spinner/disabled state.
         @State private var continuingFlowIDs: Set<String> = []
 
+        // MARK: Flow (pipeline v2) Start sheet + wizard
+        //
+        // The Start sheet (Session/Flow segmented) replaces the old direct
+        // `showAgentPicker` / `showPipelineBuilder` presentation at every
+        // "+"-adjacent entry point (bottom bar, command palette, FLOWS
+        // header). Tablet (`ConduitTabletHome`) is UNCHANGED -- it keeps its
+        // own `showPipelineBuilder` wired to the old builder (PR scope §6).
+        @State private var showFlowStart = false
+        @State private var flowStartInitialTab: ConduitUI.FlowStartSheet.Tab = .session
+        /// Stashed prefill from the Start sheet's Continue/template/blank
+        /// tap; consumed by `showFlowStart`'s `onDismiss` to open the
+        /// wizard AFTER the Start sheet fully dismisses (double-sheet-race
+        /// avoidance, mirrors `pendingOpenPipelineBuilder`).
+        @State private var pendingFlowWizardPrefill: ConduitUI.FlowWizardPrefill?
+        @State private var showFlowWizard = false
+        @State private var flowWizardPrefill: ConduitUI.FlowWizardPrefill = .blank
+
         var body: some View {
             @Bindable var store = store
 
@@ -196,7 +213,11 @@ extension ConduitUI {
                             }
                         },
                         onFanOut: { showFanOut = true },
-                        onNewPipeline: { showPipelineBuilder = true },
+                        onNewPipeline: {
+                            // "New flow" -- opens the Start sheet on the Flow tab.
+                            flowStartInitialTab = .flow
+                            showFlowStart = true
+                        },
                         onPipelines: { showPipelineList = true }
                     )
                     .environment(store)
@@ -219,6 +240,26 @@ extension ConduitUI {
                     // Multi-step pipeline builder. Navigates internally to
                     // PipelineMonitorView on success.
                     ConduitUI.PipelineBuilderView()
+                        .environment(store)
+                        .presentationDetents([.large])
+                }
+                .sheet(isPresented: $showFlowStart, onDismiss: {
+                    if let prefill = pendingFlowWizardPrefill {
+                        pendingFlowWizardPrefill = nil
+                        flowWizardPrefill = prefill
+                        showFlowWizard = true
+                    }
+                }) {
+                    ConduitUI.FlowStartSheet(initialTab: flowStartInitialTab) { prefill in
+                        pendingFlowWizardPrefill = prefill
+                        showFlowStart = false
+                    }
+                    .environment(store)
+                    .presentationDetents([.medium, .large])
+                    .presentationCornerRadius(26)
+                }
+                .sheet(isPresented: $showFlowWizard) {
+                    ConduitUI.FlowWizardView(prefill: flowWizardPrefill)
                         .environment(store)
                         .presentationDetents([.large])
                 }
@@ -447,7 +488,11 @@ extension ConduitUI {
                 .buttonStyle(.plain)
                 Spacer(minLength: 8)
                 Button {
-                    showPipelineBuilder = true
+                    // Straight to the wizard (blank) -- no Start sheet detour,
+                    // the user is already in a flow-scoped context.
+                    Telemetry.breadcrumb("flow_wizard", "flows header new flow tapped", data: [:])
+                    flowWizardPrefill = .blank
+                    showFlowWizard = true
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "plus").font(.system(size: 12, weight: .semibold))
@@ -1076,28 +1121,12 @@ extension ConduitUI {
             .padding(.vertical, 24)
         }
 
-        /// Long-press quick-action menu for the bottom bar's "+" FAB
-        /// (device feedback: the plain tap always opens new-session, but a
-        /// pipeline/fan-out was only reachable via the command palette).
-        /// Plain tap behavior is unchanged; this is purely additive.
+        /// Long-press quick-action menu for the bottom bar's "+" FAB. The
+        /// plain tap now opens the Start sheet (Session/Flow), which covers
+        /// both "New session" and "New pipeline" -- those two items are
+        /// removed here; "Fan out" remains a standalone quick action.
         @ViewBuilder
         private var plusButtonMenu: some View {
-            Button {
-                if store.harness.canIssueCommands {
-                    showAgentPicker = true
-                } else {
-                    showAddServer = true
-                }
-            } label: {
-                Label("New session", systemImage: "plus.square")
-            }
-            if store.pipelinesEnabled {
-                Button {
-                    showPipelineBuilder = true
-                } label: {
-                    Label("New pipeline", systemImage: "arrow.triangle.merge")
-                }
-            }
             Button {
                 showFanOut = true
             } label: {
@@ -1127,7 +1156,8 @@ extension ConduitUI {
                         isProminent: true
                     ) {
                         if store.harness.canIssueCommands {
-                            showAgentPicker = true
+                            flowStartInitialTab = .session
+                            showFlowStart = true
                         } else {
                             showAddServer = true
                         }

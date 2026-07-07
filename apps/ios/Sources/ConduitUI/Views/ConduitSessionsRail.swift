@@ -124,7 +124,7 @@ extension ConduitUI {
                 Button {
                     showPipelineBuilder = true
                 } label: {
-                    Label("New pipeline", systemImage: "arrow.triangle.merge")
+                    Label("New flow", systemImage: "arrow.triangle.merge")
                 }
             }
             Button {

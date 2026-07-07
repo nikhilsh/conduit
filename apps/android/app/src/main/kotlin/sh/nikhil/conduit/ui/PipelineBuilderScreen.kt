@@ -819,7 +819,7 @@ fun PipelineBuilderScreen(
                     // instead of the raw JSON blob so a rejected harness
                     // fails gracefully with a reason.
                     val serverMessage = json.optJSONObject("error")?.optString("message", "")?.takeIf { it.isNotEmpty() }
-                    errorMessage = serverMessage ?: "Failed to create pipeline"
+                    errorMessage = serverMessage ?: "Failed to create flow"
                     Telemetry.diagnostic(
                         "pipeline create failed: no id",
                         tags = mapOf("surface" to "android"),
@@ -861,7 +861,7 @@ fun PipelineBuilderScreen(
             TopAppBar(
                 title = {
                     Text(
-                        "New pipeline",
+                        "New flow",
                         fontFamily = neon.sans,
                         fontWeight = FontWeight.Bold,
                         color = neon.text,
@@ -1056,7 +1056,7 @@ fun PipelineBuilderScreen(
                                 color = neon.textDim,
                             )
                             Text(
-                                "Use \"Save as template\" after filling in a pipeline.",
+                                "Use \"Save as template\" after filling in a flow.",
                                 fontFamily = neon.sans,
                                 fontSize = 13.sp,
                                 color = neon.textFaint,
@@ -1332,7 +1332,7 @@ private fun SaveTemplateButton(neon: NeonTheme, enabled: Boolean, isSaving: Bool
 @Composable
 private fun StartPipelineButton(neon: NeonTheme, enabled: Boolean, isCreating: Boolean, onClick: () -> Unit) {
     ConduitButton(
-        title = if (isCreating) "Starting..." else "Start pipeline",
+        title = if (isCreating) "Starting..." else "Start flow",
         onClick = onClick,
         variant = ButtonVariant.Primary,
         tint = neon.accent,

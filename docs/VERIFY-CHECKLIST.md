@@ -20,7 +20,33 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
-_(empty)_
+**Session tasks UI (design_handoff_session_tasks) — iOS + Android. PRs #920, #923, #925, #927.**
+
+- Background-task visibility in chat sessions: `ConduitTaskRow` + task spinner
+  atoms (ConduitUI + Android mirror), RunningPill above the composer (live
+  running count off the subagent roster; amber gated variant wired but
+  gate-data-less today), Tasks sheet (NEEDS YOU / RUNNING / FINISHED groups,
+  ticking elapsed), and inline TaskRows replacing the old subagent
+  expand/collapse cards in the transcript (tap opens the Tasks sheet). [iOS +
+  Android, **needs on-device verification** (phone + tablet): pill
+  appear/fade, sheet groups + ticking elapsed, inline rows, reduced-motion
+  spinner freeze] Known follow-ups (broker): no gate status in the roster, no
+  per-subagent stop verb, no `subagent` chat event at live dispatch (inline
+  rows currently bind best-effort/historic only), no per-task transcript
+  surface.
+
+**Flow (pipeline v2) redesign — iOS + Android. PRs #921, #922, #924, #926, +this PR.**
+
+- Native Start sheet (Session/Flow segmented) + two-step wizard (Task, Steps),
+  step editor and If/Else editor replace the old builder as the phone create UX
+  at every "+" entry point (tablet keeps the old builder view); FlowCard home
+  section, monitor rail redesign, broker step summaries, and the user-facing
+  `pipeline`→`flow` string rename (screen titles, buttons, empty states, gate
+  push copy) round out the surface. [iOS + Android, **needs on-device
+  verification** (phone + tablet): home Flows section + FlowCard states, Start
+  sheet, wizard, step/If-Else editors, monitor rail + gate approve] Broker
+  redeploy required for step summaries + the new gate push copy (tagging does
+  NOT deploy the broker).
 
 ---
 

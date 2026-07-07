@@ -370,6 +370,13 @@ extension ConduitUI {
                             if p.state == "failed" {
                                 failedCard(p)
                             }
+                            // Completed recap, design_handoff_flow "7. Monitor" --
+                            // only when the richer `resultCard` above didn't
+                            // already render (no result payload, or the
+                            // broker predates `pipeline_result`).
+                            if p.isComplete && !(p.result != nil && store.pipelineResult) {
+                                completeCard
+                            }
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 18)
@@ -393,7 +400,7 @@ extension ConduitUI {
                     VStack(spacing: 14) {
                         ProgressView()
                             .tint(neon.accent)
-                        Text("Loading pipeline...")
+                        Text("Loading flow...")
                             .font(neon.sans(14))
                             .foregroundStyle(neon.textDim)
                     }
@@ -430,8 +437,8 @@ extension ConduitUI {
                     }
                 }
             }
-            .alert("Cancel pipeline?", isPresented: $showCancelAlert) {
-                Button("Cancel pipeline", role: .destructive) {
+            .alert("Cancel flow?", isPresented: $showCancelAlert) {
+                Button("Cancel flow", role: .destructive) {
                     cancelPipeline()
                 }
                 Button("Keep running", role: .cancel) {}
@@ -464,15 +471,22 @@ extension ConduitUI {
             .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
         }
 
+        // NavHeader trailing state Chip (design_handoff_flow/README.md
+        // "7. Monitor"): needs you (amber) while awaiting_gate/awaiting_pick,
+        // running (green) while active, done (accent/cyan) complete, failed
+        // (red) halted. Native reality: this lives in the `stateHeader` card
+        // just below the nav title rather than IN the SwiftUI nav bar itself
+        // (a UIKit toolbar item can't host a rich glow/border capsule) --
+        // functionally the same "flow title + trailing state chip" pairing.
         private func stateChip(_ state: String) -> some View {
             let (label, color): (String, Color) = {
                 switch state {
-                case "running":        return ("Running", neon.accent)
-                case "complete":       return ("Complete", neon.green)
-                case "failed":         return ("Failed", neon.red)
-                case "cancelled":      return ("Cancelled", neon.textDim)
-                case "awaiting_gate":  return ("Gate", neon.yellow)
-                case "awaiting_pick":  return ("Pick", neon.accent)
+                case "running":        return ("running", neon.green)
+                case "complete":       return ("done", neon.accent)
+                case "failed":         return ("failed", neon.red)
+                case "cancelled":      return ("cancelled", neon.textDim)
+                case "awaiting_gate":  return ("needs you", neon.yellow)
+                case "awaiting_pick":  return ("needs you", neon.yellow)
                 default:               return (state, neon.textFaint)
                 }
             }()
@@ -574,25 +588,166 @@ extension ConduitUI {
             }
         }
 
-        // MARK: Steps list
+        /// Minimal completed recap (design_handoff_flow "7. Monitor" --
+        /// accent/cyan-bordered "All steps finished" + mono diffstat) for
+        /// when the richer markdown `resultCard` didn't render: an older
+        /// broker without `pipeline_result`, or a pipeline that completed
+        /// before that feature shipped.
+        private var completeCard: some View {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("All steps finished")
+                    .font(neon.sans(14.5).weight(.bold))
+                    .foregroundStyle(neon.text)
+                Text(completeDiffstat)
+                    .font(neon.mono(11.5))
+                    .foregroundStyle(neon.textDim)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .neonCardSurface(
+                neon,
+                fill: neon.accent.opacity(neon.dark ? 0.08 : 0.05),
+                cornerRadius: 14,
+                border: neon.accent.opacity(0.2)
+            )
+        }
+
+        private var completeDiffstat: String {
+            guard let result = pipeline?.result else { return "no diffstat available" }
+            var parts: [String] = []
+            if result.insertions > 0 { parts.append("+\(result.insertions)") }
+            if result.deletions > 0 { parts.append("-\(result.deletions)") }
+            let stats = parts.joined(separator: " ")
+            if result.files_changed > 0 {
+                return stats.isEmpty ? "\(result.files_changed) files" : "\(stats) · \(result.files_changed) files"
+            }
+            return stats.isEmpty ? "no diffstat available" : stats
+        }
+
+        // MARK: Steps list -- vertical rail (design_handoff_flow/README.md
+        // "7. Monitor"): AgentDot(44) leading each step card, joined by a
+        // thin connector at the dot's x-center; a GatePill splices into the
+        // connector where the step above `gate_after`.
 
         private func stepsList(_ p: PipelineStatus) -> some View {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
                 Text("Steps")
                     .font(neon.mono(11).weight(.bold))
                     .foregroundStyle(neon.textDim)
                     .textCase(.uppercase)
+                    .padding(.bottom, 10)
 
-                ForEach(p.steps) { step in
-                    stepRow(step: step, pipeline: p)
+                ForEach(Array(p.steps.enumerated()), id: \.element.id) { i, step in
+                    HStack(alignment: .top, spacing: 14) {
+                        ConduitUI.AgentDot(
+                            agent: step.agent_type,
+                            size: 44,
+                            status: dotStatus(stepDisplayState(step: step, pipeline: p))
+                        )
+                        stepRow(step: step, pipeline: p)
+                    }
+                    if i < p.steps.count - 1 {
+                        connector(after: step, pipeline: p)
+                    }
                 }
             }
         }
 
+        /// `AgentDot` ring for a step's display state. `.done` uses the
+        /// `.live` status (green ring) rather than the atom's default
+        /// `.done` (accent) -- the Monitor's per-step rail spec explicitly
+        /// wants a green ring here (vs. the home `FlowCard`/`TopoMini`
+        /// topology strip, which uses the atom's default accent for done).
+        /// `awaitingGate`/`awaitingPick` both read as the active/amber
+        /// "needs attention" ring, same family as `running`.
+        private func dotStatus(_ state: PipelineStepDisplayViewModel.State) -> ConduitUI.AgentDot.Status? {
+            switch state {
+            case .queued: return nil
+            case .running, .awaitingGate, .awaitingPick: return .running
+            case .done: return .live
+            case .failed: return .error
+            }
+        }
+
+        /// Mono status-line text tinted per the design's status map.
+        private func statusTint(_ state: PipelineStepDisplayViewModel.State) -> Color {
+            switch state {
+            case .queued: return neon.textFaint
+            case .running, .awaitingGate, .awaitingPick: return neon.yellow
+            case .done: return neon.green
+            case .failed: return neon.red
+            }
+        }
+
+        /// "<agent> · <dur>" when done, "working…" running, an
+        /// "exited(N)"-style phase on failure, "waiting" queued.
+        private func statusLine(step: PipelineStepStatus, state: PipelineStepDisplayViewModel.State) -> String {
+            switch state {
+            case .done:
+                if let dur = stepDuration(step) { return "\(step.agent_type) · \(dur)" }
+                return "\(step.agent_type) · done"
+            case .running, .awaitingGate:
+                return "working…"
+            case .awaitingPick:
+                return "pick a result"
+            case .failed:
+                return step.phase ?? "exited(1)"
+            case .queued:
+                return "waiting"
+            }
+        }
+
+        /// Short "4m 12s" / "1h 3m" / "12s" duration from a step's
+        /// started/ended RFC3339 timestamps. `nil` when either is missing
+        /// or unparseable.
+        private func stepDuration(_ step: PipelineStepStatus) -> String? {
+            guard let startedStr = step.started, let endedStr = step.ended,
+                  let started = ISO8601DateFormatter().date(from: startedStr),
+                  let ended = ISO8601DateFormatter().date(from: endedStr) else { return nil }
+            return Self.formatShortDuration(max(0, ended.timeIntervalSince(started)))
+        }
+
+        private static func formatShortDuration(_ seconds: TimeInterval) -> String {
+            let total = Int(seconds.rounded())
+            let h = total / 3600
+            let m = (total % 3600) / 60
+            let s = total % 60
+            if h > 0 { return "\(h)h \(m)m" }
+            if m > 0 { return "\(m)m \(s)s" }
+            return "\(s)s"
+        }
+
+        /// Connector between two rail rows: a 1.5pt line at the dot's
+        /// x-center (inset to match the 44pt `AgentDot`), green ~40% when
+        /// the step above is done, else `lineSoft`. Where the step above
+        /// has `gate_after`, a `GatePill` splices in: active (amber) while
+        /// that gate is the CURRENT awaiting boundary, "approved" once
+        /// passed, plain "gate" before it's reached.
+        private func connector(after step: PipelineStepStatus, pipeline: PipelineStatus) -> some View {
+            let state = stepDisplayState(step: step, pipeline: pipeline)
+            let isDone = state == .done
+            let gateActive = pipeline.isAwaitingGate && step.gate_after && step.index == pipeline.current_step
+            let gateApproved = step.gate_after && isDone && !gateActive
+            let lineHeight: CGFloat = gateActive ? 44 : 30
+
+            return HStack(spacing: 10) {
+                Rectangle()
+                    .fill(isDone ? neon.green.opacity(0.4) : neon.lineSoft)
+                    .frame(width: 1.5, height: lineHeight)
+                if step.gate_after {
+                    ConduitUI.GatePill(
+                        label: gateActive ? "gate — review below" : (gateApproved ? "approved" : "gate"),
+                        active: gateActive
+                    )
+                }
+            }
+            .padding(.leading, 21)
+        }
+
         private func stepRow(step: PipelineStepStatus, pipeline: PipelineStatus) -> some View {
             let stepState = stepDisplayState(step: step, pipeline: pipeline)
-            let (stateLabel, stateColor) = stepStateDisplay(stepState)
-            let isCurrentStep = step.index == pipeline.current_step && !pipeline.isTerminal
+            let isActive = stepState == .running || stepState == .awaitingGate || stepState == .awaitingPick
+            let isQueued = stepState == .queued
 
             // Navigation to the step's transcript. Shared by every tap
             // target that should open it (the leading content and the
@@ -610,79 +765,62 @@ extension ConduitUI {
             }
 
             return VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     Button(action: openTranscript) {
-                        HStack(spacing: 12) {
-                            AgentGlyph(assistant: step.agent_type, size: 28)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(step.role.capitalized)
-                                        .font(neon.sans(13).weight(.semibold))
-                                        .foregroundStyle(neon.text)
-                                    Text("#\(step.index + 1)")
-                                        .font(neon.mono(11))
-                                        .foregroundStyle(neon.textFaint)
-                                    // Fanout badge
-                                    if step.isFanout, let fo = step.fanout {
-                                        Text("\(fo.count)x")
-                                            .font(neon.mono(10).weight(.bold))
-                                            .foregroundStyle(neon.accent)
-                                            .padding(.horizontal, 5)
-                                            .padding(.vertical, 2)
-                                            .background(Capsule().fill(neon.accent.opacity(0.14)))
-                                    }
-                                    // Loop iteration badge (PLAN-HARNESS-BUILDER Phase 3,
-                                    // §4.2): "iteration k/N" -- k = current pass
-                                    // (1-indexed: iteration+1 while a pass is in flight).
-                                    if step.isLoop, let lp = step.loop {
-                                        Text("iteration \((lp.iteration ?? 0) + 1)/\(lp.max_iterations)")
-                                            .font(neon.mono(10).weight(.bold))
-                                            .foregroundStyle(neon.accent)
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(Capsule().fill(neon.accent.opacity(0.14)))
-                                    }
-                                    // Retry chip
-                                    if let retries = step.retries, retries > 0 {
-                                        Text("retry \(retries)")
-                                            .font(neon.mono(10).weight(.semibold))
-                                            .foregroundStyle(neon.yellow)
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(Capsule().fill(neon.yellow.opacity(0.15)))
-                                            .overlay(Capsule().stroke(neon.yellow.opacity(0.35), lineWidth: 1))
-                                    }
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text("\(step.index + 1). \(step.role.capitalized)")
+                                    .font(neon.sans(15).weight(.semibold))
+                                    .foregroundStyle(neon.text)
+                                // Fanout badge
+                                if step.isFanout, let fo = step.fanout {
+                                    Text("\(fo.count)x")
+                                        .font(neon.mono(10).weight(.bold))
+                                        .foregroundStyle(neon.accent)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 2)
+                                        .background(Capsule().fill(neon.accent.opacity(0.14)))
                                 }
-                                Text(step.agent_type)
-                                    .font(neon.mono(10))
-                                    .foregroundStyle(neon.textFaint)
-                                // Spliced-from-branch provenance annotation
-                                // (PLAN-HARNESS-BUILDER Phase 3, §4.1): set when the
-                                // orchestrator resolved a branch's condition and
-                                // spliced this step in from the chosen arm.
-                                if step.wasSpliced, let from = step.spliced_from {
-                                    HStack(spacing: 3) {
-                                        Image(systemName: "arrow.triangle.branch")
-                                            .font(.system(size: 8, weight: .semibold))
-                                        Text("from \(from)")
-                                            .font(neon.mono(9))
-                                    }
-                                    .foregroundStyle(neon.textFaint)
+                                // Loop iteration badge (PLAN-HARNESS-BUILDER Phase 3,
+                                // §4.2): "iteration k/N" -- k = current pass
+                                // (1-indexed: iteration+1 while a pass is in flight).
+                                if step.isLoop, let lp = step.loop {
+                                    Text("iteration \((lp.iteration ?? 0) + 1)/\(lp.max_iterations)")
+                                        .font(neon.mono(10).weight(.bold))
+                                        .foregroundStyle(neon.accent)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Capsule().fill(neon.accent.opacity(0.14)))
+                                }
+                                // Retry chip
+                                if let retries = step.retries, retries > 0 {
+                                    Text("retry \(retries)")
+                                        .font(neon.mono(10).weight(.semibold))
+                                        .foregroundStyle(neon.yellow)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Capsule().fill(neon.yellow.opacity(0.15)))
+                                        .overlay(Capsule().stroke(neon.yellow.opacity(0.35), lineWidth: 1))
                                 }
                             }
-
-                            Spacer(minLength: 6)
-
-                            // State chip
-                            Text(stateLabel)
-                                .font(neon.mono(10).weight(.bold))
-                                .textCase(.uppercase)
-                                .foregroundStyle(stateColor)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(Capsule().fill(stateColor.opacity(0.14)))
+                            Text(statusLine(step: step, state: stepState))
+                                .font(neon.mono(11))
+                                .foregroundStyle(statusTint(stepState))
+                            // Spliced-from-branch provenance annotation
+                            // (PLAN-HARNESS-BUILDER Phase 3, §4.1): set when the
+                            // orchestrator resolved a branch's condition and
+                            // spliced this step in from the chosen arm.
+                            if step.wasSpliced, let from = step.spliced_from {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "arrow.triangle.branch")
+                                        .font(.system(size: 8, weight: .semibold))
+                                    Text("from \(from)")
+                                        .font(neon.mono(9))
+                                }
+                                .foregroundStyle(neon.textFaint)
+                            }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -704,10 +842,11 @@ extension ConduitUI {
                         .buttonStyle(.plain)
                     }
 
-                    // Chevron if session is available -- part of the same
-                    // navigation action, its own small Button so it stays
-                    // a sibling (not nested) alongside the disclosure Button.
-                    if step.session_id != nil {
+                    // Chevron whenever the row has activity -- part of the
+                    // same navigation action, its own small Button so it
+                    // stays a sibling (not nested) alongside the disclosure
+                    // Button. Per design: no chevron on an idle/queued row.
+                    if step.session_id != nil, !isQueued {
                         Button(action: openTranscript) {
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 11, weight: .semibold))
@@ -750,14 +889,16 @@ extension ConduitUI {
                     .padding(.top, 8)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .opacity(isQueued ? 0.55 : 1)
             .neonCardSurface(
                 neon,
-                fill: isCurrentStep ? neon.accent.opacity(neon.dark ? 0.10 : 0.07) : neon.surface,
+                fill: neon.surface,
                 cornerRadius: 12,
-                glowTint: isCurrentStep && neon.glow ? neon.accent : nil
+                border: isActive ? neon.yellow.opacity(0.27) : neon.lineSoft,
+                glowTint: isActive && neon.glow ? neon.yellow : nil
             )
         }
 
@@ -804,17 +945,6 @@ extension ConduitUI {
 
         private func stepDisplayState(step: PipelineStepStatus, pipeline: PipelineStatus) -> PipelineStepDisplayViewModel.State {
             PipelineStepDisplayViewModel.state(for: step, pipeline: pipeline)
-        }
-
-        private func stepStateDisplay(_ state: PipelineStepDisplayViewModel.State) -> (String, Color) {
-            switch state {
-            case .queued:        return ("queued", neon.textFaint)
-            case .running:       return ("running", neon.accent)
-            case .done:          return ("done", neon.green)
-            case .failed:        return ("failed", neon.red)
-            case .awaitingGate:  return ("gate", neon.yellow)
-            case .awaitingPick:  return ("pick", neon.accent)
-            }
         }
 
         private func toggleStepOutput(_ index: Int) {
@@ -889,7 +1019,7 @@ extension ConduitUI {
                         .foregroundStyle(neon.text)
                 }
 
-                Text("All runs have finished. Compare them below and pick the one to continue the pipeline.")
+                Text("All runs have finished. Compare them below and pick the one to continue the flow.")
                     .font(neon.sans(13))
                     .foregroundStyle(neon.textDim)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1251,13 +1381,15 @@ extension ConduitUI {
                 return nil
             }()
             let showGatePreview = store.pipelineGatePreview && gate != nil
+            let gatedStep = p.steps[safe: p.current_step]
+            let gatedRole = (gatedStep?.role.isEmpty == false) ? gatedStep!.role.capitalized : "Step \(p.current_step + 1)"
 
             return VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
                     Image(systemName: "hand.raised.fill")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(neon.yellow)
-                    Text("Waiting for approval")
+                    Text("\(gatedRole) is ready for review")
                         .font(neon.sans(14).weight(.semibold))
                         .foregroundStyle(neon.text)
                 }
@@ -1327,44 +1459,68 @@ extension ConduitUI {
                                    "prev_len": "\(gate?.prev.count ?? 0)"])
                     }
                 } else if !showGatePreview {
-                    Text("Step \(p.current_step + 1) has finished and is gated. Review the output, then continue the pipeline.")
+                    Text("Step \(p.current_step + 1) has finished and is gated. Review the output, then continue the flow.")
                         .font(neon.sans(13))
                         .foregroundStyle(neon.textDim)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Button {
-                    let edited = isEditingHandoff && handoffDraft != (gate?.prev ?? "")
-                    Telemetry.breadcrumb("pipeline", "gate continue tapped",
-                        data: ["id": pipelineID, "step": "\(p.current_step)",
-                               "edited": edited ? "true" : "false"])
-                    let prevOverride = edited ? handoffDraft : nil
-                    continuePipeline(prevOverride: prevOverride)
-                } label: {
-                    HStack(spacing: 6) {
-                        if isContinuing {
-                            ProgressView()
-                                .progressViewStyle(.circular)
-                                .tint(neon.accentText)
-                                .scaleEffect(0.7)
-                        } else {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 13, weight: .bold))
+                // "Open session" (secondary) + "Approve · continue" (amber,
+                // GateGlyph leading) -- design_handoff_flow "7. Monitor".
+                // Edit handoff stays folded in as the tertiary text action
+                // in the handoff-preview header above (never removed).
+                HStack(spacing: 8) {
+                    Button {
+                        if let sid = gatedStep?.session_id {
+                            Telemetry.breadcrumb("pipeline", "gate open session tapped",
+                                data: ["id": pipelineID, "step": "\(p.current_step)"])
+                            selectedSessionID = sid
                         }
-                        Text(isContinuing ? "Continuing..." : "Continue")
-                            .font(neon.sans(14).weight(.bold))
+                    } label: {
+                        Text("Open session")
+                            .font(neon.sans(14).weight(.semibold))
+                            .foregroundStyle(neon.text)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Capsule().fill(neon.surface2))
+                            .overlay(Capsule().stroke(neon.borderStrong, lineWidth: 1))
                     }
-                    .foregroundStyle(neon.accentText)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(neon.yellow)
-                    )
+                    .buttonStyle(.plain)
+                    .disabled(gatedStep?.session_id == nil)
+                    .opacity(gatedStep?.session_id == nil ? 0.5 : 1)
+
+                    Button {
+                        let edited = isEditingHandoff && handoffDraft != (gate?.prev ?? "")
+                        Telemetry.breadcrumb("pipeline", "gate continue tapped",
+                            data: ["id": pipelineID, "step": "\(p.current_step)",
+                                   "edited": edited ? "true" : "false"])
+                        let prevOverride = edited ? handoffDraft : nil
+                        continuePipeline(prevOverride: prevOverride)
+                    } label: {
+                        HStack(spacing: 6) {
+                            if isContinuing {
+                                ProgressView()
+                                    .progressViewStyle(.circular)
+                                    .tint(neon.accentText)
+                                    .scaleEffect(0.7)
+                            } else {
+                                ConduitUI.GateGlyph(color: neon.accentText, size: 11)
+                            }
+                            Text(isContinuing ? "Continuing..." : "Approve · continue")
+                                .font(neon.sans(14).weight(.bold))
+                        }
+                        .foregroundStyle(neon.accentText)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(neon.yellow)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isContinuing)
+                    .opacity(isContinuing ? 0.7 : 1)
                 }
-                .buttonStyle(.plain)
-                .disabled(isContinuing)
-                .opacity(isContinuing ? 0.7 : 1)
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1388,7 +1544,7 @@ extension ConduitUI {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(neon.red)
-                    Text("Pipeline failed")
+                    Text("Flow failed")
                         .font(neon.sans(14).weight(.semibold))
                         .foregroundStyle(neon.text)
                 }
@@ -1536,7 +1692,7 @@ extension ConduitUI {
                     guard let http = resp as? HTTPURLResponse else { return }
                     if http.statusCode == 409 {
                         // 409 "not_failed" — pipeline was no longer in failed state.
-                        errorBanner = "Pipeline is not in a failed state (409)"
+                        errorBanner = "Flow is not in a failed state (409)"
                         Telemetry.breadcrumb("pipeline", "resume 409 not_failed",
                             data: ["id": pipelineID])
                         return

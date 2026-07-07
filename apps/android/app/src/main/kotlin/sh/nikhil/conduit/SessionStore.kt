@@ -5427,6 +5427,28 @@ class SessionStore : ViewModel(), ConduitDelegate {
             val arr = JSONObject(raw).optJSONArray("pipelines") ?: return@runCatching emptyList()
             (0 until arr.length()).map { i ->
                 val o = arr.getJSONObject(i)
+                // Additive (#922) -- absent on an older broker. Tolerated
+                // via optJSONArray/optJSONObject returning null, which the
+                // app-side model defaults to (PipelineSummary.steps/result).
+                val steps = o.optJSONArray("steps")?.let { stepsArr ->
+                    (0 until stepsArr.length()).map { j ->
+                        val so = stepsArr.getJSONObject(j)
+                        sh.nikhil.conduit.ui.PipelineSummaryStep(
+                            agent = so.optString("agent", ""),
+                            role = so.optString("role", ""),
+                            status = so.optString("status", ""),
+                            gateAfter = so.optBoolean("gate_after", false),
+                        )
+                    }
+                }
+                val result = o.optJSONObject("result")?.let { ro ->
+                    sh.nikhil.conduit.ui.PipelineSummaryResult(
+                        filesChanged = ro.optInt("files_changed", 0),
+                        insertions = ro.optInt("insertions", 0),
+                        deletions = ro.optInt("deletions", 0),
+                        finished = ro.optString("finished", "").takeIf { it.isNotEmpty() },
+                    )
+                }
                 sh.nikhil.conduit.ui.PipelineSummary(
                     id = o.optString("id", ""),
                     title = o.optString("title", ""),
@@ -5434,6 +5456,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     currentStep = o.optInt("current_step", 0),
                     stepCount = o.optInt("step_count", 0),
                     created = o.optString("created", "").takeIf { it.isNotEmpty() },
+                    steps = steps,
+                    result = result,
                 )
             }
         }.getOrNull()
