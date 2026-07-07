@@ -10,7 +10,7 @@ package ws
 //	POST   /api/pipeline/{id}/resume   re-spawn failed step; 409 if not failed
 //	POST   /api/pipeline/{id}/pick     pick fanout winner; 409 if not awaiting_pick
 //	DELETE /api/pipeline/{id}          cancel; kills live child; state → CANCELLED
-//	GET    /api/pipelines              list: [{id, title, state, current_step, step_count}]
+//	GET    /api/pipelines              list: [{id, title, state, current_step, step_count, steps, result}]
 //
 //	GET    /api/pipeline-templates        list all templates
 //	POST   /api/pipeline-templates        create a template
@@ -449,6 +449,26 @@ func (s *Server) serveDeletePipeline(w http.ResponseWriter, r *http.Request) {
 
 // ── GET /api/pipelines ───────────────────────────────────────────────────────
 
+// pipelineStepSummary is the mini-topology-strip view of one top-level step,
+// carried on each /api/pipelines list item (#920 — the home FlowCard needs a
+// per-step glyph strip without a second round-trip to GET /api/pipeline/{id}).
+type pipelineStepSummary struct {
+	Agent     string `json:"agent"`
+	Role      string `json:"role"`
+	Status    string `json:"status"`
+	GateAfter bool   `json:"gate_after"`
+}
+
+// pipelineResultSummary is the diffstat-only slice of pipeline.PipelineResult
+// carried on a list item once a pipeline completes — Output is deliberately
+// omitted (can be large; the list endpoint is a summary, not a detail view).
+type pipelineResultSummary struct {
+	FilesChanged int    `json:"files_changed"`
+	Insertions   int    `json:"insertions"`
+	Deletions    int    `json:"deletions"`
+	Finished     string `json:"finished,omitempty"`
+}
+
 type pipelineListItem struct {
 	ID          string                 `json:"id"`
 	Title       string                 `json:"title"`
@@ -456,6 +476,124 @@ type pipelineListItem struct {
 	CurrentStep int                    `json:"current_step"`
 	StepCount   int                    `json:"step_count"`
 	Created     string                 `json:"created,omitempty"`
+	// Steps is one entry per top-level step, in order. Additive (#920).
+	Steps []pipelineStepSummary `json:"steps,omitempty"`
+	// Result is populated only once State == pipeline.PipelineComplete.
+	// Additive (#920).
+	Result *pipelineResultSummary `json:"result,omitempty"`
+}
+
+// stepDisplayStatus computes the coarse per-step status shown in the mini
+// topology strip: "queued" | "running" | "done" | "failed" | "awaiting_gate"
+// | "awaiting_pick". This mirrors PipelineStepDisplayViewModel.state(for:) in
+// apps/ios/Sources/ConduitUI/Views/ConduitPipelineMonitorView.swift — the same
+// phase+pipeline-context mapping the Monitor already computes client-side
+// from the full GET /api/pipeline/{id} payload — just precomputed here so the
+// list endpoint can offer it without a second round-trip. Keep the two in
+// sync if the mapping changes.
+func stepDisplayStatus(step pipeline.Step, state pipeline.PipelineState, currentStep int) string {
+	isDonePhase := func(phase string) bool {
+		return phase == "exited(0)" || phase == "exited" || phase == "turn_complete"
+	}
+	isFailedPhase := func(phase string) bool {
+		return strings.HasPrefix(phase, "exited") && !isDonePhase(phase)
+	}
+	isRunningPhase := func(phase string) bool {
+		return phase == "running" || phase == "ready"
+	}
+	isTerminal := state == pipeline.PipelineComplete || state == pipeline.PipelineFailed || state == pipeline.PipelineCancelled
+
+	// fallbackState mirrors PipelineStepStatus.fallbackState(pipeline:) —
+	// a display-state guess for a step whose phase doesn't map to a known
+	// bucket, inferred from surrounding pipeline context. "" means "no
+	// fallback signal applies" (caller renders "queued").
+	fallbackState := func() string {
+		if step.Ended != "" {
+			return "done"
+		}
+		if state == pipeline.PipelineComplete {
+			return "done"
+		}
+		if step.Index < currentStep {
+			return "done"
+		}
+		if state == pipeline.PipelineFailed && step.Index == currentStep {
+			return "failed"
+		}
+		return ""
+	}
+
+	hasFanoutRuns := step.Fanout != nil && len(step.Fanout.Runs) > 0
+	if step.SessionID == "" && !hasFanoutRuns {
+		if step.Kind == "loop" && step.Index == currentStep && !isTerminal {
+			return "running"
+		}
+		if fb := fallbackState(); fb != "" {
+			return fb
+		}
+		return "queued"
+	}
+	if isDonePhase(step.Phase) {
+		return "done"
+	}
+	if isFailedPhase(step.Phase) {
+		return "failed"
+	}
+	if state == pipeline.PipelineAwaitingPick && step.Index == currentStep {
+		return "awaiting_pick"
+	}
+	if isRunningPhase(step.Phase) {
+		if state == pipeline.PipelineAwaitingGate && step.Index == currentStep {
+			return "awaiting_gate"
+		}
+		return "running"
+	}
+	if hasFanoutRuns {
+		return "running"
+	}
+	if fb := fallbackState(); fb != "" {
+		return fb
+	}
+	return "queued"
+}
+
+// buildPipelineListItems converts on-disk pipelines to their list-endpoint
+// summary shape. Split out from serveListPipelines so the additive
+// steps/result derivation is directly unit-testable without a live server or
+// a resolvable conduit root (see pipeline_test.go).
+func buildPipelineListItems(pipelines []*pipeline.Pipeline) []pipelineListItem {
+	items := make([]pipelineListItem, 0, len(pipelines))
+	for _, p := range pipelines {
+		steps := make([]pipelineStepSummary, 0, len(p.Steps))
+		for _, st := range p.Steps {
+			steps = append(steps, pipelineStepSummary{
+				Agent:     st.AgentType,
+				Role:      st.Role,
+				Status:    stepDisplayStatus(st, p.State, p.CurrentStep),
+				GateAfter: st.GateAfter,
+			})
+		}
+		var result *pipelineResultSummary
+		if p.Result != nil {
+			result = &pipelineResultSummary{
+				FilesChanged: p.Result.FilesChanged,
+				Insertions:   p.Result.Insertions,
+				Deletions:    p.Result.Deletions,
+				Finished:     p.Result.Finished,
+			}
+		}
+		items = append(items, pipelineListItem{
+			ID:          p.ID,
+			Title:       p.Title,
+			State:       p.State,
+			CurrentStep: p.CurrentStep,
+			StepCount:   len(p.Steps),
+			Created:     p.Created,
+			Steps:       steps,
+			Result:      result,
+		})
+	}
+	return items
 }
 
 func (s *Server) serveListPipelines(w http.ResponseWriter, r *http.Request) {
@@ -468,18 +606,7 @@ func (s *Server) serveListPipelines(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "list_failed", err.Error())
 		return
 	}
-	items := make([]pipelineListItem, 0, len(pipelines))
-	for _, p := range pipelines {
-		items = append(items, pipelineListItem{
-			ID:          p.ID,
-			Title:       p.Title,
-			State:       p.State,
-			CurrentStep: p.CurrentStep,
-			StepCount:   len(p.Steps),
-			Created:     p.Created,
-		})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"pipelines": items})
+	writeJSON(w, http.StatusOK, map[string]any{"pipelines": buildPipelineListItems(pipelines)})
 }
 
 // ── POST /api/pipeline/{id}/resume ──────────────────────────────────────────
