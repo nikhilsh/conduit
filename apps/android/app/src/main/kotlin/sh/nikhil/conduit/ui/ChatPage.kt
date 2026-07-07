@@ -1139,8 +1139,7 @@ fun ChatPage(
             // Running-tasks pill -- live count of this session's background
             // tasks from the subagent roster (design handoff session_tasks
             // PR2). Gate data doesn't exist yet, so gatedCount is always 0;
-            // tapping only records `showTasksSheet` -- the sheet itself is
-            // wired in a follow-up PR.
+            // tapping opens the [TasksSheet] wired below (PR3).
             val runningCount = remember(subagentRosterMap, session.id) {
                 runningTaskCount(subagentRosterMap[session.id]?.map { it.status } ?: emptyList())
             }
@@ -1232,6 +1231,19 @@ fun ChatPage(
             autoStartProvider = loginAutoStartProvider,
             onAutoStartConsumed = { loginAutoStartProvider = null },
             onDismiss = { showAgentLogin = false },
+        )
+    }
+
+    // Tasks sheet (design handoff session_tasks PR3): grouped view of this
+    // session's background tasks, opened from the RunningPill tap above.
+    // `!readOnly` mirrors the `showAgentLogin` guard just above -- the pill
+    // that sets `showTasksSheet` only renders inside the live composer, but
+    // this stays defensive against a stale flag surviving a mode flip.
+    if (showTasksSheet && !readOnly) {
+        TasksSheet(
+            roster = subagentRosterMap[session.id] ?: emptyList(),
+            sessionAgent = session.assistant,
+            onDismiss = { showTasksSheet = false },
         )
     }
 }
