@@ -1,6 +1,7 @@
 package sh.nikhil.conduit.ui.components
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -44,6 +45,7 @@ import kotlin.math.min
  * dots, no gate pips. A future PR that threads richer per-step data through
  * `GET /api/pipelines` can upgrade this without changing the call sites.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FlowCard(
     summary: PipelineSummary,
