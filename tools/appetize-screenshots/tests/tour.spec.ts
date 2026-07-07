@@ -120,7 +120,10 @@ for (const { platform, publicKey } of TARGETS) {
       // Monitor's toolbar (the real Monitor has no text-labeled back
       // affordance to tap; see ConduitPipelineMonitorView.swift /
       // PipelineMonitorScreen.kt).
-      await session.tap({ element: { attributes: { text: 'Home' } } });
+      // matchIndex: Android's element dump reports two "Home" matches at this
+      // point (the toolbar button plus an occluded element under the overlay);
+      // index 0 is the visible toolbar button, first in the tree.
+      await session.tap({ element: { attributes: { text: 'Home' } }, matchIndex: 0 });
       await session.waitForTimeout(3_000);
 
       // 3. A session's chat — agent replies + tool cards.
