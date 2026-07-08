@@ -338,7 +338,12 @@ extension ConduitUI {
         /// first), or the static list when no catalog is available.
         static func models(forAssistant assistant: String, catalog: [AgentModel]?) -> [String] {
             guard let catalog, !catalog.isEmpty else { return models(forAssistant: assistant) }
-            let ids = catalog.map(\.id)
+            // Dedupe by canonical id before anything else -- a broker that ever
+            // repeats an id (or a caller merging two sources) must never render
+            // the same model twice (design_handoff_review_fixes R2, the
+            // "Default"/"Opus" twice bug).
+            var seenIDs = Set<String>()
+            let ids = catalog.map(\.id).filter { seenIDs.insert($0).inserted }
             // When the catalog has an explicit non-empty isDefault entry (e.g. codex's
             // "gpt-5.5"), that entry IS the recommended row — do NOT prepend the ""
             // inherit sentinel, which would create a duplicate recommended row.

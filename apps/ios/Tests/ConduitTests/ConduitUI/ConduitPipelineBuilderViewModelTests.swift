@@ -263,6 +263,9 @@ struct ConduitPipelineBuilderViewModelTests {
         let options = ConduitUI.ForkOptions.models(forAssistant: "claude", catalog: catalog)
         #expect(options.filter { $0.isEmpty }.count == 1, "exactly one Default row, not a hardcoded row PLUS the catalog's own empty-string entry")
         #expect(options == ["", "opus", "sonnet"])
+        // design_handoff_review_fixes R2: the flow step editor's Advanced
+        // rows now reuse this same list -- pin no id ever appears twice.
+        #expect(Set(options).count == options.count)
     }
 
     @Test func createRequestRoundTripsBranchAndLoopBlocks() throws {

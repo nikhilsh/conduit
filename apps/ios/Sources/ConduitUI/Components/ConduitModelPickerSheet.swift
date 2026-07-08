@@ -14,6 +14,17 @@ import SwiftUI
 // folds the catalog's own "" entry and the inherit sentinel into ONE row --
 // see its doc comment).
 
+/// Clean display name for a model option, with the " (recommended)" suffix
+/// `ForkOptions.modelLabel` appends stripped -- the sheet shows that as a
+/// RECOMMENDED chip, never concatenated into the name (design_handoff_review_fixes
+/// R2). Mirror of Android `modelCleanName` (ModelPicker.kt).
+private func cleanModelLabel(_ option: String, catalog: [ConduitUI.AgentModel]?) -> String {
+    let label = ConduitUI.ForkOptions.modelLabel(option, catalog: catalog)
+    let suffix = " (recommended)"
+    guard label.hasSuffix(suffix) else { return label }
+    return String(label.dropLast(suffix.count))
+}
+
 extension ConduitUI {
     struct ModelPickerSheet: View {
         /// Agent whose catalog is being shown (drives the picker title).
@@ -46,7 +57,7 @@ extension ConduitUI {
                                 let entry = ForkOptions.catalogEntry(for: option, in: catalog)
                                 let isSelected = option == model
                                 let isRecommended = entry?.isDefault == true || option == ForkOptions.inheritModel
-                                let label = ForkOptions.modelLabel(option, catalog: catalog)
+                                let label = cleanModelLabel(option, catalog: catalog)
                                 let detail = ForkOptions.modelDetail(option, catalog: catalog)
                                 Button {
                                     model = option
@@ -142,7 +153,7 @@ extension ConduitUI {
                 showSheet = true
             } label: {
                 HStack {
-                    Text(ForkOptions.modelLabel(model, catalog: catalog))
+                    Text(cleanModelLabel(model, catalog: catalog))
                         .font(neon.sans(13).weight(.medium))
                         .foregroundStyle(neon.text)
                     Spacer()
