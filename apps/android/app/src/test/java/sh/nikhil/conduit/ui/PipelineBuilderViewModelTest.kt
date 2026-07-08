@@ -158,6 +158,43 @@ class PipelineBuilderViewModelTest {
         assertEquals(1, vm.steps[1].branchElse.size)
     }
 
+    /**
+     * design_handoff_review_fixes R1: "Add step" inside a branch opens the
+     * full step editor immediately on a role-Custom sub-step -- verify the
+     * freshly-appended sub-step is exactly that (blank prompt, role
+     * "custom"), since the editor's prefill deliberately skips "custom" and
+     * would otherwise leave a stale canned prompt.
+     */
+    @Test
+    fun addSubStepDefaultsToEditableCustomRole() {
+        val vm = PipelineBuilderViewModel()
+        vm.addControlFlowStep("branch")
+        val stepId = vm.steps[1].id
+
+        vm.addSubStep(stepId, PipelineSubStepArm.THEN)
+        val added = vm.steps[1].branchThen.last()
+        assertEquals("custom", added.role)
+        assertEquals("", added.promptTemplate)
+    }
+
+    /** [PipelineBuilderViewModel.subStep] backs the dual-mode step editor's
+     *  read path when it's editing a branch sub-step rather than a
+     *  top-level step. */
+    @Test
+    fun subStepReadsBackByIdentity() {
+        val vm = PipelineBuilderViewModel()
+        vm.addControlFlowStep("branch")
+        val stepId = vm.steps[1].id
+        vm.addSubStep(stepId, PipelineSubStepArm.THEN)
+        val subId = vm.steps[1].branchThen[1].id
+
+        val found = vm.subStep(stepId, PipelineSubStepArm.THEN, subId)
+        assertEquals(subId, found?.id)
+
+        assertEquals(null, vm.subStep(stepId, PipelineSubStepArm.THEN, "missing"))
+        assertEquals(null, vm.subStep("missing-step", PipelineSubStepArm.THEN, subId))
+    }
+
     @Test
     fun removeSubStepRemovesFromTheChosenArmOnly() {
         val vm = PipelineBuilderViewModel()

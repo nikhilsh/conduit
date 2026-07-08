@@ -21,6 +21,13 @@ extension ConduitUI {
         let stepID: PipelineStep.ID
         let index: Int
 
+        /// design_handoff_review_fixes R1: which sub-step's full editor is
+        /// open, if any -- `.sheet(item:)` (not `isPresented:`) so a new
+        /// selection always re-seeds sheet identity, matching the pattern
+        /// `FlowWizardView` already uses for the top-level step/branch
+        /// sheets.
+        @State private var selectedSubStepTarget: SubStepEditTarget?
+
         private static let prevOutputPredicates = ["contains", "not_contains", "matches"]
 
         private var step: Binding<PipelineStep> {
@@ -50,6 +57,10 @@ extension ConduitUI {
                 .safeAreaInset(edge: .bottom) { footer }
             }
             .tint(neon.accent)
+            .sheet(item: $selectedSubStepTarget) { target in
+                ConduitUI.FlowStepEditorSheet(viewModel: viewModel, subStepTarget: target)
+                    .environment(store)
+            }
         }
 
         // MARK: Condition
@@ -122,10 +133,7 @@ extension ConduitUI {
                     ForEach(step.wrappedValue.branchThen) { sub in
                         subStepRow(sub, arm: .then)
                     }
-                    addStepGhostButton(tint: neon.green) {
-                        viewModel.addSubStep(stepID: stepID, arm: .then)
-                        Telemetry.breadcrumb("flow_wizard", "branch then add", data: [:])
-                    }
+                    addStepGhostButton(tint: neon.green, arm: .then)
                 }
                 .padding(.leading, 12)
                 .overlay(Rectangle().fill(neon.green.opacity(0.27)).frame(width: 2), alignment: .leading)
@@ -148,10 +156,7 @@ extension ConduitUI {
                             subStepRow(sub, arm: .elseArm)
                         }
                     }
-                    addStepGhostButton(tint: neon.textDim) {
-                        viewModel.addSubStep(stepID: stepID, arm: .elseArm)
-                        Telemetry.breadcrumb("flow_wizard", "branch else add", data: [:])
-                    }
+                    addStepGhostButton(tint: neon.textDim, arm: .elseArm)
                 }
                 .padding(.leading, 12)
                 .overlay(Rectangle().fill(neon.lineSoft).frame(width: 2), alignment: .leading)
@@ -161,8 +166,19 @@ extension ConduitUI {
         /// design_handoff_flow audit §D.13: shared ghost-button styling
         /// (plus glyph + label, no fill) for the THEN/ELSE "+ Add step"
         /// rows -- THEN reads in green, ELSE stays faint.
-        private func addStepGhostButton(tint: Color, action: @escaping () -> Void) -> some View {
-            Button(action: action) {
+        ///
+        /// design_handoff_review_fixes R1: "Add step" no longer just appends
+        /// a blank row -- it opens the full step editor immediately on the
+        /// fresh sub-step (role "custom" per `addSubStep`), so the user
+        /// lands straight in agent/role/prompt instead of an empty card.
+        private func addStepGhostButton(tint: Color, arm: PipelineSubStepArm) -> some View {
+            Button {
+                viewModel.addSubStep(stepID: stepID, arm: arm)
+                Telemetry.breadcrumb("flow_wizard", arm == .then ? "branch then add" : "branch else add", data: [:])
+                if let newID = subSteps(for: arm).last?.id {
+                    selectedSubStepTarget = SubStepEditTarget(stepID: stepID, arm: arm, subStepID: newID)
+                }
+            } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .semibold))
@@ -174,27 +190,62 @@ extension ConduitUI {
             .buttonStyle(.plain)
         }
 
+        private func subSteps(for arm: PipelineSubStepArm) -> [PipelineSubStep] {
+            switch arm {
+            case .then: return step.wrappedValue.branchThen
+            case .elseArm: return step.wrappedValue.branchElse
+            case .body: return []
+            }
+        }
+
+        /// design_handoff_review_fixes R1: a branch sub-step is the SAME
+        /// step card as the main rail -- tapping it opens the full step
+        /// editor (agent/role/prompt/gate/advanced) rather than the old
+        /// add/remove-only row. Delete now lives inside that editor, so
+        /// there is no minus badge here.
         @ViewBuilder
         private func subStepRow(_ sub: PipelineSubStep, arm: PipelineSubStepArm) -> some View {
-            HStack(spacing: 10) {
-                ConduitUI.AgentDot(agent: sub.agentType, size: 28)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(sub.role.capitalized).font(neon.sans(13.5).weight(.semibold)).foregroundStyle(neon.text)
-                    Text("\(sub.agentType) \u{00B7} sees prev output")
-                        .font(neon.mono(10.5))
+            Button {
+                selectedSubStepTarget = SubStepEditTarget(stepID: stepID, arm: arm, subStepID: sub.id)
+            } label: {
+                HStack(spacing: 10) {
+                    ConduitUI.AgentDot(agent: sub.agentType, size: 28)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(sub.role.capitalized).font(neon.sans(13.5).weight(.semibold)).foregroundStyle(neon.text)
+                        subStepPreview(sub)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
                         .foregroundStyle(neon.textFaint)
                 }
-                Spacer(minLength: 8)
-                Button {
-                    viewModel.removeSubStep(stepID: stepID, arm: arm, subStepID: sub.id)
-                } label: {
-                    Image(systemName: "minus.circle")
-                        .foregroundStyle(neon.red.opacity(0.8))
-                }
-                .buttonStyle(.plain)
+                .padding(10)
+                .neonCardSurface(neon, fill: neon.surface2.opacity(0.5), cornerRadius: 12)
             }
-            .padding(10)
-            .neonCardSurface(neon, fill: neon.surface2.opacity(0.5), cornerRadius: 12)
+            .buttonStyle(.plain)
+        }
+
+        /// "<agent> \u{00B7} \u{201C}<prompt, truncated>\u{201D}" in mono,
+        /// accent-tinted quoted prompt -- falls back to "sees prev output"
+        /// when the sub-step has no prompt yet (ds-review.jsx RvBranchFixed).
+        private func subStepPreview(_ sub: PipelineSubStep) -> some View {
+            Group {
+                if sub.promptTemplate.isEmpty {
+                    Text("\(sub.agentType) \u{00B7} sees prev output")
+                        .foregroundStyle(neon.textFaint)
+                } else {
+                    Text("\(sub.agentType) \u{00B7} ").foregroundStyle(neon.textFaint)
+                        + Text("\u{201C}\(truncatedPrompt(sub.promptTemplate))\u{201D}").foregroundStyle(neon.accent)
+                }
+            }
+            .font(neon.mono(10.5))
+            .lineLimit(1)
+            .truncationMode(.tail)
+        }
+
+        private func truncatedPrompt(_ text: String, limit: Int = 46) -> String {
+            guard text.count > limit else { return text }
+            return String(text.prefix(limit)) + "\u{2026}"
         }
 
         // MARK: Footer

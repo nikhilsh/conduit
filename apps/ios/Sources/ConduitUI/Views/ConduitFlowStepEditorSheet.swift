@@ -7,6 +7,18 @@ import SwiftUI
 // Gate / Advanced). Mutates the wizard's shared `PipelineBuilderViewModel`
 // directly by index -- same model + `/api/pipeline` wire shape as the old
 // builder's config sheet, just a fresh layout.
+//
+// design_handoff_review_fixes R1: dual-mode. A branch's Then/Else rows are
+// now FULL step cards (ConduitFlowBranchEditorSheet) that open this SAME
+// sheet against a `PipelineSubStep` instead of a top-level `PipelineStep`.
+// `PipelineStep` and `PipelineSubStep` are different wire types, but every
+// field this editor actually surfaces (agent/role/prompt/gate/model/effort/
+// permission) exists on both -- `field(step:subStep:)` below picks the right
+// storage by keypath so the body reads/writes ONE binding per field
+// regardless of target, and the two `init`s just decide which storage that
+// is. Sub-steps have no numeric index and no control-flow fields, so
+// `Target` intentionally carries no index for `.subStep` and the Advanced
+// section never grows loop/branch-only controls.
 
 extension ConduitUI {
 
@@ -15,9 +27,13 @@ extension ConduitUI {
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
 
+        enum Target {
+            case step(id: PipelineStep.ID, index: Int)
+            case subStep(SubStepEditTarget)
+        }
+
         let viewModel: PipelineBuilderViewModel
-        let stepID: PipelineStep.ID
-        let index: Int
+        let target: Target
 
         @State private var advancedExpanded = false
 
@@ -36,6 +52,16 @@ extension ConduitUI {
             RoleOption(value: "custom", label: "Custom"),
         ]
 
+        init(viewModel: PipelineBuilderViewModel, stepID: PipelineStep.ID, index: Int) {
+            self.viewModel = viewModel
+            self.target = .step(id: stepID, index: index)
+        }
+
+        init(viewModel: PipelineBuilderViewModel, subStepTarget: SubStepEditTarget) {
+            self.viewModel = viewModel
+            self.target = .subStep(subStepTarget)
+        }
+
         /// Live assistant list from the broker's capabilities descriptors --
         /// mirrors `PipelineBuilderView.agentOptions`.
         private var agentOptions: [String] {
@@ -48,12 +74,40 @@ extension ConduitUI {
             return known + extras
         }
 
-        private var step: Binding<PipelineStep> {
-            Binding(
-                get: { index < viewModel.steps.count ? viewModel.steps[index] : PipelineStep() },
-                set: { if index < viewModel.steps.count { viewModel.steps[index] = $0 } }
-            )
+        // MARK: Field bindings (common to PipelineStep + PipelineSubStep)
+
+        /// Reads/writes one field through whichever storage `target` points
+        /// at -- a top-level step (by array index) or a branch sub-step (via
+        /// the view model's sub-step get/set, PLAN-HARNESS-BUILDER shape).
+        private func field<Value>(
+            step stepPath: WritableKeyPath<PipelineStep, Value>,
+            subStep subStepPath: WritableKeyPath<PipelineSubStep, Value>
+        ) -> Binding<Value> {
+            switch target {
+            case .step(_, let index):
+                return Binding(
+                    get: { index < viewModel.steps.count ? viewModel.steps[index][keyPath: stepPath] : PipelineStep()[keyPath: stepPath] },
+                    set: { if index < viewModel.steps.count { viewModel.steps[index][keyPath: stepPath] = $0 } }
+                )
+            case .subStep(let t):
+                return Binding(
+                    get: { viewModel.subStepBinding(stepID: t.stepID, arm: t.arm, subStepID: t.subStepID)[keyPath: subStepPath] },
+                    set: { newValue in
+                        var sub = viewModel.subStepBinding(stepID: t.stepID, arm: t.arm, subStepID: t.subStepID)
+                        sub[keyPath: subStepPath] = newValue
+                        viewModel.updateSubStep(stepID: t.stepID, arm: t.arm, subStep: sub)
+                    }
+                )
+            }
         }
+
+        private var agentType: Binding<String> { field(step: \.agentType, subStep: \.agentType) }
+        private var role: Binding<String> { field(step: \.role, subStep: \.role) }
+        private var promptTemplate: Binding<String> { field(step: \.promptTemplate, subStep: \.promptTemplate) }
+        private var gateAfter: Binding<Bool> { field(step: \.gateAfter, subStep: \.gateAfter) }
+        private var model: Binding<String> { field(step: \.model, subStep: \.model) }
+        private var reasoningEffort: Binding<String> { field(step: \.reasoningEffort, subStep: \.reasoningEffort) }
+        private var permissionMode: Binding<String> { field(step: \.permissionMode, subStep: \.permissionMode) }
 
         var body: some View {
             NavigationStack {
@@ -66,13 +120,14 @@ extension ConduitUI {
                             promptField
                             gateRow
                             advancedSection
+                            deleteSection
                         }
                         .padding(16)
                         .padding(.bottom, 80)
                     }
                     .scrollIndicators(.hidden)
                 }
-                .navigationTitle("Step \(index + 1) \u{00B7} \(roleLabel)")
+                .navigationTitle(navTitle)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -104,15 +159,28 @@ extension ConduitUI {
                 // Step editor prompt is empty on open -- prefill from the
                 // selected role (device feedback: a fresh step opened to
                 // role "Engineer" with a blank prompt). "custom" has no
-                // canned template, so it's left blank for the user.
-                if step.wrappedValue.promptTemplate.isEmpty && step.wrappedValue.role != "custom" {
-                    step.wrappedValue.promptTemplate = PipelineStep.defaultPromptTemplate(forRole: step.wrappedValue.role)
+                // canned template, so it's left blank for the user. A fresh
+                // branch sub-step already opens with role "custom"
+                // (addSubStep), so this is a no-op there by construction.
+                if promptTemplate.wrappedValue.isEmpty && role.wrappedValue != "custom" {
+                    promptTemplate.wrappedValue = PipelineStep.defaultPromptTemplate(forRole: role.wrappedValue)
                 }
             }
         }
 
         private var roleLabel: String {
-            roleOptions.first(where: { $0.value == step.wrappedValue.role })?.label ?? "Custom"
+            roleOptions.first(where: { $0.value == role.wrappedValue })?.label ?? "Custom"
+        }
+
+        /// Top-level steps read "Step N · Role"; branch sub-steps have no
+        /// rail position to number, so they read "Step · Role".
+        private var navTitle: String {
+            switch target {
+            case .step(_, let index):
+                return "Step \(index + 1) \u{00B7} \(roleLabel)"
+            case .subStep:
+                return "Step \u{00B7} \(roleLabel)"
+            }
         }
 
         private func sectionLabel(_ text: String) -> some View {
@@ -152,7 +220,7 @@ extension ConduitUI {
 
         @ViewBuilder
         private func agentTile(_ opt: String) -> some View {
-            let selected = step.wrappedValue.agentType == opt
+            let selected = agentType.wrappedValue == opt
             // Design C1 (design_handoff_flow README screen 5 /
             // flow-proto-editors.jsx): selected = per-agent tint at a soft
             // fill + a ~40%-tint border + glow, label in the agent's own
@@ -161,7 +229,7 @@ extension ConduitUI {
             // the agent being picked). Unselected stays a neutral surface.
             let tint = neon.agentTint(forAgent: opt)
             Button {
-                step.wrappedValue.agentType = opt
+                agentType.wrappedValue = opt
             } label: {
                 HStack(spacing: 6) {
                     AgentGlyph(assistant: opt, size: 16)
@@ -193,11 +261,11 @@ extension ConduitUI {
                 sectionLabel("Role")
                 HStack(spacing: 6) {
                     ForEach(roleOptions) { opt in
-                        ConduitUI.Chip(label: opt.label, isSelected: step.wrappedValue.role == opt.value)
+                        ConduitUI.Chip(label: opt.label, isSelected: role.wrappedValue == opt.value)
                             .onTapGesture {
-                                step.wrappedValue.role = opt.value
+                                role.wrappedValue = opt.value
                                 if opt.value != "custom" {
-                                    step.wrappedValue.promptTemplate = PipelineStep.defaultPromptTemplate(forRole: opt.value)
+                                    promptTemplate.wrappedValue = PipelineStep.defaultPromptTemplate(forRole: opt.value)
                                 }
                             }
                     }
@@ -210,7 +278,7 @@ extension ConduitUI {
         private var promptField: some View {
             VStack(alignment: .leading, spacing: 8) {
                 sectionLabel("Prompt")
-                TextField("Custom prompt...", text: step.promptTemplate, axis: .vertical)
+                TextField("Custom prompt...", text: promptTemplate, axis: .vertical)
                     .font(neon.mono(13))
                     .foregroundStyle(neon.text)
                     .lineLimit(3...6)
@@ -231,7 +299,7 @@ extension ConduitUI {
             ConduitUI.GateToggleRow(
                 title: "Pause for my approval",
                 subtitle: "pings your phone to continue",
-                isOn: step.gateAfter
+                isOn: gateAfter
             )
             .neonCardSurface(neon, fill: neon.surface2.opacity(0.5), cornerRadius: 12)
         }
@@ -239,9 +307,9 @@ extension ConduitUI {
         // MARK: Advanced (model / reasoning / permissions)
 
         private var modelCatalog: [ConduitUI.AgentModel] {
-            let key = step.wrappedValue.agentType.lowercased()
+            let key = agentType.wrappedValue.lowercased()
             if let m = store.agentDescriptors[key]?.models, !m.isEmpty { return m }
-            return store.modelCatalog[step.wrappedValue.agentType] ?? []
+            return store.modelCatalog[agentType.wrappedValue] ?? []
         }
 
         @ViewBuilder
@@ -291,20 +359,20 @@ extension ConduitUI {
 
         private var modelRow: some View {
             ConduitUI.ModelPickerRow(
-                agentKind: step.wrappedValue.agentType,
+                agentKind: agentType.wrappedValue,
                 catalog: modelCatalog.isEmpty ? nil : modelCatalog,
-                model: step.model,
-                tint: neon.agentTint(forAgent: step.wrappedValue.agentType),
+                model: model,
+                tint: neon.agentTint(forAgent: agentType.wrappedValue),
                 telemetryContext: "flow_step"
             )
         }
 
         private var effortOptionsList: [String] {
             let catalogEntry = ConduitUI.ForkOptions.catalogEntry(
-                for: step.wrappedValue.model,
+                for: model.wrappedValue,
                 in: modelCatalog.isEmpty ? nil : modelCatalog
             )
-            return catalogEntry?.efforts ?? ConduitUI.ForkOptions.efforts(forAssistant: step.wrappedValue.agentType)
+            return catalogEntry?.efforts ?? ConduitUI.ForkOptions.efforts(forAssistant: agentType.wrappedValue)
         }
 
         private var effortPickerOptions: [ConduitUI.OptionPickerItem] {
@@ -316,8 +384,8 @@ extension ConduitUI {
             ConduitUI.OptionPickerRow(
                 title: "Reasoning",
                 options: effortPickerOptions,
-                selection: step.reasoningEffort,
-                tint: neon.agentTint(forAgent: step.wrappedValue.agentType),
+                selection: reasoningEffort,
+                tint: neon.agentTint(forAgent: agentType.wrappedValue),
                 telemetryContext: "flow_step_reasoning"
             )
         }
@@ -336,10 +404,35 @@ extension ConduitUI {
             ConduitUI.OptionPickerRow(
                 title: "Permissions",
                 options: permissionPickerOptions,
-                selection: step.permissionMode,
-                tint: neon.agentTint(forAgent: step.wrappedValue.agentType),
+                selection: permissionMode,
+                tint: neon.agentTint(forAgent: agentType.wrappedValue),
                 telemetryContext: "flow_step_permissions"
             )
+        }
+
+        // MARK: Delete (sub-step mode only)
+        //
+        // design_handoff_review_fixes R1: the branch row's minus badge is
+        // gone -- delete now lives inside the editor. Top-level steps have
+        // no delete affordance here (none existed before this change; the
+        // Flow wizard's step rail doesn't support removing a step yet, and
+        // this PR doesn't add one to avoid a second delete UI).
+
+        @ViewBuilder
+        private var deleteSection: some View {
+            if case .subStep(let t) = target {
+                Button {
+                    Telemetry.breadcrumb("flow_wizard", "sub step delete", data: ["arm": "\(t.arm)"])
+                    viewModel.removeSubStep(stepID: t.stepID, arm: t.arm, subStepID: t.subStepID)
+                    dismiss()
+                } label: {
+                    ConduitUI.ListRow(icon: "trash", title: "Delete step", iconTint: neon.red) {
+                        EmptyView()
+                    }
+                }
+                .buttonStyle(.plain)
+                .neonCardSurface(neon, fill: neon.surface2.opacity(0.5), cornerRadius: 12)
+            }
         }
     }
 }

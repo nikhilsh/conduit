@@ -191,6 +191,12 @@ data class PipelineSubStepDraft(
 /** Which sub-stack a [PipelineSubStepDraft] belongs to. */
 enum class PipelineSubStepArm { THEN, ELSE_ARM, BODY }
 
+/**
+ * Identifies one sub-step's full-config editor sheet: which parent block,
+ * which arm, which sub-step. Mirror of iOS `ConduitUI.SubStepEditTarget`.
+ */
+data class SubStepEditTarget(val stepId: String, val arm: PipelineSubStepArm, val subStepId: String)
+
 /** A saved pipeline template returned by GET /api/pipeline-templates. */
 data class PipelineTemplateDraft(
     val id: String,
@@ -1250,9 +1256,6 @@ private data class PipelineBuilderCommonProps(
     val onSaveTemplate: () -> Unit,
     val onOpenSubStepEditor: (SubStepEditTarget) -> Unit,
 )
-
-/** Identifies one sub-step's full-config editor dialog. */
-internal data class SubStepEditTarget(val stepId: String, val arm: PipelineSubStepArm, val subStepId: String)
 
 @Composable
 private fun PipelineMetadataFields(props: PipelineBuilderCommonProps) {

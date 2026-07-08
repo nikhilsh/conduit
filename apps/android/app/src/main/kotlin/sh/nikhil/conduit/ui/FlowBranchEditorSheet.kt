@@ -20,8 +20,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -43,10 +43,12 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.ui.components.AgentDot
 import sh.nikhil.conduit.ui.components.ButtonVariant
@@ -62,6 +64,7 @@ import sh.nikhil.conduit.ui.components.ConduitCard
  */
 @Composable
 fun FlowBranchEditorSheet(
+    store: SessionStore,
     viewModel: PipelineBuilderViewModel,
     stepId: String,
     index: Int,
@@ -72,6 +75,12 @@ fun FlowBranchEditorSheet(
     fun update(transform: (PipelineStepDraft) -> PipelineStepDraft) {
         viewModel.updateStep(stepId, transform(step))
     }
+
+    // design_handoff_review_fixes R1: which sub-step's full editor is open,
+    // if any -- a branch row is now a full step card that opens the SAME
+    // `FlowStepEditorSheet` iOS uses for top-level steps, just bound to a
+    // sub-step instead.
+    var selectedSubStepTarget by remember { mutableStateOf<SubStepEditTarget?>(null) }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(modifier = Modifier.fillMaxSize().background(neon.bg)) {
@@ -97,8 +106,8 @@ fun FlowBranchEditorSheet(
                     verticalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
                     ConditionCard(neon, step) { transform -> update(transform) }
-                    ThenSection(neon, viewModel, stepId, step)
-                    ElseSection(neon, viewModel, stepId, step)
+                    ThenSection(neon, viewModel, stepId, step) { target -> selectedSubStepTarget = target }
+                    ElseSection(neon, viewModel, stepId, step) { target -> selectedSubStepTarget = target }
                 }
                 // design_handoff_flow audit §D.12: Discard reads as a
                 // secondary (red) button at 1:2 width against the primary
@@ -127,6 +136,15 @@ fun FlowBranchEditorSheet(
                 }
             }
         }
+    }
+
+    selectedSubStepTarget?.let { target ->
+        FlowStepEditorSheet(
+            store = store,
+            viewModel = viewModel,
+            subStepTarget = target,
+            onDismiss = { selectedSubStepTarget = null },
+        )
     }
 }
 
@@ -244,7 +262,13 @@ private fun Modifier.branchRail(color: Color): Modifier = this
     .padding(start = 12.dp)
 
 @Composable
-private fun ThenSection(neon: NeonTheme, viewModel: PipelineBuilderViewModel, stepId: String, step: PipelineStepDraft) {
+private fun ThenSection(
+    neon: NeonTheme,
+    viewModel: PipelineBuilderViewModel,
+    stepId: String,
+    step: PipelineStepDraft,
+    onOpen: (SubStepEditTarget) -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Box(modifier = Modifier.size(7.dp).background(neon.green, CircleShape))
@@ -255,18 +279,26 @@ private fun ThenSection(neon: NeonTheme, viewModel: PipelineBuilderViewModel, st
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             step.branchThen.forEach { sub ->
-                SubStepRow(neon, sub) { viewModel.removeSubStep(stepId, PipelineSubStepArm.THEN, sub.id) }
+                SubStepRow(neon, sub) { onOpen(SubStepEditTarget(stepId, PipelineSubStepArm.THEN, sub.id)) }
             }
             AddStepGhostButton(neon = neon, tint = neon.green) {
                 viewModel.addSubStep(stepId, PipelineSubStepArm.THEN)
                 Telemetry.breadcrumb("flow_wizard", "branch_then_add", emptyMap())
+                val newId = viewModel.steps.firstOrNull { it.id == stepId }?.branchThen?.lastOrNull()?.id
+                if (newId != null) onOpen(SubStepEditTarget(stepId, PipelineSubStepArm.THEN, newId))
             }
         }
     }
 }
 
 @Composable
-private fun ElseSection(neon: NeonTheme, viewModel: PipelineBuilderViewModel, stepId: String, step: PipelineStepDraft) {
+private fun ElseSection(
+    neon: NeonTheme,
+    viewModel: PipelineBuilderViewModel,
+    stepId: String,
+    step: PipelineStepDraft,
+    onOpen: (SubStepEditTarget) -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Box(modifier = Modifier.size(7.dp).background(neon.textFaint, CircleShape))
@@ -283,12 +315,14 @@ private fun ElseSection(neon: NeonTheme, viewModel: PipelineBuilderViewModel, st
                 )
             } else {
                 step.branchElse.forEach { sub ->
-                    SubStepRow(neon, sub) { viewModel.removeSubStep(stepId, PipelineSubStepArm.ELSE_ARM, sub.id) }
+                    SubStepRow(neon, sub) { onOpen(SubStepEditTarget(stepId, PipelineSubStepArm.ELSE_ARM, sub.id)) }
                 }
             }
             AddStepGhostButton(neon = neon, tint = neon.textDim) {
                 viewModel.addSubStep(stepId, PipelineSubStepArm.ELSE_ARM)
                 Telemetry.breadcrumb("flow_wizard", "branch_else_add", emptyMap())
+                val newId = viewModel.steps.firstOrNull { it.id == stepId }?.branchElse?.lastOrNull()?.id
+                if (newId != null) onOpen(SubStepEditTarget(stepId, PipelineSubStepArm.ELSE_ARM, newId))
             }
         }
     }
@@ -309,9 +343,15 @@ private fun AddStepGhostButton(neon: NeonTheme, tint: Color, onClick: () -> Unit
     }
 }
 
+/**
+ * design_handoff_review_fixes R1: a branch sub-step is the SAME step card as
+ * the main rail -- tapping it opens the full step editor (agent/role/prompt/
+ * gate/advanced) rather than the old add/remove-only row. Delete now lives
+ * inside that editor, so there is no minus badge here.
+ */
 @Composable
-private fun SubStepRow(neon: NeonTheme, sub: PipelineSubStepDraft, onRemove: () -> Unit) {
-    ConduitCard(pad = 10.dp) {
+private fun SubStepRow(neon: NeonTheme, sub: PipelineSubStepDraft, onTap: () -> Unit) {
+    ConduitCard(pad = 10.dp, modifier = Modifier.clickable(onClick = onTap)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             AgentDot(agent = sub.agentType, size = 28.dp)
             Spacer(Modifier.width(10.dp))
@@ -320,16 +360,38 @@ private fun SubStepRow(neon: NeonTheme, sub: PipelineSubStepDraft, onRemove: () 
                     sub.role.replaceFirstChar { it.uppercase() },
                     fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp, color = neon.text,
                 )
-                Text(
-                    "${sub.agentType} · sees prev output",
-                    fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textFaint,
-                )
+                SubStepPreview(neon, sub)
             }
             Icon(
-                Icons.Default.RemoveCircle,
-                contentDescription = "Remove",
-                tint = neon.red.copy(alpha = 0.8f),
-                modifier = Modifier.clickable(onClick = onRemove).size(20.dp),
+                Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = neon.textFaint,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+    }
+}
+
+/** "<agent> · "<prompt, truncated>"" in mono, accent-tinted quoted prompt --
+ *  falls back to "sees prev output" when the sub-step has no prompt yet
+ *  (ds-review.jsx RvBranchFixed). Mirror of iOS `subStepPreview`. */
+@Composable
+private fun SubStepPreview(neon: NeonTheme, sub: PipelineSubStepDraft) {
+    if (sub.promptTemplate.isEmpty()) {
+        Text(
+            "${sub.agentType} · sees prev output",
+            fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textFaint,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+    } else {
+        val limit = 46
+        val truncated = if (sub.promptTemplate.length > limit) sub.promptTemplate.take(limit) + "…" else sub.promptTemplate
+        Row {
+            Text("${sub.agentType} · ", fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textFaint, maxLines = 1)
+            Text(
+                "\u201C$truncated\u201D",
+                fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.accent,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
     }
