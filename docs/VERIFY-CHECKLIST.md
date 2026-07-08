@@ -22,6 +22,20 @@ pending section above it. Newest merge first._
 
 ---
 
+## v0.0.223
+
+**Start sheet Session tab: full agent picker restored. PR #946.**
+
+- OWNER DECISION: the Session tab is the full existing AgentPickerSheet again
+  (embedded, single "Start" header — chrome suppressed via the restored
+  `embedded` param), replacing #936's compact 2-card tab, which is deleted.
+  Model/effort/permissions/harness + recent-project directory picking all back
+  in the Session tab. Flow tab/wizard untouched. [iOS + Android, **needs
+  on-device verification**: single header, picker fully functional, demo-mode
+  render]
+
+---
+
 ## v0.0.222
 
 **Flow device-test round 2 fixes. PR #944.**
