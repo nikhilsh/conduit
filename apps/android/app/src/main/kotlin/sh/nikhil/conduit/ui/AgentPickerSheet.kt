@@ -94,6 +94,16 @@ fun AgentPickerSheet(
     // present the Builder. Default no-op so existing call sites compile
     // without change; the row self-gates on `store.pipelinesEnabled`.
     onOpenPipelineBuilder: () -> Unit = {},
+    // True when hosted as a TAB inside another composable's own chrome
+    // (`FlowStartSheet`'s Session tab) rather than presented on its own:
+    // skips this composable's own Dialog/ModalBottomSheet wrapper (so it
+    // renders directly into the host's container instead of a nested
+    // popup-in-a-popup) AND hides `AgentStep`'s own "New session" heading,
+    // so the host's single header is the only one shown. `onDismiss` is
+    // unaffected -- it is always the caller's own callback regardless of
+    // wrapper. Default false so every existing call site (the "+" button,
+    // deep-link post-pair) is unaffected.
+    embedded: Boolean = false,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -156,6 +166,7 @@ fun AgentPickerSheet(
                     onDismiss()
                     onOpenPipelineBuilder()
                 },
+                embedded = embedded,
             )
         } else {
             DirectoryStep(
@@ -178,7 +189,11 @@ fun AgentPickerSheet(
         }
     }
 
-    if (wide) {
+    if (embedded) {
+        // Hosted inside FlowStartSheet's own Dialog -- render directly, no
+        // nested Dialog/ModalBottomSheet (that would be a popup-in-a-popup).
+        content()
+    } else if (wide) {
         androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
             androidx.compose.material3.Surface(
                 shape = RoundedCornerShape(22.dp),
@@ -221,6 +236,10 @@ private fun AgentStep(
     onPick: (String) -> Unit,
     onSignIn: (provider: String) -> Unit = {},
     onOpenPipelineBuilder: () -> Unit = {},
+    // Hides the "New session" heading below when hosted inside
+    // `FlowStartSheet` (which already shows its own "Start" header) -- see
+    // `AgentPickerSheet`'s `embedded` doc comment.
+    embedded: Boolean = false,
 ) {
     val neon = LocalNeonTheme.current
     val appearance = sh.nikhil.conduit.LocalAppearanceStore.current
@@ -237,13 +256,15 @@ private fun AgentStep(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text(
-            "New session",
-            style = MaterialTheme.typography.titleMedium,
-            fontFamily = neon.sans,
-            fontWeight = FontWeight.SemiBold,
-            color = neon.text,
-        )
+        if (!embedded) {
+            Text(
+                "New session",
+                style = MaterialTheme.typography.titleMedium,
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                color = neon.text,
+            )
+        }
         if (!headerNote.isNullOrBlank()) {
             Box(
                 modifier = Modifier
