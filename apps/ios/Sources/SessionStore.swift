@@ -1000,8 +1000,8 @@ final class SessionStore {
     /// Builds a local fake "running" flow from the Flow wizard's task +
     /// steps (step 0 running, the rest queued) -- no network, mirrors the
     /// shape `/api/pipeline` would return. Prepends it to
-    /// `demoPipelinesList` and returns its id + status for the caller to
-    /// open the Monitor with (`PipelineMonitorView.demoStatus`).
+    /// `demoPipelinesList` and returns its id + status; the Monitor picks
+    /// it back up via `demoPipelineStatus(id:)` since `isDemoMode` is on.
     @discardableResult
     func demoStartFlow(title: String, task: String, cwd: String, steps: [ConduitUI.PipelineStep]) -> (id: String, status: ConduitUI.PipelineStatus) {
         let agentSteps = steps.filter { $0.kind.isEmpty }
@@ -1065,6 +1065,26 @@ final class SessionStore {
     private var pausedSessionIDs: Set<String> = []
     var savedServers: [SavedServer] = []
     var recentDirectories: [String] = []
+
+    /// Best-effort default working directory for a new session/flow's
+    /// "Where" row -- the selected session's cwd when one is active, else
+    /// the most-recently-used directory on the current box
+    /// (`recentDirectories.first`, populated by `rememberRecentDirectory` on
+    /// every session/flow start that specified a cwd), else "" (no folder).
+    /// Shared by `FlowStartSheet`'s compact Session tab and
+    /// `FlowWizardView`'s Task screen so both prefill the same way instead
+    /// of the Session tab reading only `selectedSessionID` (nil when opened
+    /// from Home) and always showing "no folder" (device feedback).
+    var defaultSessionCwd: String {
+        if isDemoMode {
+            return DemoData.sessions.first?.cwd ?? ""
+        }
+        if let activeID = selectedSessionID,
+           let status = statusBySession[activeID], let sessionCwd = status.cwd, !sessionCwd.isEmpty {
+            return sessionCwd
+        }
+        return recentDirectories.first ?? ""
+    }
 
     /// Display name of the currently-connected box, or nil when none is
     /// paired. Used by the agent-account rows to label per-box readiness

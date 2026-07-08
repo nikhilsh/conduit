@@ -75,14 +75,19 @@ fun FlowWizardScreen(
 ) {
     val neon = LocalNeonTheme.current
     val endpoint by store.endpoint.collectAsState()
-    val sessions by store.sessions.collectAsState()
     val savedServers by store.savedServers.collectAsState()
     val isDemoMode by store.isDemoMode.collectAsState()
     val scope = rememberCoroutineScope()
 
     val viewModel = remember { PipelineBuilderViewModel(initialSteps = prefill.steps ?: listOf(PipelineStepDraft())) }
     var task by remember { mutableStateOf(prefill.task) }
-    var cwd by remember { mutableStateOf(sessions.firstOrNull()?.cwd ?: "") }
+    // store.defaultSessionCwd(): the active session's cwd when one is
+    // selected, else the most-recently-used directory on this box, else ""
+    // -- shared with the compact Session tab (FlowStartSheet) so both
+    // prefill the "Where" row the same way (device feedback: this used to
+    // read only `sessions.firstOrNull()`, an arbitrary session rather than
+    // the active/most-recent one).
+    var cwd by remember { mutableStateOf(store.defaultSessionCwd()) }
     var baseBranch by remember { mutableStateOf("main") }
     var stepIndex by remember { mutableStateOf(prefill.startStep.coerceIn(1, 2)) }
 

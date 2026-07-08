@@ -129,7 +129,6 @@ private fun DemoPhoneLayout(store: SessionStore, onExitDemo: () -> Unit) {
                 pipelineTitle = flowStatus.title,
                 onOpenSession = {},
                 onBack = { selectedFlowId = null },
-                demoStatus = flowStatus,
             )
         } else if (selectedSession == null) {
             Column(
@@ -341,7 +340,6 @@ private fun DemoTabletLayout(store: SessionStore, onExitDemo: () -> Unit) {
                     pipelineTitle = flowStatus.title,
                     onOpenSession = {},
                     onBack = { selectedFlowId = null },
-                    demoStatus = flowStatus,
                 )
             } else if (session != null) {
                 DemoProjectScreen(store = store, session = session)

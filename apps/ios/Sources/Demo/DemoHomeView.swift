@@ -158,8 +158,7 @@ private struct DemoPhoneShell: View {
                 if let status = store.demoPipelineStatus(id: id) {
                     ConduitUI.PipelineMonitorView(
                         pipelineID: id,
-                        pipelineTitle: status.title,
-                        demoStatus: status
+                        pipelineTitle: status.title
                     )
                     .environment(store)
                 }
@@ -298,8 +297,7 @@ private struct DemoTabletShell: View {
                 NavigationStack {
                     ConduitUI.PipelineMonitorView(
                         pipelineID: id,
-                        pipelineTitle: status.title,
-                        demoStatus: status
+                        pipelineTitle: status.title
                     )
                     .environment(store)
                 }

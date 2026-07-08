@@ -329,13 +329,21 @@ extension ConduitUI {
 
         let pipelineID: String
         let pipelineTitle: String
-        /// Static demo fixture: when non-nil, the Monitor renders this fixed
-        /// status and skips `pollTask`/all network entirely -- mirrors
-        /// `ChatView`'s `readOnlyItems`/`forceReadOnly` seam (PR #832).
-        /// Approve/Cancel/Resume/Pick become inert no-ops; "Open session" is
-        /// naturally disabled since demo fixtures carry no live session for
-        /// the queued step. Fed by `DemoData.pipelineStatus(id:)`.
-        var demoStatus: PipelineStatus? = nil
+
+        /// True when this Monitor must render entirely from local demo data
+        /// and never touch the network -- resolved from `store.isDemoMode`
+        /// rather than a param the caller might forget to pass, so EVERY
+        /// entry point (list row tap, home FlowCard tap, wizard "Start
+        /// flow", tour/deep-link) is covered regardless of how the Monitor
+        /// was opened. Previously this was an optional `demoStatus` param
+        /// threaded only through the demo home's FlowCard tap; the flows
+        /// LIST row tap (real `PipelineListView`, reachable in demo mode)
+        /// didn't pass it and fell through to a real network poll -> 404.
+        /// Mirrors `ChatView`'s `readOnlyItems`/`forceReadOnly` seam
+        /// (PR #832). Approve/Cancel/Resume/Pick become inert no-ops;
+        /// "Open session" is naturally disabled since demo fixtures carry
+        /// no live session for the queued step.
+        private var isDemo: Bool { store.isDemoMode }
 
         @State private var pipeline: PipelineStatus? = nil
         @State private var pollTask: Task<Void, Never>? = nil
@@ -424,6 +432,18 @@ extension ConduitUI {
                             SavedTranscriptView(session: syntheticStepSession(sessionID: id, pipeline: p))
                         }
                     }
+                } else if isDemo {
+                    // Graceful empty state for a demo id that resolves to no
+                    // fixture (shouldn't happen, but never fall through to a
+                    // poll/spinner in demo mode).
+                    VStack(spacing: 14) {
+                        Image(systemName: "questionmark.circle")
+                            .font(.system(size: 26, weight: .semibold))
+                            .foregroundStyle(neon.textFaint)
+                        Text("No demo data for this flow")
+                            .font(neon.sans(14))
+                            .foregroundStyle(neon.textDim)
+                    }
                 } else if errorBanner == nil {
                     VStack(spacing: 14) {
                         ProgressView()
@@ -462,7 +482,7 @@ extension ConduitUI {
                 // the equally demo-only "Home" nav icon added to Android's
                 // PipelineMonitorScreen.
                 ToolbarItem(placement: .topBarLeading) {
-                    if demoStatus != nil {
+                    if isDemo {
                         Button("Home") { dismiss() }
                             .font(neon.sans(13).weight(.semibold))
                             .foregroundStyle(neon.accent)
@@ -490,11 +510,16 @@ extension ConduitUI {
             .tint(neon.accent)
             .onAppear {
                 Telemetry.breadcrumb("pipeline", "monitor opened",
-                    data: ["id": pipelineID, "demo": demoStatus != nil ? "true" : "false"])
-                if let demo = demoStatus {
-                    lastState = demo.state
-                    pipeline = demo
-                    updateResultCache(for: demo)
+                    data: ["id": pipelineID, "demo": isDemo ? "true" : "false"])
+                if isDemo {
+                    if let demo = store.demoPipelineStatus(id: pipelineID) {
+                        lastState = demo.state
+                        pipeline = demo
+                        updateResultCache(for: demo)
+                    } else {
+                        Telemetry.breadcrumb("pipeline", "demo monitor unknown id",
+                            data: ["id": pipelineID])
+                    }
                 } else {
                     startPolling()
                 }
@@ -1348,7 +1373,7 @@ extension ConduitUI {
         }
 
         private func submitPick(runIndex: Int, pipeline: PipelineStatus) {
-            if demoStatus != nil {
+            if isDemo {
                 Telemetry.breadcrumb("pipeline", "demo pick no-op", data: ["id": pipelineID])
                 return
             }
@@ -1718,7 +1743,7 @@ extension ConduitUI {
         // MARK: - Resume (retry-from-failed)
 
         private func resumePipeline(promptOverride: String?) {
-            if demoStatus != nil {
+            if isDemo {
                 Telemetry.breadcrumb("pipeline", "demo resume no-op", data: ["id": pipelineID])
                 return
             }
@@ -1867,7 +1892,7 @@ extension ConduitUI {
         // MARK: - Continue (gate)
 
         private func continuePipeline(prevOverride: String? = nil) {
-            if demoStatus != nil {
+            if isDemo {
                 Telemetry.breadcrumb("pipeline", "demo gate continue no-op", data: ["id": pipelineID])
                 return
             }
@@ -1930,7 +1955,7 @@ extension ConduitUI {
 
         private func cancelPipeline() {
             Telemetry.breadcrumb("pipeline", "cancel tapped", data: ["id": pipelineID])
-            if demoStatus != nil {
+            if isDemo {
                 Telemetry.breadcrumb("pipeline", "demo cancel no-op", data: ["id": pipelineID])
                 return
             }
