@@ -160,6 +160,39 @@ struct NeonThemeTests {
         #expect(t.lineSoft == Color(red: 160 / 255, green: 184 / 255, blue: 224 / 255, opacity: 0.12))
     }
 
+    // MARK: - Chrome fonts are brand-locked (no serif leak)
+
+    /// `sans()`/`mono()` must always resolve the Terminal pairing (Space
+    /// Grotesk · JetBrains Mono) regardless of `appearance.fontFamily` —
+    /// chrome never follows the user's §4 chat-font pairing. Pins the
+    /// device-reported bug where an "Editorial" (Newsreader serif) pairing
+    /// rendered ALL chrome (buttons, headers) in serif.
+    @Test func chromeFontsAreBrandLockedRegardlessOfPairing() {
+        let t = NeonTheme.resolve(palette: .ice, dark: true, glow: true)
+        #expect(t.sansFamily == "Space Grotesk")
+        #expect(t.monoFamily == "JetBrains Mono")
+    }
+
+    /// The `appearance:colorScheme:` overload (used app-wide) must also
+    /// stay brand-locked even when the user has picked the Editorial
+    /// (serif) chat-font pairing.
+    @Test func chromeFontsBrandLockedViaAppearanceOverload() {
+        let defaults = freshDefaults()
+        let appearance = AppearanceStore(defaults: defaults)
+        appearance.fontFamily = .editorial
+        let t = NeonTheme.resolve(appearance: appearance, colorScheme: .dark)
+        #expect(t.sansFamily == "Space Grotesk")
+        #expect(t.monoFamily == "JetBrains Mono")
+    }
+
+    /// Chat prose keeps honouring the pairing — it resolves
+    /// `AppearanceStore.FontFamily` directly (never through `NeonTheme`),
+    /// so the Editorial pairing still gets its Newsreader prose face.
+    @Test func chatProsePairingStillResolvesIndependently() {
+        #expect(AppearanceStore.FontFamily.editorial.proseFamilyName == "Newsreader")
+        #expect(AppearanceStore.FontFamily.editorial.monoFamilyName == "Spline Sans Mono")
+    }
+
     // MARK: - AppearanceStore persistence round-trip
 
     @Test func persistsAndRestoresNeonPalette() {

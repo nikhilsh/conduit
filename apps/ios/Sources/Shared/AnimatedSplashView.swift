@@ -145,7 +145,10 @@ struct AnimatedSplashView: View {
                     .accessibilityLabel("Conduit")
 
                 Text(AnimatedSplashModel.wordmark)
-                    .font(.system(size: 36, weight: .semibold, design: .serif))
+                    // Brand sans, never serif — chrome is brand-locked to
+                    // the Terminal pairing (Space Grotesk) regardless of
+                    // the user's chat-font pairing.
+                    .font(AppearanceStore.FontFamily.terminal.proseFont(size: 36, weight: .semibold))
                     .foregroundStyle(AnimatedSplashModel.wordmarkColor(for: colorScheme))
 
                 Text(AnimatedSplashModel.loadingCaption)

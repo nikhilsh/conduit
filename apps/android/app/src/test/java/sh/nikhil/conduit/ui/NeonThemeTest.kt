@@ -208,4 +208,45 @@ class NeonThemeTest {
     }
 
     // endregion
+
+    // region Chrome fonts are brand-locked (no serif leak)
+
+    /**
+     * [NeonTheme.sans]/[NeonTheme.mono] must always resolve the Terminal
+     * pairing (Space Grotesk · JetBrains Mono) regardless of [NeonTheme.chatFont]
+     * — chrome never follows the user's §4 chat-font pairing. Pins the
+     * device-reported bug where an "Editorial" (Newsreader serif) pairing
+     * rendered ALL chrome (buttons, headers) in serif.
+     */
+    @Test
+    fun chromeFontsAreBrandLockedRegardlessOfChatFont() {
+        val editorial = NeonTheme.resolve(
+            NeonPalette.ICE,
+            dark = true,
+            glow = true,
+            chatFont = sh.nikhil.conduit.AppearanceStore.FontFamily.Editorial,
+        )
+        assertEquals(NeonBrandFonts.sans, editorial.sans)
+        assertEquals(NeonBrandFonts.mono, editorial.mono)
+
+        val terminal = NeonTheme.resolve(NeonPalette.ICE, dark = true, glow = true)
+        assertEquals(editorial.sans, terminal.sans)
+        assertEquals(editorial.mono, terminal.mono)
+    }
+
+    /**
+     * Chat prose keeps honouring the pairing — [neonProseFontFamily] /
+     * [neonMonoFontFamily] resolve [NeonTheme.chatFont] directly (never
+     * through [NeonTheme.sans]/[NeonTheme.mono]), so the Editorial pairing
+     * still gets its Newsreader prose face.
+     */
+    @Test
+    fun chatProsePairingStillResolvesIndependently() {
+        val editorial = sh.nikhil.conduit.AppearanceStore.FontFamily.Editorial
+        assertEquals(NeonBrandFonts.newsreader, neonProseFontFamily(editorial))
+        assertEquals(NeonBrandFonts.splineSansMono, neonMonoFontFamily(editorial))
+        assertNotEquals(NeonBrandFonts.sans, neonProseFontFamily(editorial))
+    }
+
+    // endregion
 }
