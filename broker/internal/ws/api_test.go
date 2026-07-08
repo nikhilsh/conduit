@@ -42,6 +42,13 @@ func TestCapabilitiesEndpoint(t *testing.T) {
 	if _, present := body["models"]; present {
 		t.Fatalf("models should be omitted before discovery, got %v", body["models"])
 	}
+	modelCatalog, ok := body["model_catalog"].(map[string]any)
+	if !ok {
+		t.Fatalf("model_catalog status block missing or wrong shape: %v", body["model_catalog"])
+	}
+	if modelCatalog["enabled"] != false {
+		t.Fatalf("model_catalog.enabled = %v, want false in tests before discovery", modelCatalog["enabled"])
+	}
 }
 
 func TestCapabilitiesIncludesDiscoveredModels(t *testing.T) {

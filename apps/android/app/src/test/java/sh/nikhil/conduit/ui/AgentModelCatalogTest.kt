@@ -6,6 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.modelCatalogDiscoveryPending
 import sh.nikhil.conduit.parseModelCatalog
 
 /**
@@ -195,6 +196,24 @@ class AgentModelCatalogTest {
     @Test
     fun parseModelCatalogWithoutModelsKeyIsEmpty() {
         assertTrue(parseModelCatalog("""{"name":"conduit-broker"}""").isEmpty())
+    }
+
+    @Test
+    fun modelCatalogDiscoveryPendingReadsCapabilitiesStatus() {
+        val pending = """
+            {"model_catalog":{"enabled":true,"assistants":{
+              "claude":{"present":false,"pending":true},
+              "codex":{"present":true,"pending":false}
+            }}}
+        """.trimIndent()
+        val settled = """
+            {"model_catalog":{"enabled":true,"assistants":{
+              "claude":{"present":true,"pending":false}
+            }}}
+        """.trimIndent()
+        assertTrue(modelCatalogDiscoveryPending(pending))
+        assertFalse(modelCatalogDiscoveryPending(settled))
+        assertFalse(modelCatalogDiscoveryPending("""{"name":"conduit-broker"}"""))
     }
 
     @Test

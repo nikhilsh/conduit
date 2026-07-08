@@ -267,7 +267,9 @@ func TestManagerModelCatalogSnapshotAndInjection(t *testing.T) {
 	defer resetDynamicEfforts()
 
 	root := testRoot(t)
-	reg := testRegistry(t, root, map[string]string{"claude": idleScript("catalog-ready")})
+	reg := testRegistryWithHooks(t, root, map[string]string{"claude": idleScript("catalog-ready")}, map[string]string{
+		"claude": `protocol = "stream-json"`,
+	})
 	m := NewManager(reg)
 	t.Cleanup(m.Close)
 
@@ -282,6 +284,39 @@ func TestManagerModelCatalogSnapshotAndInjection(t *testing.T) {
 	}
 	if !effortSupported("claude", "max") {
 		t.Fatal("injection should feed effort validation")
+	}
+}
+
+func TestManagerModelCatalogStatusIncludesPendingAndError(t *testing.T) {
+	root := testRoot(t)
+	reg := testRegistryWithHooks(t, root, map[string]string{"claude": idleScript("catalog-ready")}, map[string]string{
+		"claude": `protocol = "stream-json"`,
+	})
+	m := NewManager(reg)
+	t.Cleanup(m.Close)
+
+	attempted := time.Now().Add(-time.Minute)
+	m.catalog.mu.Lock()
+	m.catalog.init()
+	m.catalog.enabled = true
+	m.catalog.attempted["claude"] = attempted
+	m.catalog.busy["claude"] = true
+	m.catalog.lastErr["claude"] = "probe failed"
+	m.catalog.mu.Unlock()
+
+	status := m.ModelCatalogStatus()
+	if !status.Enabled {
+		t.Fatal("catalog status should report enabled")
+	}
+	claude, ok := status.Assistants["claude"]
+	if !ok {
+		t.Fatalf("catalog status missing claude: %+v", status.Assistants)
+	}
+	if claude.Present || !claude.Pending {
+		t.Fatalf("claude status present/pending mismatch: %+v", claude)
+	}
+	if claude.LastAttemptedAt == "" || claude.NextRetryAt == "" || claude.LastError != "probe failed" {
+		t.Fatalf("claude status missing retry/error details: %+v", claude)
 	}
 }
 

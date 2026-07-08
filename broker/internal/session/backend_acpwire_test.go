@@ -335,10 +335,10 @@ func TestACPBackendRegistration(t *testing.T) {
 		t.Fatalf("backendFor(acp): %v", err)
 	}
 	caps := b.Capabilities()
-	if !caps.AskUserQuestion || !caps.Effort || !caps.ModelOverride || !caps.Resume || !caps.Interrupt {
+	if !caps.AskUserQuestion || !caps.ModelOverride || !caps.Resume || !caps.Interrupt {
 		t.Fatalf("ACP caps missing a true flag: %+v", caps)
 	}
-	if caps.Compact || caps.Usage || caps.Steer {
+	if caps.Compact || caps.Effort || caps.Usage || caps.Steer {
 		t.Fatalf("ACP caps has an unexpected true flag: %+v", caps)
 	}
 }
