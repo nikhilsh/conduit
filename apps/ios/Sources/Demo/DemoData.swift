@@ -155,7 +155,8 @@ enum DemoData {
     //
     // Feeds the demo home FLOWS section (`ConduitUI.FlowCard`, real
     // component) and the Monitor's static-fixture seam
-    // (`ConduitUI.PipelineMonitorView.demoStatus`). No network -- these are
+    // (`ConduitUI.PipelineMonitorView.isDemo` reads these via
+    // `SessionStore.demoPipelineStatus(id:)`). No network -- these are
     // hand-built `PipelineSummary`/`PipelineStatus` values matching the
     // broker's real shapes (see `ConduitPipelineListView.swift` /
     // `ConduitPipelineMonitorView.swift`).

@@ -605,8 +605,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
     /** Builds a local fake "running" flow from the Flow wizard's task +
      *  steps (step 0 running, the rest queued) -- no network, mirrors the
      *  shape `/api/pipeline` would return. Prepends it to the demo FLOWS
-     *  list and returns its id + status for the caller to open the Monitor
-     *  with ([sh.nikhil.conduit.ui.PipelineMonitorScreen]'s `demoStatus`). */
+     *  list and returns its id + status; the Monitor picks it back up via
+     *  [demoPipelineStatus] since `isDemoMode` is on. */
     fun demoStartFlow(
         title: String,
         task: String,
@@ -718,6 +718,28 @@ class SessionStore : ViewModel(), ConduitDelegate {
     val savedServers: StateFlow<List<SavedServer>> = _savedServers.asStateFlow()
     private val _recentDirectories = MutableStateFlow<List<String>>(emptyList())
     val recentDirectories: StateFlow<List<String>> = _recentDirectories.asStateFlow()
+
+    /**
+     * Best-effort default working directory for a new session/flow's
+     * "Where" row -- the selected session's cwd when one is active, else
+     * the most-recently-used directory on the current box
+     * ([_recentDirectories]'s head, populated by [rememberRecentDirectory]
+     * on every session/flow start that specified a cwd), else "" (no
+     * folder). Shared by [sh.nikhil.conduit.ui.FlowStartSheet]'s compact
+     * Session tab and [sh.nikhil.conduit.ui.FlowWizardScreen]'s Task screen
+     * so both prefill the same way instead of one of them always showing
+     * "no folder" when opened from Home with no session selected (device
+     * feedback). Mirrors iOS `SessionStore.defaultSessionCwd`.
+     */
+    fun defaultSessionCwd(): String {
+        if (_isDemoMode.value) {
+            return DemoData.sessions.firstOrNull()?.cwd ?: ""
+        }
+        val activeId = _selectedId.value
+        val sessionCwd = activeId?.let { _statusBySession.value[it]?.cwd }
+        if (!sessionCwd.isNullOrEmpty()) return sessionCwd
+        return _recentDirectories.value.firstOrNull() ?: ""
+    }
 
     private val _statusBySession = MutableStateFlow<Map<String, SessionStatus>>(emptyMap())
     val statusBySession: StateFlow<Map<String, SessionStatus>> = _statusBySession.asStateFlow()

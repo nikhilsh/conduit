@@ -66,7 +66,7 @@ extension ConduitUI {
                 }
                 .navigationDestination(isPresented: $navigateToMonitor) {
                     if let p = createdPipeline {
-                        ConduitUI.PipelineMonitorView(pipelineID: p.id, pipelineTitle: derivedTitle, demoStatus: p.demoStatus)
+                        ConduitUI.PipelineMonitorView(pipelineID: p.id, pipelineTitle: derivedTitle)
                             .environment(store)
                     }
                 }
@@ -124,19 +124,14 @@ extension ConduitUI {
             }
             .appearanceColorScheme()
             .onAppear {
+                // `store.defaultSessionCwd`: the active session's cwd when
+                // one is selected, else the most-recently-used directory on
+                // this box, else "" -- shared with the compact Session tab
+                // (`FlowStartSheet`) so both prefill the "Where" row the
+                // same way instead of only reading `selectedSessionID`
+                // (nil when the wizard is opened from Home -> "no folder").
                 if cwd.isEmpty {
-                    if store.isDemoMode, let demoCwd = DemoData.sessions.first?.cwd, !demoCwd.isEmpty {
-                        // No `store.selectedSessionID` in demo (the wizard is
-                        // opened straight from Home, not from a session) --
-                        // fall back to the first demo session's cwd so the
-                        // "Where" row shows real content instead of
-                        // "no folder" (Android mirrors this via
-                        // `sessions.firstOrNull()?.cwd`).
-                        cwd = demoCwd
-                    } else if let activeID = store.selectedSessionID,
-                       let status = store.statusBySession[activeID], let sessionCwd = status.cwd, !sessionCwd.isEmpty {
-                        cwd = sessionCwd
-                    }
+                    cwd = store.defaultSessionCwd
                 }
                 Telemetry.breadcrumb("flow_wizard", "opened", data: ["step": "\(stepIndex)"])
             }
@@ -594,7 +589,7 @@ extension ConduitUI {
                     title: trimTitle, task: trimTaskValue,
                     cwd: cwd.trimmingCharacters(in: .whitespacesAndNewlines), steps: viewModel.steps
                 )
-                createdPipeline = CreatedPipeline(id: id, state: status.state, currentStep: status.current_step, demoStatus: status)
+                createdPipeline = CreatedPipeline(id: id, state: status.state, currentStep: status.current_step)
                 navigateToMonitor = true
                 onFlowStarted?()
                 return

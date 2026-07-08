@@ -102,6 +102,15 @@ extension ConduitUI {
             .onAppear {
                 Telemetry.breadcrumb("flow_start", "opened", data: ["tab": tab.rawValue])
                 if tab == .flow { loadTemplates() }
+                // Prefill the Session tab's "Where" row the same way the
+                // Flow wizard's Task screen does (`store.defaultSessionCwd`)
+                // -- the active session's cwd, else the box's most recent
+                // directory, else "" -- rather than always showing
+                // "no folder" when this sheet is opened from Home with no
+                // session selected (device feedback).
+                if sessionCwd.isEmpty {
+                    sessionCwd = store.defaultSessionCwd
+                }
             }
         }
 

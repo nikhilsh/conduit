@@ -297,7 +297,12 @@ private fun SessionTab(
 
     var selectedAgent by remember { mutableStateOf("claude") }
     var task by remember { mutableStateOf("") }
-    var cwd by remember { mutableStateOf("") }
+    // store.defaultSessionCwd(): the active session's cwd when one is
+    // selected, else the most-recently-used directory on this box, else ""
+    // -- shared with FlowWizardScreen's Task screen so this tab never
+    // stalls on "no folder" when opened from Home with no session selected
+    // (device feedback: this previously always started at "").
+    var cwd by remember { mutableStateOf(store.defaultSessionCwd()) }
     var baseBranch by remember { mutableStateOf("main") }
     var showWhereEditor by remember { mutableStateOf(false) }
     var isStarting by remember { mutableStateOf(false) }

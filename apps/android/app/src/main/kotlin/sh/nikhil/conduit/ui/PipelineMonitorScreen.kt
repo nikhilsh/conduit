@@ -382,16 +382,6 @@ fun PipelineMonitorScreen(
     pipelineTitle: String = "",
     onOpenSession: (String) -> Unit = {},
     onBack: () -> Unit = {},
-    /**
-     * Static demo fixture: when non-null, the screen renders this fixed
-     * [Pipeline] and skips the poll loop + all network actions entirely --
-     * mirrors iOS `PipelineMonitorView.demoStatus` / ChatPage's
-     * readOnlyItems seam. "Approve · continue" and "Cancel" become inert
-     * no-ops; "Open session" is naturally disabled since demo steps carry
-     * no live session for the queued step. Fed by
-     * `DemoData.pipelineStatus(id:)`.
-     */
-    demoStatus: Pipeline? = null,
 ) {
     val neon = LocalNeonTheme.current
     val endpoint by store.endpoint.collectAsState()
@@ -401,7 +391,20 @@ fun PipelineMonitorScreen(
     val pipelineResultCapability by store.pipelineResult.collectAsState()
     val scope = rememberCoroutineScope()
 
-    var pipeline by remember { mutableStateOf(demoStatus) }
+    // True when this screen must render entirely from local demo data and
+    // never touch the network -- resolved from `store.isDemoMode` rather
+    // than a param the caller might forget to pass, so EVERY entry point
+    // (list row tap via AppRoot's shared pipelineMonitorTarget, demo home
+    // FlowCard tap, wizard "Start flow") is covered regardless of how this
+    // screen was opened. Previously this was an optional `demoStatus` param
+    // threaded only through the demo home's FlowCard tap; the flows LIST
+    // row tap (real `PipelineListScreen`, reachable in demo mode -> AppRoot's
+    // shared monitor target) didn't pass it and fell through to a real
+    // network poll -> 404. Mirrors iOS `PipelineMonitorView.isDemo`.
+    val isDemo by store.isDemoMode.collectAsState()
+    val demoStatus = if (isDemo) store.demoPipelineStatus(pipelineId) else null
+
+    var pipeline by remember(pipelineId) { mutableStateOf(demoStatus) }
     var pollError by remember { mutableStateOf<String?>(null) }
     var showCancelConfirm by remember { mutableStateOf(false) }
     var isContinuing by remember { mutableStateOf(false) }
@@ -529,9 +532,11 @@ fun PipelineMonitorScreen(
 
     // Polling loop: every 5 seconds until terminal state (skipped entirely
     // in demo mode -- `pipeline` is already seeded from `demoStatus` above,
-    // no network).
+    // no network). Gated on `isDemo`, not `demoStatus != null`, so an id
+    // that resolves to no fixture still never falls through to a poll --
+    // the body below renders a graceful empty state for that case instead.
     LaunchedEffect(pipelineId) {
-        if (demoStatus != null) {
+        if (isDemo) {
             Telemetry.breadcrumb("pipeline", "monitor_demo_static", mapOf("pipeline_id" to pipelineId))
             return@LaunchedEffect
         }
@@ -592,7 +597,7 @@ fun PipelineMonitorScreen(
                 // gated-flow monitor -- mirrors the equally demo-only
                 // "Home" toolbar button added to iOS's PipelineMonitorView.
                 navigationIcon = {
-                    if (demoStatus != null) {
+                    if (isDemo) {
                         TextButton(onClick = onBack) {
                             Text("Home", color = neon.accent, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold)
                         }
@@ -619,7 +624,16 @@ fun PipelineMonitorScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             val p = pipeline
-            if (p == null) {
+            if (p == null && isDemo) {
+                // Graceful empty state for a demo id that resolves to no
+                // fixture (shouldn't happen, but never fall through to a
+                // poll/spinner in demo mode).
+                Text(
+                    "No demo data for this flow",
+                    fontFamily = neon.sans,
+                    color = neon.textDim,
+                )
+            } else if (p == null) {
                 // Loading state
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -908,7 +922,15 @@ fun PipelineMonitorScreen(
                                                 runEntry?.ended,
                                             )
                                         },
-                                        onPick = {
+                                        onPick = onPick@{
+                                            if (isDemo) {
+                                                Telemetry.breadcrumb(
+                                                    "pipeline",
+                                                    "demo_pick_no_op",
+                                                    mapOf("pipeline_id" to pipelineId),
+                                                )
+                                                return@onPick
+                                            }
                                             isPicking = true
                                             Telemetry.breadcrumb(
                                                 "pipeline",
@@ -977,6 +999,14 @@ fun PipelineMonitorScreen(
                                                 .clip(RoundedCornerShape(50))
                                                 .background(if (canPick) neon.accent else neon.surface2)
                                                 .clickable(enabled = canPick) {
+                                                    if (isDemo) {
+                                                        Telemetry.breadcrumb(
+                                                            "pipeline",
+                                                            "demo_pick_no_op",
+                                                            mapOf("pipeline_id" to pipelineId),
+                                                        )
+                                                        return@clickable
+                                                    }
                                                     isPicking = true
                                                     scope.launch {
                                                         val result = withContext(Dispatchers.IO) {
@@ -1221,7 +1251,7 @@ fun PipelineMonitorScreen(
                                         .clip(RoundedCornerShape(10.dp))
                                         .background(if (!isContinuing) neon.yellow else neon.surface2)
                                         .clickable(enabled = !isContinuing) {
-                                            if (demoStatus != null) {
+                                            if (isDemo) {
                                                 Telemetry.breadcrumb(
                                                     "pipeline",
                                                     "demo_gate_continue_no_op",
@@ -1408,6 +1438,14 @@ fun PipelineMonitorScreen(
                                                 .clip(RoundedCornerShape(50))
                                                 .background(if (isResuming) neon.surface2 else neon.accent)
                                                 .clickable(enabled = !isResuming) {
+                                                    if (isDemo) {
+                                                        Telemetry.breadcrumb(
+                                                            "pipeline",
+                                                            "demo_resume_no_op",
+                                                            mapOf("pipeline_id" to pipelineId),
+                                                        )
+                                                        return@clickable
+                                                    }
                                                     val edited = resumePromptDraft.trim().isNotEmpty()
                                                     isResuming = true
                                                     Telemetry.breadcrumb(
@@ -1520,7 +1558,7 @@ fun PipelineMonitorScreen(
                 TextButton(
                     onClick = {
                         showCancelConfirm = false
-                        if (demoStatus != null) {
+                        if (isDemo) {
                             Telemetry.breadcrumb(
                                 "pipeline",
                                 "demo_cancel_no_op",

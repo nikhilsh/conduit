@@ -162,8 +162,9 @@ object DemoData {
     // Pipelines (Flow demo fixtures)
     //
     // Feeds the demo home FLOWS section (real FlowCard component) and the
-    // Monitor's static-fixture seam (PipelineMonitorScreen's `demoStatus`
-    // param). No network -- hand-built to mirror the broker's real shapes
+    // Monitor's static-fixture seam (PipelineMonitorScreen reads these via
+    // SessionStore.demoPipelineStatus(id)). No network -- hand-built to
+    // mirror the broker's real shapes
     // (see PipelineListScreen.kt / PipelineMonitorScreen.kt). Mirrors iOS
     // DemoData.pipelines / DemoData.pipelineStatus(id:) value-for-value.
     // -------------------------------------------------------------------------
