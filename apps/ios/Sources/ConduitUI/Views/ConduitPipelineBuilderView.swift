@@ -63,6 +63,34 @@ extension ConduitUI {
         var loopMaxIterations: Int = 3 // 1-5, default 3 (owner decision §8.5)
 
         var isControlFlow: Bool { kind == "branch" || kind == "loop" }
+
+        // MARK: Role prompt templates (shared by `PipelineBuilderViewModel`'s
+        // step creation and `ConduitFlowStepEditorSheet`'s role picker/
+        // on-appear prefill -- one copy so they can't drift). Pipeline
+        // vocabulary is Research/Design/Build/Custom (design_handoff_flow
+        // README "Interactions & state"); "custom" (and any role without a
+        // canned template) leaves the prompt blank for the user to fill in.
+
+        /// Role -> canned prompt template.
+        static func defaultPromptTemplate(forRole role: String) -> String {
+            switch role {
+            case "researcher": return "Investigate the codebase and summarize findings."
+            case "architect":  return "Design the implementation. Prior work: {{prev}}"
+            case "engineer":   return "Implement the approved design. Prior work: {{prev}}"
+            default:           return ""
+            }
+        }
+
+        /// A single starter step for a brand-new flow/pipeline -- role
+        /// "researcher" with its prompt prefilled, never a blank "engineer"
+        /// step (device feedback: a fresh Flow opened to "Engineer" with an
+        /// empty prompt).
+        static var starter: PipelineStep {
+            var step = PipelineStep()
+            step.role = "researcher"
+            step.promptTemplate = defaultPromptTemplate(forRole: "researcher")
+            return step
+        }
     }
 
     /// A step nested inside a branch's Then/Else arm or a loop's body.

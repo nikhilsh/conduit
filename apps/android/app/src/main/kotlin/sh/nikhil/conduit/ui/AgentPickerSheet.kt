@@ -9,7 +9,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowOutward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -88,12 +87,6 @@ fun AgentPickerSheet(
     // DirectoryStep.onCreate as the initialPrompt fallback when no harness
     // bootstrap prompt is set. Mirrors iOS ConduitAgentPickerSheet.initialPrompt.
     initialPrompt: String? = null,
-    // In-sheet discoverability (device feedback: a pipeline was only
-    // reachable via the command palette / "+" long-press). Tapping the
-    // "Multi-step pipeline" row dismisses this sheet and asks the caller to
-    // present the Builder. Default no-op so existing call sites compile
-    // without change; the row self-gates on `store.pipelinesEnabled`.
-    onOpenPipelineBuilder: () -> Unit = {},
     // True when hosted as a TAB inside another composable's own chrome
     // (`FlowStartSheet`'s Session tab) rather than presented on its own:
     // skips this composable's own Dialog/ModalBottomSheet wrapper (so it
@@ -160,11 +153,6 @@ fun AgentPickerSheet(
                 onSignIn = { provider ->
                     loginAutoStartProvider = OAuthProvider.fromRaw(provider)
                     showAgentLogin = true
-                },
-                onOpenPipelineBuilder = {
-                    Telemetry.breadcrumb("pipeline", "new_session_sheet_row_tapped")
-                    onDismiss()
-                    onOpenPipelineBuilder()
                 },
                 embedded = embedded,
             )
@@ -235,7 +223,6 @@ private fun AgentStep(
     onSelectServer: (String) -> Unit,
     onPick: (String) -> Unit,
     onSignIn: (provider: String) -> Unit = {},
-    onOpenPipelineBuilder: () -> Unit = {},
     // Hides the "New session" heading below when hosted inside
     // `FlowStartSheet` (which already shows its own "Start" header) -- see
     // `AgentPickerSheet`'s `embedded` doc comment.
@@ -430,41 +417,6 @@ private fun AgentStep(
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
-            }
-        }
-        // In-sheet discoverability: a compact, non-primary row at the
-        // bottom -- doesn't interrupt the agent-selection flow above.
-        val pipelinesEnabled by store.pipelinesEnabled.collectAsState()
-        if (pipelinesEnabled) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface)
-                    .clickable(onClick = onOpenPipelineBuilder)
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.CallSplit,
-                    contentDescription = null,
-                    tint = neon.accent,
-                    modifier = Modifier.size(16.dp),
-                )
-                Text(
-                    "Multi-step flow",
-                    fontFamily = neon.sans,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 13.sp,
-                    color = neon.text,
-                    modifier = Modifier.weight(1f),
-                )
-                Icon(
-                    Icons.Filled.ChevronRight,
-                    contentDescription = null,
-                    tint = neon.textFaint,
-                    modifier = Modifier.size(16.dp),
-                )
             }
         }
         Spacer(Modifier.height(8.dp))

@@ -137,6 +137,33 @@ data class PipelineStepDraft(
     val loopMaxIterations: Int = 3, // 1-5, default 3 (owner decision §8.5)
 ) {
     val isControlFlow: Boolean get() = kind == "branch" || kind == "loop"
+
+    companion object {
+        // Role prompt templates (shared by `PipelineBuilderViewModel`'s step
+        // creation and `FlowStepEditorSheet`'s role picker/on-appear prefill
+        // -- one copy so they can't drift). Pipeline vocabulary is
+        // Research/Design/Build/Custom (design_handoff_flow README
+        // "Interactions & state"); "custom" (and any role without a canned
+        // template) leaves the prompt blank for the user to fill in. Mirror
+        // of iOS `ConduitUI.PipelineStep.defaultPromptTemplate(forRole:)`.
+        fun defaultPromptTemplate(role: String): String = when (role) {
+            "researcher" -> "Investigate the codebase and summarize findings."
+            "architect" -> "Design the implementation. Prior work: {{prev}}"
+            "engineer" -> "Implement the approved design. Prior work: {{prev}}"
+            else -> ""
+        }
+
+        /**
+         * A single starter step for a brand-new flow/pipeline -- role
+         * "researcher" with its prompt prefilled, never a blank "engineer"
+         * step (device feedback: a fresh Flow opened to "Engineer" with an
+         * empty prompt). Mirror of iOS `PipelineStep.starter`.
+         */
+        fun starter(): PipelineStepDraft {
+            val role = "researcher"
+            return PipelineStepDraft(role = role, promptTemplate = defaultPromptTemplate(role))
+        }
+    }
 }
 
 /**

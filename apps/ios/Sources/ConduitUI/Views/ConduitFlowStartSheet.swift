@@ -81,14 +81,7 @@ extension ConduitUI {
 
                 Group {
                     if tab == .session {
-                        ConduitUI.AgentPickerSheet(
-                            onOpenPipelineBuilder: {
-                                Telemetry.breadcrumb("flow_start", "session tab pipeline row tapped", data: [:])
-                                onStartWizard(.blank)
-                                dismiss()
-                            },
-                            embedded: true
-                        )
+                        ConduitUI.AgentPickerSheet(embedded: true)
                     } else {
                         flowTab
                     }

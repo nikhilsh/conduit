@@ -26,7 +26,7 @@ import sh.nikhil.conduit.ui.components.PipelineTopologyItem
  * framework dependency) so it is directly JUnit-testable without
  * Robolectric.
  */
-class PipelineBuilderViewModel(initialSteps: List<PipelineStepDraft> = listOf(PipelineStepDraft())) {
+class PipelineBuilderViewModel(initialSteps: List<PipelineStepDraft> = listOf(PipelineStepDraft.starter())) {
 
     var steps: List<PipelineStepDraft> by mutableStateOf(initialSteps)
         private set
@@ -37,12 +37,23 @@ class PipelineBuilderViewModel(initialSteps: List<PipelineStepDraft> = listOf(Pi
     val canDeleteStep: Boolean get() = steps.size > 1
 
     fun addStep() {
+        // First top-level step defaults to "researcher" (kick off with
+        // investigation); every step after that defaults to "engineer"
+        // (build on prior work) -- device feedback: a fresh step showed
+        // role "Engineer" with an empty prompt, so seed both role AND its
+        // canned prompt template together. Mirror of iOS
+        // `PipelineBuilderViewModel.addStep`.
+        val role = if (steps.isEmpty()) "researcher" else "engineer"
         // Task-2a fix (config-sheet redesign): a step after the first
         // defaults to "output" so the previous step's reply actually
         // reaches it -- the plain "none" default was a silent no-handoff
         // bug the owner hit directly. Step 0 keeps "none" (there is no
-        // previous step). Mirror of iOS `PipelineBuilderViewModel.addStep`.
-        val s = PipelineStepDraft(inputFromPrev = if (steps.isEmpty()) "none" else "output")
+        // previous step).
+        val s = PipelineStepDraft(
+            role = role,
+            promptTemplate = PipelineStepDraft.defaultPromptTemplate(role),
+            inputFromPrev = if (steps.isEmpty()) "none" else "output",
+        )
         steps = steps + s
         selectedStepId = s.id
     }
@@ -95,10 +106,12 @@ class PipelineBuilderViewModel(initialSteps: List<PipelineStepDraft> = listOf(Pi
         steps = steps.map { s ->
             if (s.id != stepId) return@map s
             val arr = subStepArray(arm, s)
-            // Task-2a fix: same "output after the first" default within a
-            // Then/Else/body sub-stack -- the arm's own first step keeps
-            // "none".
-            val sub = PipelineSubStepDraft(inputFromPrev = if (arr.isEmpty()) "none" else "output")
+            // Branch/loop "Add step" adds a Custom step (design), not a
+            // Research/Design/Build one -- prompt stays blank for the user
+            // to fill in. Task-2a fix: same "output after the first" default
+            // within a Then/Else/body sub-stack -- the arm's own first step
+            // keeps "none".
+            val sub = PipelineSubStepDraft(role = "custom", inputFromPrev = if (arr.isEmpty()) "none" else "output")
             withSubStepArray(arm, s, arr + sub)
         }
     }

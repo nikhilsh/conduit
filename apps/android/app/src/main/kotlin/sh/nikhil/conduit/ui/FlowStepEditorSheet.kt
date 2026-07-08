@@ -30,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -68,6 +69,16 @@ fun FlowStepEditorSheet(
     val step = viewModel.steps.getOrNull(index) ?: return
     fun update(transform: (PipelineStepDraft) -> PipelineStepDraft) {
         viewModel.updateStep(stepId, transform(step))
+    }
+
+    // Step editor prompt is empty on open -- prefill from the selected role
+    // (device feedback: a fresh step opened to role "Engineer" with a blank
+    // prompt). "custom" has no canned template, so it's left blank for the
+    // user. Mirror of iOS `FlowStepEditorSheet`'s `.onAppear`.
+    LaunchedEffect(stepId) {
+        if (step.promptTemplate.isEmpty() && step.role != "custom") {
+            update { it.copy(promptTemplate = PipelineStepDraft.defaultPromptTemplate(it.role)) }
+        }
     }
 
     val agentOptions = remember(agentDescriptors) { liveAgentOptions(agentDescriptors) }
@@ -145,7 +156,7 @@ fun FlowStepEditorSheet(
                                         update {
                                             it.copy(
                                                 role = value,
-                                                promptTemplate = if (value != "custom") rolePromptTemplate(value) else it.promptTemplate,
+                                                promptTemplate = if (value != "custom") PipelineStepDraft.defaultPromptTemplate(value) else it.promptTemplate,
                                             )
                                         }
                                     },
@@ -241,14 +252,6 @@ fun FlowStepEditorSheet(
             }
         }
     }
-}
-
-/** Role -> default prompt template (design_handoff_flow README). */
-private fun rolePromptTemplate(role: String): String = when (role) {
-    "researcher" -> "Investigate the codebase and summarize findings."
-    "architect" -> "Design the implementation. Prior work: {{prev}}"
-    "engineer" -> "Implement the approved design. Prior work: {{prev}}"
-    else -> ""
 }
 
 @Composable

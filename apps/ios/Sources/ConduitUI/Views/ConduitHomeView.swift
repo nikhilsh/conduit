@@ -35,8 +35,6 @@ extension ConduitUI {
         @State private var showCommandPalette = false
         /// Fan-out surface, launched from the command palette.
         @State private var showFanOut = false
-        /// Pipeline builder, launched from the command palette.
-        @State private var showPipelineBuilder = false
         /// Pipelines list, launched from the command palette or the Home
         /// active-pipeline affordance.
         @State private var showPipelineList = false
@@ -55,10 +53,6 @@ extension ConduitUI {
         /// we can defer presenting the agent picker until AFTER the palette
         /// sheet fully dismisses (avoids the iOS double-sheet race).
         @State private var pendingRunOnBox = false
-        /// Set when the new-session sheet's "Multi-step pipeline" row is
-        /// tapped, so we present the Builder AFTER the agent picker sheet
-        /// fully dismisses (same double-sheet-race avoidance as pendingRunOnBox).
-        @State private var pendingOpenPipelineBuilder = false
         @State private var selectedSessionID: String?
         /// Confirmation alert state for the session-row swipe-to-delete.
         /// `.alert(item:)` needs an Identifiable, so we wrap the target
@@ -91,7 +85,9 @@ extension ConduitUI {
         // The Start sheet (Session/Flow segmented) replaces the old direct
         // `showAgentPicker` / `showPipelineBuilder` presentation at every
         // "+"-adjacent entry point (bottom bar, command palette, FLOWS
-        // header). Tablet (`ConduitTabletHome`) is UNCHANGED -- it keeps its
+        // header). `showAgentPicker` still backs the voice-dictation and
+        // command-palette "Run on box" seed-prompt paths below. Tablet
+        // (`ConduitTabletHome`) is UNCHANGED -- it keeps its
         // own `showPipelineBuilder` wired to the old builder (PR scope §6).
         @State private var showFlowStart = false
         @State private var flowStartInitialTab: ConduitUI.FlowStartSheet.Tab = .session
@@ -150,17 +146,8 @@ extension ConduitUI {
                     ConduitUI.AddServerSheet()
                         .presentationDetents([.medium, .large])
                 }
-                .sheet(isPresented: $showAgentPicker, onDismiss: {
-                    voicePrompt = nil
-                    if pendingOpenPipelineBuilder {
-                        pendingOpenPipelineBuilder = false
-                        showPipelineBuilder = true
-                    }
-                }) {
-                    ConduitUI.AgentPickerSheet(
-                        initialPrompt: voicePrompt,
-                        onOpenPipelineBuilder: { pendingOpenPipelineBuilder = true }
-                    )
+                .sheet(isPresented: $showAgentPicker, onDismiss: { voicePrompt = nil }) {
+                    ConduitUI.AgentPickerSheet(initialPrompt: voicePrompt)
                 }
                 .sheet(isPresented: $showVoiceDictation, onDismiss: {
                     // Chain into the agent picker (seeded with the transcript)
@@ -243,13 +230,6 @@ extension ConduitUI {
                     )
                     .environment(store)
                     .presentationDetents([.medium, .large])
-                }
-                .sheet(isPresented: $showPipelineBuilder) {
-                    // Multi-step pipeline builder. Navigates internally to
-                    // PipelineMonitorView on success.
-                    ConduitUI.PipelineBuilderView()
-                        .environment(store)
-                        .presentationDetents([.large])
                 }
                 .sheet(isPresented: $showFlowStart, onDismiss: {
                     if let prefill = pendingFlowWizardPrefill {
