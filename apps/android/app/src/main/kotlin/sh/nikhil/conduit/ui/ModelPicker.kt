@@ -297,6 +297,120 @@ internal fun ModelRow(
     }
 }
 
+// MARK: - Generic option picker (design_handoff_review_fixes R2)
+//
+// The model-sheet's card-row look (accent border + checkmark on selected)
+// with no catalog, used by any Advanced-section row that isn't picking a
+// model (ds-review.jsx RvModelSheet: "Same sheet component reused for
+// Reasoning and Permissions rows in Advanced"). Replaces the stock
+// `DropdownMenu` those rows used to be. Mirror of iOS
+// `ConduitUI.OptionPickerSheet` / `ConduitUI.OptionPickerRow`.
+
+/** One row in an [OptionPickerSheet] -- a value/label pair. */
+internal data class OptionPickerItem(val value: String, val label: String)
+
+/**
+ * Trigger row + sheet for a small static option list (Reasoning effort,
+ * Permission mode, ...). Mirror of iOS `ConduitUI.OptionPickerRow`.
+ */
+@Composable
+internal fun OptionPickerRow(
+    title: String,
+    options: List<OptionPickerItem>,
+    selected: String,
+    tint: Color,
+    onSelect: (String) -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    var showSheet by remember { mutableStateOf(false) }
+    val currentLabel = options.firstOrNull { it.value == selected }?.label ?: selected
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = RoundedCornerShape(13.dp), fill = neon.surface)
+            .clickable { showSheet = true },
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                currentLabel,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = neon.sans,
+                color = neon.text,
+            )
+            Icon(Icons.Filled.ArrowDropDown, contentDescription = "Choose $title", tint = neon.textDim)
+        }
+    }
+    if (showSheet) {
+        OptionPickerSheet(
+            title = title,
+            options = options,
+            selected = selected,
+            tint = tint,
+            onSelect = {
+                onSelect(it)
+                showSheet = false
+            },
+            onDismiss = { showSheet = false },
+        )
+    }
+}
+
+/**
+ * Conduit-styled option sheet: a ModalBottomSheet list matching
+ * [ModelPickerSheet]'s row look (no catalog, no RECOMMENDED badge). Mirror
+ * of iOS `ConduitUI.OptionPickerSheet`.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun OptionPickerSheet(
+    title: String,
+    options: List<OptionPickerItem>,
+    selected: String,
+    tint: Color,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = neon.surfaceSolid,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                color = neon.text,
+            )
+            options.forEach { option ->
+                ModelRow(
+                    name = option.label,
+                    caption = null,
+                    recommended = false,
+                    selected = option.value == selected,
+                    tint = tint,
+                    onTap = { onSelect(option.value) },
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
 @Composable
 internal fun ModelPickerSectionLabel(text: String) {
     val neon = LocalNeonTheme.current

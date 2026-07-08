@@ -19,13 +19,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -215,29 +212,45 @@ fun FlowStepEditorSheet(
                         }
                         if (advancedExpanded) {
                             Spacer(Modifier.height(8.dp))
-                            DropdownRow(
-                                neon = neon,
-                                label = "Model",
-                                current = step.model.ifEmpty { "Default" },
-                                options = listOf("Default" to "") + catalog.map { (it.displayName.ifEmpty { it.id }) to it.id },
-                                onSelect = { update { s -> s.copy(model = it) } },
-                            )
-                            DropdownRow(
-                                neon = neon,
-                                label = "Reasoning",
-                                current = if (step.reasoningEffort.isEmpty()) "Default" else effortLabel(step.reasoningEffort),
-                                options = listOf("Default" to "") +
-                                    (catalogEntryFor(step.model, catalog)?.efforts ?: forkEffortOptions(step.agentType))
-                                        .map { effortLabel(it) to it },
-                                onSelect = { update { s -> s.copy(reasoningEffort = it) } },
-                            )
-                            DropdownRow(
-                                neon = neon,
-                                label = "Permissions",
-                                current = if (step.permissionMode == "plan") "Plan" else "Auto",
-                                options = listOf("Auto" to "", "Plan" to "plan"),
-                                onSelect = { update { s -> s.copy(permissionMode = it) } },
-                            )
+                            val tint = neonAgentColor(step.agentType, neon)
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    SectionLabel(neon, "Model")
+                                    ModelPickerRow(
+                                        assistant = step.agentType,
+                                        model = step.model,
+                                        catalog = catalog.ifEmpty { null },
+                                        onSelect = { update { s -> s.copy(model = it) } },
+                                    )
+                                }
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    SectionLabel(neon, "Reasoning")
+                                    OptionPickerRow(
+                                        title = "Reasoning",
+                                        options = listOf(OptionPickerItem("", "Default")) +
+                                            (catalogEntryFor(step.model, catalog)?.efforts ?: forkEffortOptions(step.agentType))
+                                                .map { OptionPickerItem(it, effortLabel(it)) },
+                                        selected = step.reasoningEffort,
+                                        tint = tint,
+                                        onSelect = { update { s -> s.copy(reasoningEffort = it) } },
+                                    )
+                                }
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    SectionLabel(neon, "Permissions")
+                                    // No separate injected "Default" row: Auto's
+                                    // value is already "" (the same sentinel a
+                                    // "Default" row would use), so prepending one
+                                    // would duplicate the "" row under two labels
+                                    // (the R2 dedupe rule).
+                                    OptionPickerRow(
+                                        title = "Permissions",
+                                        options = listOf(OptionPickerItem("", "Auto"), OptionPickerItem("plan", "Plan")),
+                                        selected = step.permissionMode,
+                                        tint = tint,
+                                        onSelect = { update { s -> s.copy(permissionMode = it) } },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -293,36 +306,5 @@ private fun AgentTile(neon: NeonTheme, label: String, selected: Boolean, modifie
             fontSize = 12.sp,
             color = if (selected) tint else neon.textDim,
         )
-    }
-}
-
-@Composable
-private fun DropdownRow(
-    neon: NeonTheme,
-    label: String,
-    current: String,
-    options: List<Pair<String, String>>,
-    onSelect: (String) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, fontFamily = neon.sans, fontSize = 13.sp, color = neon.textDim, modifier = Modifier.weight(1f))
-        Box {
-            Row(
-                modifier = Modifier.clickable { expanded = true },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(current, fontFamily = neon.mono, fontSize = 12.sp, color = neon.text)
-                Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = neon.textDim, modifier = Modifier.size(16.dp))
-            }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                options.forEach { (optLabel, optValue) ->
-                    DropdownMenuItem(text = { Text(optLabel) }, onClick = { onSelect(optValue); expanded = false })
-                }
-            }
-        }
     }
 }

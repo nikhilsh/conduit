@@ -1233,7 +1233,10 @@ internal fun catalogEntryFor(option: String, catalog: List<SessionStore.AgentMod
  */
 internal fun forkModelOptions(assistant: String, catalog: List<SessionStore.AgentModel>?): List<String> {
     if (catalog.isNullOrEmpty()) return forkModelOptions(assistant)
-    val ids = catalog.map { it.id }
+    // Dedupe by canonical id before anything else -- a broker that ever repeats
+    // an id (or a caller merging two sources) must never render the same model
+    // twice (design_handoff_review_fixes R2, the "Default"/"Opus" twice bug).
+    val ids = catalog.map { it.id }.distinct()
     // When the catalog has an explicit non-empty isDefault entry (codex "gpt-5.5"),
     // that entry IS the recommended row — do NOT prepend the "" inherit sentinel.
     val hasExplicitDefault = catalog.any { it.isDefault && it.id.isNotEmpty() }

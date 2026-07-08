@@ -259,36 +259,44 @@ extension ConduitUI {
                 .buttonStyle(.plain)
 
                 if advancedExpanded {
-                    modelRow
-                    effortRow
-                    permissionRow
+                    VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            sectionLabel("Model")
+                            modelRow
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            sectionLabel("Reasoning")
+                            effortRow
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            sectionLabel("Permissions")
+                            permissionRow
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 4)
+                    .padding(.bottom, 12)
                 }
             }
             .padding(.vertical, 4)
             .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
         }
 
+        // Model / reasoning / permissions all open the Conduit kit sheet
+        // (design_handoff_review_fixes R2) instead of a stock `Menu` --
+        // `ModelPickerRow` already dedupes the catalog's own inherit entry
+        // against the injected "Default" row (see `ForkOptions.models`);
+        // `OptionPickerRow` is the same sheet reused for the two static
+        // option lists that don't carry a model catalog.
+
         private var modelRow: some View {
-            HStack {
-                Text("Model").font(neon.sans(13)).foregroundStyle(neon.textDim)
-                Spacer()
-                Menu {
-                    Button("Default") { step.wrappedValue.model = "" }
-                    ForEach(modelCatalog) { m in
-                        Button(m.displayName) { step.wrappedValue.model = m.id }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(step.wrappedValue.model.isEmpty ? "Default" : step.wrappedValue.model)
-                            .lineLimit(1)
-                        Image(systemName: "chevron.up.chevron.down")
-                    }
-                    .font(neon.mono(12))
-                    .foregroundStyle(neon.text)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            ConduitUI.ModelPickerRow(
+                agentKind: step.wrappedValue.agentType,
+                catalog: modelCatalog.isEmpty ? nil : modelCatalog,
+                model: step.model,
+                tint: neon.agentTint(forAgent: step.wrappedValue.agentType),
+                telemetryContext: "flow_step"
+            )
         }
 
         private var effortOptionsList: [String] {
@@ -299,48 +307,39 @@ extension ConduitUI {
             return catalogEntry?.efforts ?? ConduitUI.ForkOptions.efforts(forAssistant: step.wrappedValue.agentType)
         }
 
+        private var effortPickerOptions: [ConduitUI.OptionPickerItem] {
+            [ConduitUI.OptionPickerItem(value: "", label: "Default")] +
+                effortOptionsList.map { ConduitUI.OptionPickerItem(value: $0, label: ConduitUI.ForkOptions.effortLabel($0)) }
+        }
+
         private var effortRow: some View {
-            HStack {
-                Text("Reasoning").font(neon.sans(13)).foregroundStyle(neon.textDim)
-                Spacer()
-                Menu {
-                    Button("Default") { step.wrappedValue.reasoningEffort = "" }
-                    ForEach(effortOptionsList, id: \.self) { e in
-                        Button(ConduitUI.ForkOptions.effortLabel(e)) { step.wrappedValue.reasoningEffort = e }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(step.wrappedValue.reasoningEffort.isEmpty ? "Default" : ConduitUI.ForkOptions.effortLabel(step.wrappedValue.reasoningEffort))
-                        Image(systemName: "chevron.up.chevron.down")
-                    }
-                    .font(neon.mono(12))
-                    .foregroundStyle(neon.text)
-                }
+            ConduitUI.OptionPickerRow(
+                title: "Reasoning",
+                options: effortPickerOptions,
+                selection: step.reasoningEffort,
+                tint: neon.agentTint(forAgent: step.wrappedValue.agentType),
+                telemetryContext: "flow_step_reasoning"
+            )
+        }
+
+        // No separate injected "Default" row here: `ForkOptions.autoMode` is
+        // already "" (the same sentinel a "Default" row would use), so
+        // `permissionModes` alone covers it -- prepending "Default" would
+        // duplicate the "" row under two labels (the R2 dedupe rule).
+        private var permissionPickerOptions: [ConduitUI.OptionPickerItem] {
+            ConduitUI.ForkOptions.permissionModes.map {
+                ConduitUI.OptionPickerItem(value: $0, label: ConduitUI.ForkOptions.permissionModeLabel($0))
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
         }
 
         private var permissionRow: some View {
-            HStack {
-                Text("Permissions").font(neon.sans(13)).foregroundStyle(neon.textDim)
-                Spacer()
-                Menu {
-                    Button("Default") { step.wrappedValue.permissionMode = "" }
-                    ForEach(ConduitUI.ForkOptions.permissionModes, id: \.self) { m in
-                        Button(ConduitUI.ForkOptions.permissionModeLabel(m)) { step.wrappedValue.permissionMode = m }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(step.wrappedValue.permissionMode.isEmpty ? "Default" : ConduitUI.ForkOptions.permissionModeLabel(step.wrappedValue.permissionMode))
-                        Image(systemName: "chevron.up.chevron.down")
-                    }
-                    .font(neon.mono(12))
-                    .foregroundStyle(neon.text)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            ConduitUI.OptionPickerRow(
+                title: "Permissions",
+                options: permissionPickerOptions,
+                selection: step.permissionMode,
+                tint: neon.agentTint(forAgent: step.wrappedValue.agentType),
+                telemetryContext: "flow_step_permissions"
+            )
         }
     }
 }

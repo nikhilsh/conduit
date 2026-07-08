@@ -186,6 +186,36 @@ struct ConduitForkOptionsCatalogTests {
         #expect(ConduitUI.ForkOptions.modelLabel("", catalog: codexCatalog) == "GPT-5.5 (recommended)")
     }
 
+    // design_handoff_review_fixes R2: the picker option list must never
+    // repeat a canonical model id, and "Default"/the inherit sentinel is
+    // exactly one row -- even if the broker (or a caller merging sources)
+    // ever hands back a catalog with a duplicate id.
+    @Test func modelsNeverDuplicateAnIDEvenWithADirtyCatalog() {
+        let dirty: [ConduitUI.AgentModel] = [
+            .init(id: "", displayName: "Default (recommended)",
+                  description: "Opus 4.8 with 1M context", isDefault: true,
+                  efforts: ["low", "medium", "high", "xhigh", "max"]),
+            .init(id: "opus", displayName: "Opus 4.8", efforts: ["low", "medium", "high"]),
+            .init(id: "opus", displayName: "Opus 4.8 (dup)", efforts: ["low", "medium", "high"]),
+            .init(id: "sonnet", displayName: "Sonnet 4.6", efforts: ["low", "medium", "high"]),
+        ]
+        let options = ConduitUI.ForkOptions.models(forAssistant: "claude", catalog: dirty)
+        #expect(options == ["", "opus", "sonnet"])
+        #expect(Set(options).count == options.count, "no id appears twice")
+        #expect(options.filter { $0.isEmpty }.count == 1, "exactly one Default/inherit row")
+    }
+
+    // Every catalog shape ForkOptions is exercised with above (claude's
+    // leading "" entry, codex's explicit non-empty isDefault) must also
+    // hold the no-duplicate-ids / single-Default invariant.
+    @Test func modelsHaveNoDuplicateIDsAcrossKnownCatalogShapes() {
+        for (assistant, catalog) in [("claude", claudeCatalog), ("codex", codexCatalog)] {
+            let options = ConduitUI.ForkOptions.models(forAssistant: assistant, catalog: catalog)
+            #expect(Set(options).count == options.count, "\(assistant): no id appears twice")
+            #expect(options.filter { $0.isEmpty }.count <= 1, "\(assistant): at most one Default/inherit row")
+        }
+    }
+
     @Test func defaultModelTitleResolvesCardLabel() {
         // codex: the default entry's display name verbatim.
         #expect(ConduitUI.ForkOptions.defaultModelTitle(forCatalog: codexCatalog) == "GPT-5.5")

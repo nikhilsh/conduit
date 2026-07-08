@@ -266,6 +266,9 @@ class PipelineBuilderViewModelTest {
         val options = forkModelOptions("claude", catalog)
         assertEquals(1, options.count { it.isEmpty() })
         assertEquals(listOf("", "opus", "sonnet"), options)
+        // design_handoff_review_fixes R2: the flow step editor's Advanced
+        // rows now reuse this same list -- pin no id ever appears twice.
+        assertEquals(options.size, options.distinct().size)
     }
 
     @Test

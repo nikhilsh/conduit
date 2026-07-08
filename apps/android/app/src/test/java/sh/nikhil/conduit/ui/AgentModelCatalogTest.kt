@@ -69,6 +69,37 @@ class AgentModelCatalogTest {
         assertEquals(forkEffortOptions("claude"), forkEffortOptions("claude", "", null))
     }
 
+    // design_handoff_review_fixes R2: the picker option list must never
+    // repeat a canonical model id, and "Default"/the inherit sentinel is
+    // exactly one row -- even if the broker (or a caller merging sources)
+    // ever hands back a catalog with a duplicate id.
+    @Test
+    fun modelsNeverDuplicateAnIDEvenWithADirtyCatalog() {
+        val dirty = listOf(
+            SessionStore.AgentModel(
+                id = "", displayName = "Default (recommended)",
+                description = "Opus 4.8 with 1M context", isDefault = true,
+                efforts = listOf("low", "medium", "high", "xhigh", "max"),
+            ),
+            SessionStore.AgentModel(id = "opus", displayName = "Opus 4.8", efforts = listOf("low", "medium", "high")),
+            SessionStore.AgentModel(id = "opus", displayName = "Opus 4.8 (dup)", efforts = listOf("low", "medium", "high")),
+            SessionStore.AgentModel(id = "sonnet", displayName = "Sonnet 4.6", efforts = listOf("low", "medium", "high")),
+        )
+        val options = forkModelOptions("claude", dirty)
+        assertEquals(listOf("", "opus", "sonnet"), options)
+        assertEquals(options.size, options.distinct().size)
+        assertEquals(1, options.count { it.isEmpty() })
+    }
+
+    @Test
+    fun modelsHaveNoDuplicateIDsAcrossKnownCatalogShapes() {
+        for (pair in listOf("claude" to claudeCatalog, "codex" to codexCatalog)) {
+            val options = forkModelOptions(pair.first, pair.second)
+            assertEquals(options.size, options.distinct().size)
+            assertTrue(options.count { it.isEmpty() } <= 1)
+        }
+    }
+
     @Test
     fun effortsArePerModel() {
         // sonnet lacks xhigh; haiku has no effort control at all.
