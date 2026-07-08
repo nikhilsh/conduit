@@ -245,11 +245,6 @@ fun FlowStartSheet(
                 if (tab == FlowStartTab.SESSION) {
                     AgentPickerSheet(
                         store = store,
-                        onOpenPipelineBuilder = {
-                            Telemetry.breadcrumb("flow_start", "session_tab_pipeline_row", emptyMap())
-                            onStartWizard(FlowWizardPrefill.Blank)
-                            onDismiss()
-                        },
                         embedded = true,
                         onDismiss = onDismiss,
                     )

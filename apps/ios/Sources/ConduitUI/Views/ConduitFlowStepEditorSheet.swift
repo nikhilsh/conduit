@@ -100,6 +100,15 @@ extension ConduitUI {
                 }
             }
             .tint(neon.accent)
+            .onAppear {
+                // Step editor prompt is empty on open -- prefill from the
+                // selected role (device feedback: a fresh step opened to
+                // role "Engineer" with a blank prompt). "custom" has no
+                // canned template, so it's left blank for the user.
+                if step.wrappedValue.promptTemplate.isEmpty && step.wrappedValue.role != "custom" {
+                    step.wrappedValue.promptTemplate = PipelineStep.defaultPromptTemplate(forRole: step.wrappedValue.role)
+                }
+            }
         }
 
         private var roleLabel: String {
@@ -188,22 +197,11 @@ extension ConduitUI {
                             .onTapGesture {
                                 step.wrappedValue.role = opt.value
                                 if opt.value != "custom" {
-                                    step.wrappedValue.promptTemplate = rolePromptTemplate(opt.value)
+                                    step.wrappedValue.promptTemplate = PipelineStep.defaultPromptTemplate(forRole: opt.value)
                                 }
                             }
                     }
                 }
-            }
-        }
-
-        /// Role -> default prompt template (design_handoff_flow README
-        /// "Interactions & state"). "custom" leaves whatever the user typed.
-        private func rolePromptTemplate(_ role: String) -> String {
-            switch role {
-            case "researcher": return "Investigate the codebase and summarize findings."
-            case "architect":  return "Design the implementation. Prior work: {{prev}}"
-            case "engineer":   return "Implement the approved design. Prior work: {{prev}}"
-            default:           return ""
             }
         }
 

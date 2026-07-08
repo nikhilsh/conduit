@@ -32,18 +32,6 @@ extension ConduitUI {
         /// prompt seeded as its first chat message.
         var initialPrompt: String? = nil
 
-        /// In-sheet discoverability (device feedback: a pipeline was only
-        /// reachable via the command palette / "+" long-press). Tapping the
-        /// "Multi-step pipeline" row dismisses THIS sheet and asks the
-        /// caller to present the Builder -- caller sets a pending flag and
-        /// presents from its own `onDismiss` (mirrors the "Run on box"
-        /// pending-flag pattern elsewhere) to avoid the iOS double-sheet
-        /// presentation race. Default no-op so every existing call site
-        /// (deep-link post-pair, tablet rail) compiles unchanged; the row
-        /// is still gated on `store.pipelinesEnabled` there, so at worst it
-        /// dismisses without chaining further.
-        var onOpenPipelineBuilder: () -> Void = {}
-
         /// True when this sheet is hosted as a TAB inside another sheet's
         /// own chrome (`ConduitUI.FlowStartSheet`'s Session tab) rather than
         /// presented on its own -- suppresses this view's own navigation
@@ -51,10 +39,10 @@ extension ConduitUI {
         /// header is the only header shown. `dismiss()` is unaffected: it
         /// always resolves to the nearest enclosing `.sheet`/`.fullScreenCover`
         /// presentation, not this NavigationStack, so every dismiss call
-        /// below (Cancel, DirectoryPicker's onCreate, the pipeline-row
-        /// hand-off) still tears down the host sheet correctly when
-        /// embedded. Default false so every existing call site (the "+"
-        /// button, deep-link post-pair, tablet rail) is unaffected.
+        /// below (Cancel, DirectoryPicker's onCreate) still tears down the
+        /// host sheet correctly when embedded. Default false so every
+        /// existing call site (the "+" button, deep-link post-pair, tablet
+        /// rail) is unaffected.
         var embedded: Bool = false
 
         /// Agent the user tapped; pushes the directory picker. nil while
@@ -182,12 +170,6 @@ extension ConduitUI {
                                         showAgentLogin = true
                                     }
                                 }
-                            }
-                            // In-sheet discoverability: a compact, non-
-                            // primary row at the bottom -- doesn't interrupt
-                            // the agent-selection flow above.
-                            if store.pipelinesEnabled {
-                                multiStepPipelineRow
                             }
                         }
                         .padding(.horizontal, 16)
@@ -382,36 +364,6 @@ extension ConduitUI {
             .padding(.vertical, 12)
             .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
             .accessibilityIdentifier("ConduitAgentPickerSheet.initialPrompt")
-        }
-
-        /// Compact "Multi-step pipeline" discoverability row (device
-        /// feedback: pipelines were only reachable via the command palette
-        /// / "+" long-press menu). Tap dismisses this sheet and asks the
-        /// caller to present the Builder from its own `onDismiss` (see
-        /// `onOpenPipelineBuilder` doc comment).
-        private var multiStepPipelineRow: some View {
-            Button {
-                Telemetry.breadcrumb("pipeline", "new_session_sheet_row_tapped")
-                onOpenPipelineBuilder()
-                dismiss()
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.triangle.merge")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(neon.accent)
-                    Text("Multi-step flow")
-                        .font(neon.sans(13).weight(.semibold))
-                        .foregroundStyle(neon.text)
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(neon.textFaint)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
-            }
-            .buttonStyle(.plain)
         }
 
         private func sectionLabel(_ text: String, tint: Color? = nil) -> some View {

@@ -320,7 +320,6 @@ fun AppRoot(
             store = store,
             headerNote = null,
             initialPrompt = paletteInitialPrompt,
-            onOpenPipelineBuilder = { showPipelineBuilder = true },
             onDismiss = {
                 showAgentPicker = false
                 paletteInitialPrompt = null

@@ -33,10 +33,6 @@ extension ConduitUI {
         @State private var showFanOut = false
         /// Pipeline builder, reachable from the "+" long-press menu.
         @State private var showPipelineBuilder = false
-        /// Set when the new-session sheet's "Multi-step pipeline" row is
-        /// tapped, so the Builder presents AFTER the agent picker sheet
-        /// fully dismisses (avoids the iOS double-sheet race).
-        @State private var pendingOpenPipelineBuilder = false
 
         var body: some View {
             @Bindable var store = store
@@ -77,16 +73,8 @@ extension ConduitUI {
                     embedded: false
                 )
             }
-            .sheet(isPresented: $showAgentPicker, onDismiss: {
-                if pendingOpenPipelineBuilder {
-                    pendingOpenPipelineBuilder = false
-                    showPipelineBuilder = true
-                }
-            }) {
-                ConduitUI.AgentPickerSheet(
-                    initialPrompt: nil,
-                    onOpenPipelineBuilder: { pendingOpenPipelineBuilder = true }
-                )
+            .sheet(isPresented: $showAgentPicker) {
+                ConduitUI.AgentPickerSheet(initialPrompt: nil)
             }
             .sheet(isPresented: $showFanOut) {
                 ConduitUI.FanOutView(

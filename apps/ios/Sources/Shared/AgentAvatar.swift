@@ -8,56 +8,29 @@ import UIKit
 /// chat composer or the header pill — those are already tinted via
 /// `ConduitTheme.accent(forAgent:)` directly.
 ///
-/// Renders a single-letter monogram (Claude → "C", Codex → "X", …)
-/// on a filled disc using `accentStrong(forAgent:)`. Falling back to
-/// a letter rather than a logo means we don't ship third-party brand
-/// marks (no Anthropic / OpenAI artwork in the bundle) and the
-/// avatar works for any agent the harness exposes even when we
-/// don't have an SF Symbol ready.
+/// Renders the real brand mark (or an SF Symbol / monogram fallback)
+/// tinted in the agent's theme color over a tint-at-18%-opacity disc,
+/// with a solid-tint ring -- the `AgentDot` idiom (see
+/// `ConduitUI.AgentDot` in `ConduitFlowAtoms.swift`), not a white disc.
+/// A white disc read as a jarring light patch against the dark sheet
+/// and buried the mark's own color identity (device feedback); tinting
+/// the mark itself (`.renderingMode(.template)`, via `AgentGlyph`) keeps
+/// the dark Codex knot visible without one.
 struct AgentAvatar: View {
     let assistant: String
     var size: CGFloat = 24
     @Environment(\.neonTheme) private var neon
 
     var body: some View {
-        ZStack {
-            if let asset = AgentAvatar.logoAsset(forAgent: assistant) {
-                // Real brand logo on a white disc: the marks are designed
-                // for a light background, so without this the black Codex
-                // knot is invisible on the dark sheet (device feedback).
-                // Padding keeps the mark off the rim. Divided by the
-                // optical-size correction (device feedback: gemini/opencode
-                // read visibly smaller than claude/codex at the same
-                // padding, since the source art isn't uniformly cropped) so
-                // every agent occupies the same visual weight.
-                Circle().fill(Color.white)
-                Image(asset)
-                    .resizable()
-                    .scaledToFit()
-                    .padding(size * 0.16 / AgentAvatar.glyphRenderScale(forAgent: assistant))
-            } else {
-                Circle()
-                    .fill(neon.agentTint(forAgent: assistant))
-                if let symbol = AgentAvatar.symbol(forAgent: assistant) {
-                    // Claude / Codex get a distinctive brand glyph; other
-                    // agents keep the monogram.
-                    Image(systemName: symbol)
-                        .font(.system(size: size * 0.46, weight: .bold))
-                        .foregroundStyle(ConduitTheme.textOnAccent)
-                        .accessibilityHidden(true)
-                } else {
-                    Text(monogram)
-                        .font(.system(size: size * 0.5, weight: .heavy, design: .rounded))
-                        .foregroundStyle(ConduitTheme.textOnAccent)
-                        .accessibilityHidden(true)
-                }
-            }
+        let tint = neon.agentTint(forAgent: assistant)
+        return ZStack {
+            Circle().fill(tint.opacity(0.18))
+            AgentGlyph(assistant: assistant, size: size * 0.6)
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
         .overlay(
-            Circle()
-                .strokeBorder(ConduitTheme.textOnAccent.opacity(0.15), lineWidth: 0.5)
+            Circle().strokeBorder(tint, lineWidth: 1.5)
         )
         .accessibilityLabel(Text(assistant.capitalized))
     }
@@ -107,12 +80,6 @@ struct AgentAvatar: View {
         default:       return nil
         }
     }
-
-    /// Per-agent monogram. Codex breaks the "first letter" pattern —
-    /// "C" already belongs to Claude, so Codex gets "X" (its OpenAI
-    /// internal codename rendered as "Codex eXecution" — and visually
-    /// distinct from C). Everything else is the first letter.
-    private var monogram: String { AgentAvatar.monogram(forAgent: assistant) }
 
     /// Static form of the per-agent monogram, so other bare-glyph
     /// components (e.g. [AgentGlyph]) can reuse it without instantiating

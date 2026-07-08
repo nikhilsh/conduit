@@ -43,7 +43,12 @@ extension ConduitUI {
         var onFlowStarted: (() -> Void)?
 
         init(prefill: FlowWizardPrefill, onFlowStarted: (() -> Void)? = nil) {
-            let steps = prefill.steps ?? [PipelineStep()]
+            // A blank Flow start ("+" -> Flow tab -> blank/Continue) has no
+            // prefill steps -- fall back to the same researcher-seeded
+            // starter as `PipelineBuilderViewModel`'s own default, not a
+            // bare `PipelineStep()` (device feedback: that opened straight
+            // to role "Engineer" with an empty prompt).
+            let steps = prefill.steps ?? [PipelineStep.starter]
             _viewModel = State(initialValue: PipelineBuilderViewModel(steps: steps))
             _task = State(initialValue: prefill.task)
             _stepIndex = State(initialValue: max(1, min(2, prefill.startStep)))

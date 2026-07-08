@@ -1,7 +1,6 @@
 package sh.nikhil.conduit.ui
 
 import android.annotation.SuppressLint
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -18,9 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
@@ -33,7 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Compose mirror of `apps/ios/Sources/Views/AgentAvatar.swift`.
+ * Compose mirror of `apps/ios/Sources/Shared/AgentAvatar.swift`.
  *
  * Small circular avatar for an agent (claude, codex, hermes, pi,
  * opencode). Used in any place that lists or picks agents — the
@@ -42,10 +39,14 @@ import androidx.compose.ui.unit.sp
  * header pill — those are already tinted via
  * [ConduitTheme.accent].
  *
- * Renders a single-letter monogram on a filled disc using
- * [ConduitTheme.accentStrong]. Falling back to a letter (rather
- * than a logo) means we don't ship third-party brand marks in the
- * APK and the avatar works for any agent the harness exposes.
+ * Renders the real brand mark (or an icon / monogram fallback) tinted in
+ * the agent's theme color over a tint-at-18%-opacity disc, with a
+ * solid-tint ring -- the `AgentDot` idiom (see `FlowAtoms.kt`'s
+ * `AgentDot`), not a white disc. A white disc read as a jarring light
+ * patch against the dark sheet and buried the mark's own color identity
+ * (device feedback); tinting the mark itself (Icon's default
+ * `BlendMode.SrcIn` color filter) keeps the dark Codex knot visible
+ * without one.
  */
 @Composable
 fun AgentAvatar(
@@ -53,8 +54,7 @@ fun AgentAvatar(
     modifier: Modifier = Modifier,
     size: Dp = 24.dp,
 ) {
-    val fill = agentAccentStrong(assistant)
-    val onAccent = ConduitTheme.textOnAccent()
+    val tint = agentAccent(assistant)
     val logoRes = agentLogoRes(assistant)
     val glyph = agentGlyph(assistant)
     val monogram = monogramFor(assistant)
@@ -64,12 +64,8 @@ fun AgentAvatar(
         modifier = modifier
             .size(size)
             .clip(CircleShape)
-            // Brand logos sit on a white disc (they're designed for a
-            // light background — otherwise the black Codex knot is
-            // invisible on the dark sheet); glyph/monogram fallbacks sit
-            // on the accent disc.
-            .then(if (logoRes == null) Modifier.background(fill) else Modifier.background(Color.White))
-            .border(0.5.dp, onAccent.copy(alpha = 0.15f), CircleShape)
+            .background(tint.copy(alpha = 0.18f))
+            .border(1.5.dp, tint, CircleShape)
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
@@ -78,10 +74,14 @@ fun AgentAvatar(
             // gemini/opencode read visibly smaller than claude/codex at the
             // same padding, since the source art isn't uniformly cropped)
             // so every agent occupies the same visual weight.
-            logoRes != null -> Image(
+            logoRes != null -> Icon(
+                // Real brand mark, tinted -- Icon's default ColorFilter
+                // (BlendMode.SrcIn) replaces the source color entirely
+                // using only the drawable's alpha, so this tints cleanly
+                // even though the source PNG isn't a pure single color.
                 painter = painterResource(logoRes),
                 contentDescription = null,
-                contentScale = ContentScale.Fit,
+                tint = tint,
                 modifier = Modifier.fillMaxSize().padding(size * 0.16f / agentGlyphRenderScale(assistant)),
             )
             glyph != null -> Icon(
@@ -89,12 +89,12 @@ fun AgentAvatar(
                 // agents keep the monogram.
                 imageVector = glyph,
                 contentDescription = null,
-                tint = onAccent,
+                tint = tint,
                 modifier = Modifier.size(size * 0.5f),
             )
             else -> Text(
                 text = monogram,
-                color = onAccent,
+                color = tint,
                 style = TextStyle(
                     fontFamily = FontFamily.SansSerif,
                     fontWeight = FontWeight.ExtraBold,

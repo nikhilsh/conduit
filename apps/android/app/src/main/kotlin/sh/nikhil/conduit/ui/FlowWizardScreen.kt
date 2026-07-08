@@ -79,7 +79,12 @@ fun FlowWizardScreen(
     val isDemoMode by store.isDemoMode.collectAsState()
     val scope = rememberCoroutineScope()
 
-    val viewModel = remember { PipelineBuilderViewModel(initialSteps = prefill.steps ?: listOf(PipelineStepDraft())) }
+    // A blank Flow start ("+" -> Flow tab -> blank/Continue) has no prefill
+    // steps -- fall back to the same researcher-seeded starter as
+    // `PipelineBuilderViewModel`'s own default, not a bare `PipelineStepDraft()`
+    // (device feedback: that opened straight to role "Engineer" with an
+    // empty prompt). Mirror of iOS `FlowWizardView.init`.
+    val viewModel = remember { PipelineBuilderViewModel(initialSteps = prefill.steps ?: listOf(PipelineStepDraft.starter())) }
     var task by remember { mutableStateOf(prefill.task) }
     // store.defaultSessionCwd(): the active session's cwd when one is
     // selected, else the most-recently-used directory on this box, else ""

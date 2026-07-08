@@ -26,7 +26,7 @@ extension ConduitUI {
         /// yet" (inspector shows an empty state).
         var selectedStepID: PipelineStep.ID?
 
-        init(steps: [PipelineStep] = [PipelineStep()]) {
+        init(steps: [PipelineStep] = [PipelineStep.starter]) {
             self.steps = steps
             self.selectedStepID = steps.first?.id
         }
@@ -35,6 +35,15 @@ extension ConduitUI {
 
         func addStep() {
             var s = PipelineStep()
+            // First top-level step defaults to "researcher" (kick off with
+            // investigation); every step after that defaults to "engineer"
+            // (build on prior work) -- device feedback: a fresh step showed
+            // role "Engineer" with an empty prompt, so seed both role AND
+            // its canned prompt template together.
+            s.role = steps.isEmpty ? "researcher" : "engineer"
+            if s.promptTemplate.isEmpty {
+                s.promptTemplate = PipelineStep.defaultPromptTemplate(forRole: s.role)
+            }
             // Task-2a fix: a step after the first defaults to "output" so
             // the previous step's reply actually reaches it -- the plain
             // "none" default was a silent no-handoff bug the owner hit
@@ -89,6 +98,10 @@ extension ConduitUI {
             guard let idx = index(for: stepID) else { return }
             var arr = subStepArray(arm, in: steps[idx])
             var sub = PipelineSubStep()
+            // Branch/loop "Add step" adds a Custom step (design), not a
+            // Research/Design/Build one -- prompt stays blank for the user
+            // to fill in.
+            sub.role = "custom"
             // Task-2a fix: same "output after the first" default within a
             // Then/Else/body sub-stack -- the arm's own first step keeps
             // "none".
