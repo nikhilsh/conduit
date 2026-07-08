@@ -103,6 +103,17 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
+      - name: Brand gate -- no serif fonts in chrome
+        if: steps.detect.outputs.skip != 'true'
+        # Conduit has no serif anywhere -- chrome is brand-locked to Space
+        # Grotesk / JetBrains Mono. This bit us once (a chat-font pairing
+        # leaked `design: .serif` into UI chrome); fail fast instead of
+        # relying on device inspection.
+        run: |
+          if grep -rn "design: \.serif" apps/ios/Sources; then
+            echo "::error::found design: .serif usage above -- Conduit chrome has no serif face, see NeonTheme.swift chromePairing"
+            exit 1
+          fi
       - name: Select Xcode 26.4.1
         if: steps.detect.outputs.skip != 'true'
         run: sudo xcode-select -s /Applications/Xcode_26.4.1.app

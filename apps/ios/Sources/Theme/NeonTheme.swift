@@ -201,12 +201,13 @@ struct NeonTheme {
     /// Light-mode card elevation used when glow is off, else `nil`.
     let cardElevation: NeonCardElevation?
 
-    // Type pairing (handoff §4). The selected `FontFamily` pairing drives
-    // BOTH faces app-wide: `sans()` resolves the prose face, `mono()` the
-    // mono face. `nil` family → the system face (sans) / system monospaced
-    // (mono). Availability is resolved once here (not per glyph) so a
-    // dropped `UIAppFonts` entry degrades to system instead of mis-rendering.
-    /// CoreText family for the prose face, or `nil` for the system face.
+    // Chrome type faces — BRAND-LOCKED to `chromePairing`, never the
+    // user's §4 chat-font pairing (that pairing is chat-prose-only, see
+    // `sans()`/`mono()` below). `nil` family → the system face (sans) /
+    // system monospaced (mono). Availability is resolved once here (not
+    // per glyph) so a dropped `UIAppFonts` entry degrades to system
+    // instead of mis-rendering.
+    /// CoreText family for the chrome prose face, or `nil` for the system face.
     let sansFamily: String?
     /// Whether `sansFamily` is registered (false → fall back to system).
     let sansAvailable: Bool
@@ -217,20 +218,26 @@ struct NeonTheme {
 
     static let radiusValue: CGFloat = 20
 
+    /// The chrome faces are brand-locked to this pairing (Space Grotesk ·
+    /// JetBrains Mono) — never the user's §4 chat-font pairing. See the
+    /// "no serif leak" fix: chrome must always render in brand faces.
+    static let chromePairing: AppearanceStore.FontFamily = .terminal
+
     // MARK: Resolve
 
     /// Resolve the token set for a (palette, dark, glow) combination.
     /// Reproduces `makeNeon({mode, palette, glow})` from neon-theme.jsx.
     ///
-    /// `fontFamily` is the user's §4 chat-font pairing. `nil` keeps the
-    /// brand baseline (Space Grotesk · JetBrains Mono) so call sites that
-    /// don't thread appearance (tests, previews, the lower-level resolve)
-    /// stay on brand. The appearance-driven overload below passes it through.
+    /// Chrome faces (`sans()`/`mono()`) are brand-locked to `chromePairing`
+    /// (Space Grotesk · JetBrains Mono, see below) and never follow the
+    /// user's §4 chat-font pairing — no `fontFamily` input here by design.
+    /// That pairing is chat-prose-only and resolves on its own separate
+    /// path via `AppearanceStore.FontFamily.font(...)` (see
+    /// `Theme/Typography.swift` and `ConduitChatView.proseFont`).
     static func resolve(
         palette: NeonPalette,
         dark: Bool,
-        glow: Bool,
-        fontFamily: AppearanceStore.FontFamily? = nil
+        glow: Bool
     ) -> NeonTheme {
         let aBright = Color(hex: palette.accentHex)          // A
         let a2 = Color(hex: palette.accent2Hex)              // A2
@@ -354,8 +361,12 @@ struct NeonTheme {
                 )
         }
 
-        // §4 type pairing. `nil` → brand baseline (Terminal pairing).
-        let pairing = fontFamily ?? .terminal
+        // Chrome faces are BRAND-LOCKED to the Terminal pairing (Space
+        // Grotesk · JetBrains Mono) regardless of the user's §4 chat-font
+        // pairing — `fontFamily` is intentionally not read here (see the
+        // doc comment above `resolve`). Chat prose resolves the pairing on
+        // its own, separate path.
+        let pairing = NeonTheme.chromePairing
         let sansFamily = pairing.proseFamilyName
         let monoFamily = pairing.monoFamilyName
         let sansAvailable = FontFamilyAvailability.isProseAvailable(pairing)
@@ -429,33 +440,40 @@ struct NeonTheme {
         case .light:  dark = false
         case .dark:   dark = true
         }
+        // NOTE: `appearance.fontFamily` (the §4 chat-font pairing) is
+        // intentionally NOT passed through — chrome is brand-locked, see
+        // the doc comment on `resolve(palette:dark:glow:)` above.
         return resolve(
             palette: appearance.neonPalette.neonPalette,
             dark: dark,
-            glow: appearance.neonGlow,
-            fontFamily: appearance.fontFamily
+            glow: appearance.neonGlow
         )
     }
 
-    // MARK: Type intent (handoff §4 — chat-font pairings)
+    // MARK: Type intent (chrome faces — BRAND-LOCKED, no serif leak)
     //
-    // sans = the selected pairing's PROSE face, mono = its MONO face
-    // (resolved into `sansFamily` / `monoFamily` at `resolve` time). The
-    // `.terminal` default keeps the brand baseline (Space Grotesk ·
-    // JetBrains Mono — BRAND.md §4). Weights are taken from the variable
-    // axis where the face ships one; style-linked Regular/Bold faces
-    // resolve `.bold()` inside the family. The availability flag keeps us
-    // on the system faces if registration ever breaks (a bad UIAppFonts
-    // edit) instead of silently falling back to an unthemed face.
+    // sans/mono are UI CHROME faces, not the user's §4 chat-font pairing:
+    // they always resolve `chromePairing` (Space Grotesk · JetBrains Mono —
+    // BRAND.md §4), regardless of the pairing chosen in Settings. Chat
+    // prose is the ONLY surface that honours the pairing, via
+    // `AppearanceStore.FontFamily.font(...)` directly (see
+    // `Theme/Typography.swift` / `ConduitChatView.proseFont`) — it never
+    // goes through `NeonTheme`. Weights are taken from the variable axis
+    // where the face ships one; style-linked Regular/Bold faces resolve
+    // `.bold()` inside the family. The availability flag keeps us on the
+    // system faces if registration ever breaks (a bad UIAppFonts edit)
+    // instead of silently falling back to an unthemed face.
 
-    /// Sans font at `size` — the selected pairing's prose face.
+    /// Chrome sans font at `size` — always the brand face (Space Grotesk),
+    /// never the user's chat-font pairing.
     func sans(_ size: CGFloat) -> Font {
         guard let family = sansFamily, sansAvailable else {
             return .system(size: size, design: .default)
         }
         return .custom(family, size: size)
     }
-    /// Mono font at `size` — the selected pairing's mono face.
+    /// Chrome mono font at `size` — always the brand face (JetBrains Mono),
+    /// never the user's chat-font pairing.
     func mono(_ size: CGFloat) -> Font {
         guard let family = monoFamily, monoAvailable else {
             return .system(size: size, design: .monospaced)

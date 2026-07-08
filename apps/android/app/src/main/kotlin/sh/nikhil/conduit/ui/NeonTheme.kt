@@ -142,24 +142,28 @@ data class NeonTheme(
     val glowBox: NeonGlowBox?,
     val cardElevation: NeonCardElevation?,
 
-    // §4 chat-font pairing — drives BOTH [sans] and [mono] app-wide. The
-    // Terminal default keeps the brand baseline (Space Grotesk · JetBrains
-    // Mono). Defaulted so framework-free theme tests / previews stay on brand.
+    // §4 chat-font pairing. Kept on the theme so chat-prose call sites
+    // (`MarkdownBlock`/`neonProseFontFamily(neon.chatFont)`) can still
+    // resolve the user's pairing, but it does NOT drive [sans]/[mono] —
+    // those are brand-locked below (no serif leak into chrome). Defaulted
+    // so framework-free theme tests / previews stay on brand.
     val chatFont: sh.nikhil.conduit.AppearanceStore.FontFamily =
         sh.nikhil.conduit.AppearanceStore.FontFamily.Terminal,
 ) {
     /**
-     * Type intent (handoff §4): [sans] resolves the selected pairing's PROSE
-     * face and [mono] its MONO face, both BUNDLED in `res/font/` and resolved
-     * through [NeonBrandFonts] (lazy `ResourceFont` descriptors; nothing loads
+     * Type intent (chrome faces — BRAND-LOCKED, no serif leak): [sans] and
+     * [mono] always resolve the Terminal pairing (Space Grotesk · JetBrains
+     * Mono), both BUNDLED in `res/font/` and resolved through
+     * [NeonBrandFonts] (lazy `ResourceFont` descriptors; nothing loads
      * until first render, so the pure-JVM theme tests stay framework-free).
-     * The Terminal default = Space Grotesk · JetBrains Mono (the brand
-     * baseline). Mirrors iOS `NeonTheme.sans()`/`mono()`.
+     * They never follow [chatFont] — the user's §4 chat-font pairing is
+     * chat-prose-only (see `neonProseFontFamily(neon.chatFont)` at chat
+     * message call sites). Mirrors iOS `NeonTheme.sans()`/`mono()`.
      */
     val sans: androidx.compose.ui.text.font.FontFamily
-        get() = neonProseFontFamily(chatFont)
+        get() = NeonBrandFonts.sans
     val mono: androidx.compose.ui.text.font.FontFamily
-        get() = neonMonoFontFamily(chatFont)
+        get() = NeonBrandFonts.mono
 
     companion object {
         const val RADIUS_DP: Float = 14f
@@ -176,8 +180,9 @@ data class NeonTheme(
 
         /** Resolve the token set for a (palette, dark, glow) combination.
          *  Reproduces iOS `NeonTheme.resolve(...)` / `makeNeon(...)`.
-         *  [chatFont] is the §4 pairing driving [sans]/[mono]; defaults to
-         *  the brand baseline so existing call sites stay on brand. */
+         *  [chatFont] is the §4 chat-font pairing, carried through for
+         *  chat-prose call sites — it does NOT drive [sans]/[mono], which
+         *  are brand-locked; defaults to the brand baseline. */
         fun resolve(
             palette: NeonPalette,
             dark: Boolean,

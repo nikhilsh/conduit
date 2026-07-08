@@ -21,9 +21,11 @@ final class AppearanceStore {
     /// machine *does*), because Conduit's soul is the mono. All five are
     /// free Google fonts embedded via `project.yml` `UIAppFonts`.
     ///
-    /// The pairing applies app-wide: `NeonTheme.sans(_:)` resolves the prose
-    /// face and `NeonTheme.mono(_:)` resolves the mono face, so a single
-    /// switch reflows chat, new-session, settings, and tablet identically.
+    /// The pairing applies to CHAT PROSE only — a single switch reflows the
+    /// transcript's markdown body + inline code. UI chrome (nav, buttons,
+    /// labels, everything `NeonTheme.sans(_:)`/`mono(_:)` render) is
+    /// BRAND-LOCKED to the `.terminal` pairing and never follows this
+    /// setting, so the app never renders in a serif face.
     ///
     /// The pre-redesign enums (serif/system/monospaced, then
     /// system/spaceGrotesk/ibmPlexSans/newsreader) are migrated on load —
