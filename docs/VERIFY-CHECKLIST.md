@@ -22,6 +22,23 @@ pending section above it. Newest merge first._
 
 ---
 
+## v0.0.222
+
+**Flow device-test round 2 fixes. PR #944.**
+
+- Demo-mode monitor is internally demo-aware: opening a flow from the flows
+  LIST in demo no longer polls a real endpoint (was a black screen +
+  "Poll failed: HTTP 404"); every monitor entry point resolves the demo
+  fixture, zero network, graceful empty state for unknown ids. [iOS +
+  Android, **needs on-device verification** in demo mode via FLOWS header →
+  list → row tap]
+- Start sheet compact Session tab + flow wizard "Where" row prefill from the
+  selected session's cwd or the box's most-recent directory (was
+  "no folder · main"). [iOS + Android, **needs on-device verification** on a
+  real box]
+
+---
+
 ## v0.0.221
 
 **Flow polish round — design-conformance + device feedback + archive. PRs #932,
