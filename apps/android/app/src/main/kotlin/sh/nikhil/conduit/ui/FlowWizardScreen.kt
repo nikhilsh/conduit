@@ -392,7 +392,7 @@ fun FlowWizardScreen(
     branchEditStepId?.let { id ->
         val idx = viewModel.steps.indexOfFirst { it.id == id }
         if (idx >= 0) {
-            FlowBranchEditorSheet(viewModel = viewModel, stepId = id, index = idx, onDismiss = { branchEditStepId = null })
+            FlowBranchEditorSheet(store = store, viewModel = viewModel, stepId = id, index = idx, onDismiss = { branchEditStepId = null })
         }
     }
 }

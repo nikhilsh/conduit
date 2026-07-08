@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Settings
@@ -41,8 +42,41 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.ui.components.ConduitCard
 import sh.nikhil.conduit.ui.components.ConduitChip
+
+/**
+ * Which storage a [FlowStepEditorSheet] reads/writes -- a top-level step (by
+ * id + rail index) or a branch Then/Else sub-step (design_handoff_review_fixes
+ * R1). Mirror of iOS `ConduitUI.FlowStepEditorSheet.Target`.
+ */
+sealed class FlowStepEditorTarget {
+    data class Step(val stepId: String, val index: Int) : FlowStepEditorTarget()
+    data class SubStep(val target: SubStepEditTarget) : FlowStepEditorTarget()
+}
+
+/**
+ * The fields common to `PipelineStepDraft` and `PipelineSubStepDraft` -- the
+ * only ones this editor surfaces (agent/role/prompt/gate/model/effort/
+ * permission). Sub-steps carry no control-flow/fanout fields, so the editor
+ * never needs more than this to back either target.
+ */
+private data class EditableStepFields(
+    val agentType: String,
+    val role: String,
+    val promptTemplate: String,
+    val gateAfter: Boolean,
+    val model: String,
+    val reasoningEffort: String,
+    val permissionMode: String,
+)
+
+private fun PipelineStepDraft.editableFields() =
+    EditableStepFields(agentType, role, promptTemplate, gateAfter, model, reasoningEffort, permissionMode)
+
+private fun PipelineSubStepDraft.editableFields() =
+    EditableStepFields(agentType, role, promptTemplate, gateAfter, model, reasoningEffort, permissionMode)
 
 /**
  * Compose mirror of `apps/ios/Sources/ConduitUI/Views/ConduitFlowStepEditorSheet.swift`.
@@ -57,31 +91,91 @@ fun FlowStepEditorSheet(
     stepId: String,
     index: Int,
     onDismiss: () -> Unit,
+) = FlowStepEditorSheet(store, viewModel, FlowStepEditorTarget.Step(stepId, index), onDismiss)
+
+/**
+ * design_handoff_review_fixes R1: a branch's Then/Else rows are FULL step
+ * cards that open this SAME sheet against a [PipelineSubStepDraft] instead
+ * of a top-level step.
+ */
+@Composable
+fun FlowStepEditorSheet(
+    store: SessionStore,
+    viewModel: PipelineBuilderViewModel,
+    subStepTarget: SubStepEditTarget,
+    onDismiss: () -> Unit,
+) = FlowStepEditorSheet(store, viewModel, FlowStepEditorTarget.SubStep(subStepTarget), onDismiss)
+
+@Composable
+private fun FlowStepEditorSheet(
+    store: SessionStore,
+    viewModel: PipelineBuilderViewModel,
+    target: FlowStepEditorTarget,
+    onDismiss: () -> Unit,
 ) {
     val neon = LocalNeonTheme.current
     val agentDescriptors by store.agentDescriptors.collectAsState()
     val modelCatalogMap by store.modelCatalog.collectAsState()
     var advancedExpanded by remember { mutableStateOf(false) }
 
-    val step = viewModel.steps.getOrNull(index) ?: return
-    fun update(transform: (PipelineStepDraft) -> PipelineStepDraft) {
-        viewModel.updateStep(stepId, transform(step))
+    val fields: EditableStepFields
+    val update: ((EditableStepFields) -> EditableStepFields) -> Unit
+    when (target) {
+        is FlowStepEditorTarget.Step -> {
+            val step = viewModel.steps.getOrNull(target.index) ?: return
+            fields = step.editableFields()
+            update = { transform ->
+                val f = transform(fields)
+                viewModel.updateStep(
+                    target.stepId,
+                    step.copy(
+                        agentType = f.agentType, role = f.role, promptTemplate = f.promptTemplate,
+                        gateAfter = f.gateAfter, model = f.model, reasoningEffort = f.reasoningEffort,
+                        permissionMode = f.permissionMode,
+                    ),
+                )
+            }
+        }
+        is FlowStepEditorTarget.SubStep -> {
+            val t = target.target
+            val sub = viewModel.subStep(t.stepId, t.arm, t.subStepId) ?: return
+            fields = sub.editableFields()
+            update = { transform ->
+                val f = transform(fields)
+                viewModel.updateSubStep(
+                    t.stepId, t.arm,
+                    sub.copy(
+                        agentType = f.agentType, role = f.role, promptTemplate = f.promptTemplate,
+                        gateAfter = f.gateAfter, model = f.model, reasoningEffort = f.reasoningEffort,
+                        permissionMode = f.permissionMode,
+                    ),
+                )
+            }
+        }
     }
 
     // Step editor prompt is empty on open -- prefill from the selected role
     // (device feedback: a fresh step opened to role "Engineer" with a blank
     // prompt). "custom" has no canned template, so it's left blank for the
-    // user. Mirror of iOS `FlowStepEditorSheet`'s `.onAppear`.
-    LaunchedEffect(stepId) {
-        if (step.promptTemplate.isEmpty() && step.role != "custom") {
+    // user (a fresh branch sub-step already opens with role "custom" per
+    // `addSubStep`, so this is a no-op there by construction). Mirror of iOS
+    // `FlowStepEditorSheet`'s `.onAppear`.
+    LaunchedEffect(target) {
+        if (fields.promptTemplate.isEmpty() && fields.role != "custom") {
             update { it.copy(promptTemplate = PipelineStepDraft.defaultPromptTemplate(it.role)) }
         }
     }
 
     val agentOptions = remember(agentDescriptors) { liveAgentOptions(agentDescriptors) }
     val roleOptions = listOf("researcher" to "Research", "architect" to "Design", "engineer" to "Build", "custom" to "Custom")
-    val roleLabel = roleOptions.firstOrNull { it.first == step.role }?.second ?: "Custom"
-    val catalog = modelCatalogMap[step.agentType] ?: emptyList()
+    val roleLabel = roleOptions.firstOrNull { it.first == fields.role }?.second ?: "Custom"
+    val catalog = modelCatalogMap[fields.agentType] ?: emptyList()
+    // Top-level steps read "Step N · Role"; branch sub-steps have no rail
+    // position to number, so they read "Step · Role".
+    val title = when (target) {
+        is FlowStepEditorTarget.Step -> "Step ${target.index + 1} · $roleLabel"
+        is FlowStepEditorTarget.SubStep -> "Step · $roleLabel"
+    }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(modifier = Modifier.fillMaxSize().background(neon.bg)) {
@@ -91,7 +185,7 @@ fun FlowStepEditorSheet(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "Step ${index + 1} · $roleLabel",
+                        title,
                         fontFamily = neon.sans,
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp,
@@ -115,7 +209,7 @@ fun FlowStepEditorSheet(
                         if (agentOptions.size <= 3) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 agentOptions.forEach { opt ->
-                                    AgentTile(neon = neon, label = opt, selected = step.agentType == opt, modifier = Modifier.weight(1f)) {
+                                    AgentTile(neon = neon, label = opt, selected = fields.agentType == opt, modifier = Modifier.weight(1f)) {
                                         update { it.copy(agentType = opt) }
                                     }
                                 }
@@ -125,14 +219,14 @@ fun FlowStepEditorSheet(
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     agentOptions.take(mid).forEach { opt ->
-                                        AgentTile(neon = neon, label = opt, selected = step.agentType == opt, modifier = Modifier.weight(1f)) {
+                                        AgentTile(neon = neon, label = opt, selected = fields.agentType == opt, modifier = Modifier.weight(1f)) {
                                             update { it.copy(agentType = opt) }
                                         }
                                     }
                                 }
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     agentOptions.drop(mid).forEach { opt ->
-                                        AgentTile(neon = neon, label = opt, selected = step.agentType == opt, modifier = Modifier.weight(1f)) {
+                                        AgentTile(neon = neon, label = opt, selected = fields.agentType == opt, modifier = Modifier.weight(1f)) {
                                             update { it.copy(agentType = opt) }
                                         }
                                     }
@@ -148,7 +242,7 @@ fun FlowStepEditorSheet(
                             roleOptions.forEach { (value, label) ->
                                 ConduitChip(
                                     label = label,
-                                    selected = step.role == value,
+                                    selected = fields.role == value,
                                     modifier = Modifier.clickable {
                                         update {
                                             it.copy(
@@ -166,7 +260,7 @@ fun FlowStepEditorSheet(
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         SectionLabel(neon, "Prompt")
                         androidx.compose.material3.OutlinedTextField(
-                            value = step.promptTemplate,
+                            value = fields.promptTemplate,
                             onValueChange = { update { s -> s.copy(promptTemplate = it) } },
                             modifier = Modifier.fillMaxWidth().heightIn(min = 78.dp),
                             placeholder = { Text("Custom prompt...") },
@@ -184,7 +278,7 @@ fun FlowStepEditorSheet(
                         sh.nikhil.conduit.ui.components.FlowGateToggleRow(
                             title = "Pause for my approval",
                             subtitle = "pings your phone to continue",
-                            checked = step.gateAfter,
+                            checked = fields.gateAfter,
                             onCheckedChange = { checked -> update { it.copy(gateAfter = checked) } },
                         )
                     }
@@ -212,13 +306,13 @@ fun FlowStepEditorSheet(
                         }
                         if (advancedExpanded) {
                             Spacer(Modifier.height(8.dp))
-                            val tint = neonAgentColor(step.agentType, neon)
+                            val tint = neonAgentColor(fields.agentType, neon)
                             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     SectionLabel(neon, "Model")
                                     ModelPickerRow(
-                                        assistant = step.agentType,
-                                        model = step.model,
+                                        assistant = fields.agentType,
+                                        model = fields.model,
                                         catalog = catalog.ifEmpty { null },
                                         onSelect = { update { s -> s.copy(model = it) } },
                                     )
@@ -228,9 +322,9 @@ fun FlowStepEditorSheet(
                                     OptionPickerRow(
                                         title = "Reasoning",
                                         options = listOf(OptionPickerItem("", "Default")) +
-                                            (catalogEntryFor(step.model, catalog)?.efforts ?: forkEffortOptions(step.agentType))
+                                            (catalogEntryFor(fields.model, catalog)?.efforts ?: forkEffortOptions(fields.agentType))
                                                 .map { OptionPickerItem(it, effortLabel(it)) },
-                                        selected = step.reasoningEffort,
+                                        selected = fields.reasoningEffort,
                                         tint = tint,
                                         onSelect = { update { s -> s.copy(reasoningEffort = it) } },
                                     )
@@ -245,11 +339,35 @@ fun FlowStepEditorSheet(
                                     OptionPickerRow(
                                         title = "Permissions",
                                         options = listOf(OptionPickerItem("", "Auto"), OptionPickerItem("plan", "Plan")),
-                                        selected = step.permissionMode,
+                                        selected = fields.permissionMode,
                                         tint = tint,
                                         onSelect = { update { s -> s.copy(permissionMode = it) } },
                                     )
                                 }
+                            }
+                        }
+                    }
+
+                    // Delete (sub-step mode only) -- design_handoff_review_fixes
+                    // R1: the branch row's minus badge is gone, delete now lives
+                    // inside the editor. Top-level steps have no delete
+                    // affordance here (none existed before this change; the Flow
+                    // wizard's step rail doesn't support removing a step yet,
+                    // and this PR doesn't add one to avoid a second delete UI).
+                    if (target is FlowStepEditorTarget.SubStep) {
+                        ConduitCard {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    val t = target.target
+                                    Telemetry.breadcrumb("flow_wizard", "sub_step_delete", mapOf("arm" to t.arm.name))
+                                    viewModel.removeSubStep(t.stepId, t.arm, t.subStepId)
+                                    onDismiss()
+                                },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = null, tint = neon.red, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Text("Delete step", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = neon.text)
                             }
                         }
                     }

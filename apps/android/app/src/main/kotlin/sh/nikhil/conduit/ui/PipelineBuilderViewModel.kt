@@ -156,6 +156,18 @@ class PipelineBuilderViewModel(initialSteps: List<PipelineStepDraft> = listOf(Pi
     }
 
     /**
+     * Reads one sub-step by identity -- the dual-mode `FlowStepEditorSheet`
+     * (design_handoff_review_fixes R1) uses this to back its fields when
+     * editing a branch Then/Else row instead of a top-level step. `null`
+     * means the sub-step (or its parent step) no longer exists, e.g. it was
+     * deleted from under an open sheet.
+     */
+    fun subStep(stepId: String, arm: PipelineSubStepArm, subStepId: String): PipelineSubStepDraft? {
+        val step = steps.firstOrNull { it.id == stepId } ?: return null
+        return subStepArray(arm, step).firstOrNull { it.id == subStepId }
+    }
+
+    /**
      * Drag-reorder. A step carries no client-side index field -- the broker
      * assigns the index from ARRAY POSITION at create time
      * (`ws/pipeline.go:serveCreatePipeline`), so reordering the list is the

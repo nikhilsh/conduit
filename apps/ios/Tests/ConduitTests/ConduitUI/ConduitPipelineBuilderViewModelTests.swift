@@ -162,6 +162,22 @@ struct ConduitPipelineBuilderViewModelTests {
         #expect(vm.steps[1].branchElse.count == 1)
     }
 
+    /// design_handoff_review_fixes R1: "Add step" inside a branch opens the
+    /// full step editor immediately on a role-Custom sub-step -- verify the
+    /// freshly-appended sub-step is exactly that (blank prompt, role
+    /// "custom"), since the editor's onAppear prefill deliberately skips
+    /// "custom" and would otherwise leave a stale canned prompt.
+    @Test func addSubStepDefaultsToEditableCustomRole() {
+        let vm = ConduitUI.PipelineBuilderViewModel()
+        vm.addControlFlowStep(kind: "branch")
+        let stepID = vm.steps[1].id
+
+        vm.addSubStep(stepID: stepID, arm: .then)
+        let added = vm.steps[1].branchThen.last!
+        #expect(added.role == "custom")
+        #expect(added.promptTemplate.isEmpty)
+    }
+
     @Test func removeSubStepRemovesFromTheChosenArmOnly() {
         let vm = ConduitUI.PipelineBuilderViewModel()
         vm.addControlFlowStep(kind: "branch")
