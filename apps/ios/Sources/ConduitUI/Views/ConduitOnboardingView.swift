@@ -456,7 +456,7 @@ extension ConduitUI {
                         Telemetry.breadcrumb("onboarding", OnboardingStep.pairQRStarted)
                         showScanner = true
                     }
-                    pairOption(icon: "terminal", title: "Add via SSH",
+                    pairOption(icon: "terminal.fill", title: "Add via SSH",
                                subtitle: "Set it up over SSH — conduit installs and runs everything on the box for you (nothing to set up there first).") {
                         Telemetry.breadcrumb("onboarding", OnboardingStep.pairSSHStarted)
                         showSshLogin = true
@@ -585,7 +585,7 @@ extension ConduitUI {
                 HStack(spacing: 14) {
                     Image(systemName: icon)
                         .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(neon.accent)
+                        .foregroundStyle(icon == "terminal.fill" ? neon.text : neon.accent)
                         .frame(width: 30)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(title)
