@@ -1257,9 +1257,6 @@ private data class PipelineBuilderCommonProps(
     val onOpenSubStepEditor: (SubStepEditTarget) -> Unit,
 )
 
-/** Identifies one sub-step's full-config editor dialog. */
-internal data class SubStepEditTarget(val stepId: String, val arm: PipelineSubStepArm, val subStepId: String)
-
 @Composable
 private fun PipelineMetadataFields(props: PipelineBuilderCommonProps) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
