@@ -44,6 +44,19 @@ extension ConduitUI {
         /// dismisses without chaining further.
         var onOpenPipelineBuilder: () -> Void = {}
 
+        /// True when this sheet is hosted as a TAB inside another sheet's
+        /// own chrome (`ConduitUI.FlowStartSheet`'s Session tab) rather than
+        /// presented on its own -- suppresses this view's own navigation
+        /// bar (title + Cancel button) so the host's single "Start" + X
+        /// header is the only header shown. `dismiss()` is unaffected: it
+        /// always resolves to the nearest enclosing `.sheet`/`.fullScreenCover`
+        /// presentation, not this NavigationStack, so every dismiss call
+        /// below (Cancel, DirectoryPicker's onCreate, the pipeline-row
+        /// hand-off) still tears down the host sheet correctly when
+        /// embedded. Default false so every existing call site (the "+"
+        /// button, deep-link post-pair, tablet rail) is unaffected.
+        var embedded: Bool = false
+
         /// Agent the user tapped; pushes the directory picker. nil while
         /// on the agent-selection screen.
         @State private var pickedAgent: String?
@@ -184,6 +197,12 @@ extension ConduitUI {
                 }
                 .navigationTitle("New session")
                 .navigationBarTitleDisplayMode(.inline)
+                // Embedded (FlowStartSheet's Session tab): the host already
+                // shows a "Start" + X header -- hide this screen's own bar
+                // entirely rather than show a second title/Cancel row.
+                // Only applies to THIS root page; the pushed DirectoryPicker
+                // destination keeps its own bar (back button) regardless.
+                .toolbar(embedded ? .hidden : .visible, for: .navigationBar)
                 .safeAreaInset(edge: .bottom) {
                     // Cards mode commits with a tinted Continue bar (§3); rows
                     // mode keeps tap-to-drill, so no bottom bar there.
