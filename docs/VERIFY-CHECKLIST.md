@@ -22,6 +22,50 @@ pending section above it. Newest merge first._
 
 ---
 
+## v0.0.224
+
+**SWE Kitty 7 — Flow on-device build-review fixes. PRs #948/#949/#950/#951.**
+
+- Serif font leak (P0). Chrome fonts are brand-locked to Space Grotesk /
+  JetBrains Mono regardless of the user's chat-font pairing; the pairing still
+  drives chat prose only. Splash `.serif` removed; a CI grep gate fails the iOS
+  build if `design: .serif` ever reappears in `apps/ios/Sources`. PR #948.
+  [iOS + Android, **needs on-device verification**: set the chat font to
+  Editorial (Newsreader) and confirm chat prose is serif while ALL chrome
+  (titles, buttons, row titles — "What should this flow do?", "Continue with
+  Claude", "Add to flow") renders in Space Grotesk, not New York serif.]
+- Design-match drift fixes. Removed the legacy "Multi-step flow" row from the
+  new-session Session tab (the Flow segmented tab is the entry now). AgentAvatar
+  no longer sits on a white disc — it uses the AgentDot treatment (tint-18% fill,
+  tint ring, template-tinted mark). Step roles use the pipeline vocabulary
+  (Research / Design / Build / Custom): step 1 defaults to Research, later steps
+  to Build, and the prompt prefills from the role so a step is never blank;
+  branch sub-steps default to Custom. PR #949. [iOS + Android, **needs
+  on-device verification**: no Multi-step row on Session tab; agent glyphs are
+  tinted (no white discs); a fresh flow's steps arrive with roles + prefilled
+  prompts.]
+- Model / reasoning / permissions kit picker + dedupe. The Flow step editor's
+  Advanced rows were the last stock system menus in the app — replaced with the
+  Conduit kit sheet (`ModelPickerRow` + a new generic `OptionPickerSheet` reused
+  for Reasoning and Permissions). This was also the source of the "Default /
+  Opus twice" bug: that one editor hand-rolled `Default` + `ForEach(catalog)`
+  and double-listed the catalog's own inherit entry. Options now dedupe by
+  canonical model id, "Default" is exactly one injected row, and RECOMMENDED is
+  a chip — never concatenated into the model name. PR #950. [iOS + Android,
+  **needs on-device verification**: open a step's Advanced → Model; exactly one
+  Default row + each model once with RECOMMENDED as a chip; Reasoning and
+  Permissions open the same kit sheet, not a system menu.]
+- Editable If/Else branch steps. Then/Else sub-steps are now full step cards:
+  tapping one opens the full step editor (agent · role · prompt · gate ·
+  advanced) via a dual-mode editor; the sub line previews the prompt (mono,
+  ellipsized). "Add step" inside an arm opens the editor immediately on a fresh
+  Custom sub-step; Delete lives inside the editor (the row's minus badge is
+  gone). PR #951. [iOS + Android, **needs on-device verification**: add an
+  If/Else step, tap a branch row → full editor opens and edits persist; Add step
+  opens the editor; delete works from inside the editor.]
+
+---
+
 ## v0.0.223
 
 **Start sheet Session tab: full agent picker restored. PR #946.**
