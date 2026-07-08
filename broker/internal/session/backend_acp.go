@@ -43,13 +43,13 @@ type acpBackend struct{}
 func init() { registerBackend("acp", acpBackend{}) }
 
 // Capabilities declares the ACP protocol's feature set (docs/ACP-PROTOCOL.md
-// §8). Compact/Usage/Steer are unsupported in v1 (no base-ACP verb); the rest
-// map to native ACP methods.
+// §8). Compact/Effort/Usage/Steer are unsupported in v1 (no base-ACP verb);
+// the rest map to native ACP methods.
 func (acpBackend) Capabilities() BackendCapabilities {
 	return BackendCapabilities{
 		Compact:         false, // no session/compact in base ACP
 		AskUserQuestion: true,  // session/request_permission → approval card
-		Effort:          true,  // modes (default/plan/yolo/autoEdit) via session/set_mode
+		Effort:          false, // ACP modes are permission/editor modes, not reasoning effort
 		ModelOverride:   true,  // session/set_model (gemini-cli unstable_setSessionModel)
 		Resume:          true,  // session/load when agentCapabilities.loadSession
 		Interrupt:       true,  // session/cancel

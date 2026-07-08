@@ -5009,7 +5009,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
     suspend fun refreshModelCatalog() = withContext(Dispatchers.IO) {
         val ep = _endpoint.value
         Telemetry.breadcrumb("model_catalog", "refresh start", mapOf("host" to ep.displayHost))
-        val raw = getJsonOrNull(ep, "/api/capabilities")
+        var raw: String? = null
+        for (attempt in 0 until 3) {
+            val candidate = getJsonOrNull(ep, "/api/capabilities")
+            if (candidate == null) break
+            raw = candidate
+            val parsed = runCatching { parseModelCatalog(candidate) }.getOrDefault(emptyMap<String, List<AgentModel>>())
+            val pending = runCatching { modelCatalogDiscoveryPending(candidate) }.getOrDefault(false)
+            if (parsed.isNotEmpty() || !pending || attempt == 2) break
+            Telemetry.breadcrumb(
+                "model_catalog", "discovery pending; retrying capabilities",
+                mapOf("host" to ep.displayHost, "attempt" to "${attempt + 1}"),
+            )
+            delay(1_500)
+        }
         if (raw == null) {
             Telemetry.breadcrumb("model_catalog", "capabilities fetch failed", mapOf("host" to ep.displayHost))
             return@withContext

@@ -215,6 +215,9 @@ type capabilitiesResponse struct {
 	// descriptors below: current apps still read this top-level map. Deprecate
 	// after the descriptor-driven apps (Phase 3) ship.
 	Models map[string][]session.ModelInfo `json:"models,omitempty"`
+	// ModelCatalog reports discovery state even when `models` is absent or
+	// still empty, so apps can distinguish "probe pending" from "old broker".
+	ModelCatalog session.ModelCatalogStatus `json:"model_catalog"`
 	// Agents is the per-assistant capability descriptor map (WS-2.3):
 	// display_name, login_provider, supports{...} (from the protocol backend's
 	// BackendCapabilities + the manifest's plan-mode rule), and the same
@@ -283,6 +286,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.TopPipelineResult = true
 	resp.TopPipelineArchive = true
 	resp.Models = s.Sessions.ModelCatalog()
+	resp.ModelCatalog = s.Sessions.ModelCatalogStatus()
 	resp.Agents = s.Sessions.AgentDescriptors()
 	// Pass the pushed-credential store as a nil INTERFACE when unset:
 	// handing a typed-nil *credentials.Store through the credStore

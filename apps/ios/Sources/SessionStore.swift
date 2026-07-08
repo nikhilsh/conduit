@@ -2360,7 +2360,17 @@ final class SessionStore {
                     case switchAgent = "switch_agent"
                 }
             }
+            struct ModelCatalogStatus: Decodable {
+                struct Assistant: Decodable {
+                    let pending: Bool?
+                }
+                let assistants: [String: Assistant]?
+                var hasPendingProbe: Bool {
+                    assistants?.values.contains { $0.pending == true } ?? false
+                }
+            }
             let models: [String: [ConduitUI.AgentModel]]?
+            let modelCatalog: ModelCatalogStatus?
             let agents: [String: AgentDescriptor]?
             let readiness: BrokerReadiness?
             let features: Features?
@@ -2374,13 +2384,46 @@ final class SessionStore {
             let pipeline_loop: Bool?
             let pipeline_result: Bool?
             let pipeline_archive: Bool?
+            enum CodingKeys: String, CodingKey {
+                case models
+                case modelCatalog = "model_catalog"
+                case agents
+                case readiness
+                case features
+                case pipeline_gate_preview
+                case pipeline_resume
+                case pipeline_templates
+                case pipeline_fanout
+                case pipeline_block_config
+                case pipeline
+                case pipeline_branch
+                case pipeline_loop
+                case pipeline_result
+                case pipeline_archive
+            }
         }
         Telemetry.breadcrumb(
             "model_catalog", "refresh start",
             data: ["host": endpoint.displayHost])
-        guard let data = await getJSON(endpoint: endpoint, path: "/api/capabilities"),
-              let caps = try? JSONDecoder().decode(Envelope.self, from: data)
-        else {
+        var caps: Envelope?
+        for attempt in 0..<3 {
+            guard let data = await getJSON(endpoint: endpoint, path: "/api/capabilities"),
+                  let decoded = try? JSONDecoder().decode(Envelope.self, from: data)
+            else {
+                break
+            }
+            caps = decoded
+            let hasModels = decoded.models?.isEmpty == false
+            let pending = decoded.modelCatalog?.hasPendingProbe == true
+            if hasModels || !pending || attempt == 2 {
+                break
+            }
+            Telemetry.breadcrumb(
+                "model_catalog", "discovery pending; retrying capabilities",
+                data: ["host": endpoint.displayHost, "attempt": "\(attempt + 1)"])
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+        }
+        guard let caps else {
             Telemetry.breadcrumb(
                 "model_catalog", "capabilities fetch/decode failed",
                 data: ["host": endpoint.displayHost])

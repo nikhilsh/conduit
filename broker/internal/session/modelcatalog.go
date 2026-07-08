@@ -402,6 +402,7 @@ type modelCatalogCache struct {
 	fetched      map[string]time.Time // last probe success
 	busy         map[string]bool
 	fingerprints map[string]string // per-assistant binary fingerprint at last successful probe
+	lastErr      map[string]string // last probe error, cleared on success
 	// probe is a test seam; nil = catalogProbeFor. The extraEnv slice is
 	// forwarded from maybeRefreshCatalog (shared-agent-creds env or nil).
 	probe func(ctx context.Context, assistant, bin string, extraEnv []string) ([]ModelInfo, error)
@@ -416,6 +417,7 @@ func (c *modelCatalogCache) init() {
 		c.fetched = map[string]time.Time{}
 		c.busy = map[string]bool{}
 		c.fingerprints = map[string]string{}
+		c.lastErr = map[string]string{}
 	}
 }
 
@@ -440,8 +442,75 @@ func (m *Manager) SetModelCatalog(assistant string, models []ModelInfo) {
 	m.catalog.init()
 	m.catalog.models[assistant] = models
 	m.catalog.fetched[assistant] = time.Now()
+	delete(m.catalog.lastErr, assistant)
 	m.catalog.mu.Unlock()
 	recordDynamicEfforts(assistant, models)
+}
+
+// ModelCatalogAssistantStatus is the per-assistant probe state surfaced in
+// /api/capabilities `model_catalog.assistants`. It is intentionally separate
+// from the actual `models` map so clients can distinguish "discovery pending"
+// from "old broker / unsupported".
+type ModelCatalogAssistantStatus struct {
+	Present         bool   `json:"present"`
+	Pending         bool   `json:"pending"`
+	LastFetchedAt   string `json:"last_fetched_at,omitempty"`
+	LastAttemptedAt string `json:"last_attempted_at,omitempty"`
+	NextRetryAt     string `json:"next_retry_at,omitempty"`
+	LastError       string `json:"last_error,omitempty"`
+}
+
+// ModelCatalogStatus is a snapshot of the discovery subsystem. Access is
+// read-only: callers that want to kick stale probes should call ModelCatalog()
+// first, then ModelCatalogStatus().
+type ModelCatalogStatus struct {
+	Enabled    bool                                   `json:"enabled"`
+	Assistants map[string]ModelCatalogAssistantStatus `json:"assistants,omitempty"`
+}
+
+func formatCatalogTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// ModelCatalogStatus returns probe freshness/error state for every visible
+// registered assistant. It does not spawn probes; serveCapabilities calls
+// ModelCatalog() immediately before this, which handles stale refresh.
+func (m *Manager) ModelCatalogStatus() ModelCatalogStatus {
+	m.catalog.mu.Lock()
+	m.catalog.init()
+	enabled := m.catalog.enabled
+	out := ModelCatalogStatus{Enabled: enabled}
+	if enabled {
+		out.Assistants = map[string]ModelCatalogAssistantStatus{}
+		for _, name := range m.registry.Names() {
+			if catalogProbeFor(m.registry, name) == nil {
+				continue
+			}
+			fetched := m.catalog.fetched[name]
+			attempted := m.catalog.attempted[name]
+			_, present := m.catalog.models[name]
+			pending := m.catalog.busy[name]
+			st := ModelCatalogAssistantStatus{
+				Present:         present,
+				Pending:         pending,
+				LastFetchedAt:   formatCatalogTime(fetched),
+				LastAttemptedAt: formatCatalogTime(attempted),
+				LastError:       m.catalog.lastErr[name],
+			}
+			if !attempted.IsZero() && fetched.Before(attempted) {
+				next := attempted.Add(catalogRetry)
+				if time.Now().Before(next) {
+					st.NextRetryAt = formatCatalogTime(next)
+				}
+			}
+			out.Assistants[name] = st
+		}
+	}
+	m.catalog.mu.Unlock()
+	return out
 }
 
 // ModelCatalog returns a snapshot of the discovered catalogs keyed by
@@ -573,6 +642,9 @@ func (m *Manager) maybeRefreshCatalog(assistant string) {
 			m.catalog.models[assistant] = models
 			m.catalog.fetched[assistant] = time.Now()
 			m.catalog.fingerprints[assistant] = currentFP
+			delete(m.catalog.lastErr, assistant)
+		} else if err != nil {
+			m.catalog.lastErr[assistant] = err.Error()
 		}
 		m.catalog.mu.Unlock()
 		if err != nil {

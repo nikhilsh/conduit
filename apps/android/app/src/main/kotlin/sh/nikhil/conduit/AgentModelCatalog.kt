@@ -40,6 +40,18 @@ internal fun parseModelCatalog(raw: String): Map<String, List<SessionStore.Agent
     return out
 }
 
+/** True when `/api/capabilities` says model discovery is actively probing. */
+internal fun modelCatalogDiscoveryPending(raw: String): Boolean {
+    val assistants = JSONObject(raw)
+        .optJSONObject("model_catalog")
+        ?.optJSONObject("assistants")
+        ?: return false
+    for (assistant in assistants.keys()) {
+        if (assistants.optJSONObject(assistant)?.optBoolean("pending", false) == true) return true
+    }
+    return false
+}
+
 /**
  * Per-assistant capability flags declared by the broker in the `agents`
  * map of `/api/capabilities` (PR #440). All fields have safe defaults so
