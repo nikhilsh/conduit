@@ -3,12 +3,12 @@ import SwiftUI
 // MARK: - ConduitFlowWizardView
 //
 // "Flow" (pipeline v2) redesign, PR B -- design_handoff_flow/README.md
-// "Screens > 3. Task" + "4. Steps". Two-step wizard that replaces
-// `ConduitUI.PipelineBuilderView` as the phone create UX (tablet keeps the
-// old builder, PR scope §6). Reuses the SAME model layer as the old builder
-// (`PipelineStep`, `PipelineBuilderViewModel`, `PipelineCreateRequest`) --
-// this is a UI reskin over the same `/api/pipeline` endpoint, not a new
-// backend.
+// "Screens > 3. Task" + "4. Steps". Two-step wizard that replaced the
+// legacy `PipelineBuilderView` as the create UX -- first on phone, then on
+// tablet too (tablet-parity retirement of the old builder). Reuses the SAME
+// model layer as the old builder (`PipelineStep`, `PipelineBuilderViewModel`,
+// `PipelineCreateRequest`) -- this is a UI reskin over the same
+// `/api/pipeline` endpoint, not a new backend.
 
 extension ConduitUI {
 

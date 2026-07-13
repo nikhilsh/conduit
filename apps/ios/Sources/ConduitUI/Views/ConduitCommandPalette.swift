@@ -61,8 +61,10 @@ extension ConduitUI {
         /// (`ConduitUI.FanOutView`). Default no-op so the sheet compiles
         /// standalone.
         var onFanOut: () -> Void = {}
-        /// "New pipeline" action — caller presents PipelineBuilderView.
-        /// Default no-op so the sheet compiles standalone.
+        /// "New pipeline" action — caller opens the Flow Start sheet
+        /// (`ConduitUI.FlowStartSheet`) on the Flow tab, which chains into
+        /// `ConduitUI.FlowWizardView`. Default no-op so the sheet compiles
+        /// standalone.
         var onNewPipeline: () -> Void = {}
         /// "Pipelines" action — caller presents `ConduitUI.PipelineListView`
         /// (the list of running/past pipelines). Default no-op; only shown

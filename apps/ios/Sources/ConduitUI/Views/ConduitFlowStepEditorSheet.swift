@@ -62,8 +62,7 @@ extension ConduitUI {
             self.target = .subStep(subStepTarget)
         }
 
-        /// Live assistant list from the broker's capabilities descriptors --
-        /// mirrors `PipelineBuilderView.agentOptions`.
+        /// Live assistant list from the broker's capabilities descriptors.
         private var agentOptions: [String] {
             let descriptors = store.agentDescriptors
             guard !descriptors.isEmpty else { return Self.staticAgentOptions }

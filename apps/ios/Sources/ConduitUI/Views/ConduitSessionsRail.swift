@@ -31,8 +31,15 @@ extension ConduitUI {
         /// Fan-out surface, reachable from the "+" long-press menu (mirrors
         /// ConduitHomeView's bottom-bar FAB menu).
         @State private var showFanOut = false
-        /// Pipeline builder, reachable from the "+" long-press menu.
-        @State private var showPipelineBuilder = false
+        /// Flow Start sheet (Session/Flow segmented) -> Wizard chain,
+        /// reachable from the "+" long-press menu "New flow" item. Retires
+        /// the legacy `PipelineBuilderView` sheet; mirrors
+        /// `ConduitHomeView`'s state trio (double-sheet-race avoidance).
+        @State private var showFlowStart = false
+        @State private var flowStartInitialTab: ConduitUI.FlowStartSheet.Tab = .flow
+        @State private var pendingFlowWizardPrefill: ConduitUI.FlowWizardPrefill?
+        @State private var showFlowWizard = false
+        @State private var flowWizardPrefill: ConduitUI.FlowWizardPrefill = .blank
 
         var body: some View {
             @Bindable var store = store
@@ -87,8 +94,27 @@ extension ConduitUI {
                 .environment(store)
                 .presentationDetents([.medium, .large])
             }
-            .sheet(isPresented: $showPipelineBuilder) {
-                ConduitUI.PipelineBuilderView()
+            .sheet(isPresented: $showFlowStart, onDismiss: {
+                if let prefill = pendingFlowWizardPrefill {
+                    pendingFlowWizardPrefill = nil
+                    flowWizardPrefill = prefill
+                    showFlowWizard = true
+                }
+            }) {
+                ConduitUI.FlowStartSheet(initialTab: flowStartInitialTab) { prefill in
+                    pendingFlowWizardPrefill = prefill
+                    showFlowStart = false
+                }
+                .environment(store)
+                .presentationDetents([.medium, .large])
+                .presentationCornerRadius(26)
+            }
+            .sheet(isPresented: $showFlowWizard) {
+                // The rail has no local pipeline-summary list to refresh
+                // (unlike TabletHome / ConduitHomeView) -- the started flow
+                // surfaces via the FLOWS section on Home / Sessions rail's
+                // own next fetch, so `onFlowStarted` is a no-op here.
+                ConduitUI.FlowWizardView(prefill: flowWizardPrefill)
                     .environment(store)
                     .presentationDetents([.large])
             }
@@ -110,7 +136,9 @@ extension ConduitUI {
             }
             if store.pipelinesEnabled {
                 Button {
-                    showPipelineBuilder = true
+                    Telemetry.breadcrumb("flow_wizard", "sessions rail new flow tapped", data: [:])
+                    flowStartInitialTab = .flow
+                    showFlowStart = true
                 } label: {
                     Label("New flow", systemImage: "arrow.triangle.merge")
                 }

@@ -26,9 +26,22 @@ extension ConduitUI {
         // idle), gated on the broker's `pipeline` capability.
         @State private var pipelineSummaries: [ConduitUI.PipelineSummary] = []
         @State private var showPipelineList = false
-        @State private var showPipelineBuilder = false
         @State private var selectedFlowPipeline: ConduitUI.PipelineSummary?
         @State private var continuingFlowIDs: Set<String> = []
+
+        // MARK: Flow (pipeline v2) Start sheet + wizard
+        //
+        // Tablet parity fix: retires the legacy `PipelineBuilderView` sheet
+        // in favor of the same Start sheet (Session/Flow segmented) ->
+        // wizard chain the phone `ConduitHomeView` uses. Mirrors that
+        // file's `showFlowStart`/`pendingFlowWizardPrefill`/`showFlowWizard`
+        // state trio exactly (double-sheet-race avoidance: the wizard only
+        // opens after the Start sheet fully dismisses).
+        @State private var showFlowStart = false
+        @State private var flowStartInitialTab: ConduitUI.FlowStartSheet.Tab = .flow
+        @State private var pendingFlowWizardPrefill: ConduitUI.FlowWizardPrefill?
+        @State private var showFlowWizard = false
+        @State private var flowWizardPrefill: ConduitUI.FlowWizardPrefill = .blank
 
         private var activePipelines: [ConduitUI.PipelineSummary] {
             pipelineSummaries.filter { ConduitUI.PipelineListViewModel.isActiveForHomeAffordance($0.state) }
@@ -98,18 +111,35 @@ extension ConduitUI {
             }
             .scrollIndicators(.hidden)
             .task(id: store.endpoint.displayHost) {
-                guard store.pipelinesEnabled, store.endpoint.isComplete else { return }
-                pipelineSummaries = await store.refreshPipelines()
+                await refreshPipelineSummaries()
             }
             .sheet(isPresented: $showPipelineList) {
                 ConduitUI.PipelineListView()
                     .environment(store)
                     .presentationDetents([.large])
             }
-            .sheet(isPresented: $showPipelineBuilder) {
-                ConduitUI.PipelineBuilderView()
-                    .environment(store)
-                    .presentationDetents([.large])
+            .sheet(isPresented: $showFlowStart, onDismiss: {
+                if let prefill = pendingFlowWizardPrefill {
+                    pendingFlowWizardPrefill = nil
+                    flowWizardPrefill = prefill
+                    showFlowWizard = true
+                }
+            }) {
+                ConduitUI.FlowStartSheet(initialTab: flowStartInitialTab) { prefill in
+                    pendingFlowWizardPrefill = prefill
+                    showFlowStart = false
+                }
+                .environment(store)
+                .presentationDetents([.medium, .large])
+                .presentationCornerRadius(26)
+            }
+            .sheet(isPresented: $showFlowWizard) {
+                ConduitUI.FlowWizardView(
+                    prefill: flowWizardPrefill,
+                    onFlowStarted: { Task { await refreshPipelineSummaries() } }
+                )
+                .environment(store)
+                .presentationDetents([.large])
             }
             .sheet(item: $selectedFlowPipeline) { flow in
                 NavigationStack {
@@ -125,6 +155,16 @@ extension ConduitUI {
 
         // MARK: Flows
 
+        /// Refreshes the FLOWS affordance's pipeline summaries
+        /// (`GET /api/pipelines`), gated on the broker's `pipeline`
+        /// capability + a complete endpoint. Mirrors
+        /// `ConduitHomeView.refreshFlowSummaries` -- called on box switch
+        /// and right after the wizard starts a flow.
+        private func refreshPipelineSummaries() async {
+            guard store.pipelinesEnabled, store.endpoint.isComplete else { return }
+            pipelineSummaries = await store.refreshPipelines()
+        }
+
         private var flowsSectionLabel: some View {
             HStack {
                 // Own label (not `sectionLabel(_:)`) -- that helper stretches
@@ -138,7 +178,9 @@ extension ConduitUI {
                     .textCase(.uppercase)
                 Spacer(minLength: 8)
                 Button {
-                    showPipelineBuilder = true
+                    Telemetry.breadcrumb("flow_wizard", "tablet flows header new flow tapped", data: [:])
+                    flowStartInitialTab = .flow
+                    showFlowStart = true
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "plus").font(.system(size: 12, weight: .semibold))
