@@ -16,7 +16,7 @@ import sh.nikhil.conduit.ui.components.PipelineTopologyItem
  *
  * Deliberately holds ONLY the ordered steps + selection -- title/task/cwd/
  * base and networking (template load/save/delete, submit) stay in
- * `PipelineBuilderScreen` (they need `SessionStore`/`Telemetry` access a
+ * `FlowWizardScreen` (they need `SessionStore`/`Telemetry` access a
  * pure model shouldn't own). The wire encoder (`stepDraftToJson`) is
  * UNCHANGED from Phase 1 -- this view model only reshapes how steps are
  * edited, never how they're encoded, so create-request JSON stays

@@ -102,7 +102,7 @@ fun CommandPaletteScreen(
     // "Fan out a task" action — caller presents the Fan-out surface
     // (`FanOutScreen`). Default no-op so the sheet compiles standalone.
     onFanOut: () -> Unit = {},
-    // "New pipeline" action — caller presents PipelineBuilderScreen.
+    // "New pipeline" action — caller presents FlowStartSheet / FlowWizardScreen.
     onNewPipeline: () -> Unit = {},
     // "Pipelines" action — caller presents `PipelineListScreen` (the list of
     // running/past pipelines). Default no-op; only shown when
