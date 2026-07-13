@@ -20,6 +20,25 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Tablet Flow parity — the new Flow start/wizard UX replaces the legacy
+pipeline builder on tablets; legacy builder deleted. PRs #954 (iOS) / #955
+(Android).**
+
+- iOS: iPad's FLOWS "+ New flow" (ConduitTabletHome) and the sessions-rail
+  long-press "New flow" now open the FlowStartSheet on the Flow tab and chain
+  into the Flow wizard, exactly like phone; the dead `PipelineBuilderView`
+  (~2k lines) is deleted (shared Pipeline* model/request types kept). PR #954.
+  [**needs on-device verification (iPad)**: + New flow from the FLOWS header
+  and from the rail's plus long-press menu both open the new Start sheet →
+  wizard; creating a flow lands in the monitor and the FLOWS grid refreshes.]
+- Android: the tablet rail and tablet home "New flow" now open the blank Flow
+  wizard directly (same as phone's FLOWS header); the legacy
+  `PipelineBuilderScreen` composable tree (~2.4k lines) is deleted (shared
+  draft/parse/JSON-codec types and the view model kept). PR #955.
+  [**needs on-device verification (Android tablet)**: New flow from rail and
+  home opens the wizard; created flow opens its monitor and the flows list
+  refreshes.]
+
 ---
 
 ## v0.0.224
