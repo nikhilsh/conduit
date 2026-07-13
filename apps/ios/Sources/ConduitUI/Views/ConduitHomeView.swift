@@ -87,8 +87,9 @@ extension ConduitUI {
         // "+"-adjacent entry point (bottom bar, command palette, FLOWS
         // header). `showAgentPicker` still backs the voice-dictation and
         // command-palette "Run on box" seed-prompt paths below. Tablet
-        // (`ConduitTabletHome`) is UNCHANGED -- it keeps its
-        // own `showPipelineBuilder` wired to the old builder (PR scope §6).
+        // (`ConduitTabletHome`, `ConduitSessionsRail`) mirrors this same
+        // Start sheet -> wizard chain (tablet-parity retirement of the old
+        // builder).
         @State private var showFlowStart = false
         @State private var flowStartInitialTab: ConduitUI.FlowStartSheet.Tab = .session
         /// Stashed prefill from the Start sheet's Continue/template/blank
