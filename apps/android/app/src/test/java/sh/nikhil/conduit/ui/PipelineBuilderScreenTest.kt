@@ -5,7 +5,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.parseAgentDescriptors
 
 /**
@@ -296,45 +295,4 @@ class PipelineBuilderScreenTest {
         assertTrue("gemini" in options)
     }
 
-    // ---- modelRowHidden: PLAN-HARNESS-BUILDER Phase 3 (§4.3/§4.5) ------
-    // Gated on descriptor.supportsModelOverride (broker PR #900), not a
-    // hardcoded gemini exclusion (superseded owner decision §8.3).
-
-    private fun descriptor(modelOverride: Boolean) = sh.nikhil.conduit.AgentDescriptor(
-        displayName = "Test",
-        loginProvider = "",
-        supportsCompact = false,
-        supportsAskUserQuestion = false,
-        supportsEffort = false,
-        supportsPlanMode = false,
-        supportsModelOverride = modelOverride,
-        supportsUsage = false,
-    )
-
-    @Test
-    fun modelRowHiddenWhenModelOverrideFalseEvenWithCatalog() {
-        val catalog = listOf(SessionStore.AgentModel(id = "gemini-2.5-pro", displayName = "Gemini 2.5 Pro"))
-        assertTrue(modelRowHidden(catalog, descriptor(modelOverride = false)))
-    }
-
-    @Test
-    fun modelRowHiddenWhenCatalogEmptyRegardlessOfModelOverride() {
-        assertTrue(modelRowHidden(null, descriptor(modelOverride = true)))
-        assertTrue(modelRowHidden(emptyList(), descriptor(modelOverride = true)))
-    }
-
-    @Test
-    fun modelRowShownWhenModelOverrideTrueAndCatalogNonEmpty() {
-        val catalog = listOf(SessionStore.AgentModel(id = "opus", displayName = "Opus"))
-        assertFalse(modelRowHidden(catalog, descriptor(modelOverride = true)))
-    }
-
-    @Test
-    fun modelRowHiddenForGeminiBeforePR900SupersededByDescriptor() {
-        // The Phase-1 hardcoded "gemini" string check is gone: a gemini
-        // descriptor with model_override=true (post-#900 broker) now shows
-        // the row, proving the gate reads the descriptor, not the name.
-        val catalog = listOf(SessionStore.AgentModel(id = "gemini-2.5-pro", displayName = "Gemini 2.5 Pro"))
-        assertFalse(modelRowHidden(catalog, descriptor(modelOverride = true)))
-    }
 }

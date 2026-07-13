@@ -61,10 +61,9 @@ import java.net.URL
 
 /**
  * Compose mirror of `apps/ios/Sources/ConduitUI/Views/ConduitFlowWizardView.swift`.
- * Two-step wizard (Task, Steps) that replaces `PipelineBuilderScreen` as the
- * phone create UX (tablet keeps the old builder, PR scope §6). Same model +
- * `/api/pipeline` endpoint as the old builder -- a UI reskin, not a new
- * backend.
+ * Two-step wizard (Task, Steps) that replaces the legacy `PipelineBuilderScreen`
+ * as the create UX on both phone and tablet. Same model + `/api/pipeline`
+ * endpoint as the old builder -- a UI reskin, not a new backend.
  */
 @Composable
 fun FlowWizardScreen(

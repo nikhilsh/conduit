@@ -69,13 +69,11 @@ fun AppRoot(
     // FanOutCompareScreen state: compare results navigate here.
     var compareRuns by remember { mutableStateOf<List<FanOutCompareRun>?>(null) }
     // Pipeline screens
-    var showPipelineBuilder by remember { mutableStateOf(false) }
     var showPipelineList by remember { mutableStateOf(false) }
     // Flow (pipeline v2) Start sheet + wizard -- replaces the old direct
-    // `showAgentPicker` / `showPipelineBuilder` presentation at the "+"
-    // entry points on PHONE. Tablet's `NeonTabletRail`/`HomeScreen` "New
-    // pipeline" wiring below is UNCHANGED -- it keeps the old builder
-    // (PR scope §6).
+    // `showAgentPicker` / `PipelineBuilderScreen` presentation at the "+"
+    // entry points on both phone and tablet (tablet parity shipped after
+    // the initial phone-only rollout).
     var showFlowStart by remember { mutableStateOf(false) }
     var flowStartInitialTab by remember { mutableStateOf(FlowStartTab.SESSION) }
     var flowWizardPrefill by remember { mutableStateOf<FlowWizardPrefill?>(null) }
@@ -179,7 +177,10 @@ fun AppRoot(
                         onOpenBoxes = { showBoxes = true },
                         onOpenTranscript = { row -> transcriptTarget = row },
                         onHome = { store.select(null) },
-                        onNewPipeline = { showPipelineBuilder = true },
+                        onNewPipeline = {
+                            Telemetry.breadcrumb("flow_wizard", "tablet_new_flow_tapped", emptyMap())
+                            flowWizardPrefill = FlowWizardPrefill.Blank
+                        },
                         onFanOut = { showFanOut = true },
                     )
                     VerticalDivider(color = neon.border)
@@ -201,7 +202,10 @@ fun AppRoot(
                                 onOpenBoxHealth = { server -> boxHealthTarget = server },
                                 onOpenPipelines = { showPipelineList = true },
                                 onOpenPipeline = { id, title -> pipelineMonitorTarget = Pair(id, title) },
-                                onNewPipeline = { showPipelineBuilder = true },
+                                onNewPipeline = {
+                                    Telemetry.breadcrumb("flow_wizard", "tablet_new_flow_tapped", emptyMap())
+                                    flowWizardPrefill = FlowWizardPrefill.Blank
+                                },
                                 onFanOut = { showFanOut = true },
                                 // The tablet rail header already shows a Settings
                                 // gear -- don't render a second one in the center.
@@ -262,8 +266,8 @@ fun AppRoot(
                         onOpenPipelines = { showPipelineList = true },
                         onOpenPipeline = { id, title -> pipelineMonitorTarget = Pair(id, title) },
                         // "+ New flow" header -- straight to the wizard
-                        // (blank), no Start-sheet detour (phone only; tablet
-                        // above keeps the old builder).
+                        // (blank), no Start-sheet detour. Tablet mirrors this
+                        // above.
                         onNewPipeline = {
                             Telemetry.breadcrumb("flow_wizard", "flows_header_new_flow_tapped", emptyMap())
                             flowWizardPrefill = FlowWizardPrefill.Blank
@@ -504,20 +508,6 @@ fun AppRoot(
         )
     }
 
-    // Pipeline builder screen.
-    if (showPipelineBuilder) {
-        BackHandler(enabled = true) { showPipelineBuilder = false }
-        PipelineBuilderScreen(
-            store = store,
-            onCreated = { id, title ->
-                showPipelineBuilder = false
-                pipelineMonitorTarget = Pair(id, title)
-                pipelineRefreshTick++
-            },
-            onBack = { showPipelineBuilder = false },
-        )
-    }
-
     // Flow (pipeline v2) Start sheet -- Session/Flow segmented; Session tab
     // hosts the existing AgentPickerSheet, Flow tab picks a template/blank
     // flow and opens the wizard.
@@ -534,7 +524,7 @@ fun AppRoot(
     }
 
     // Flow wizard (Task -> Steps) -- replaces PipelineBuilderScreen as the
-    // phone create UX. Tablet keeps the old builder (PR scope §6).
+    // create UX on both phone and tablet.
     flowWizardPrefill?.let { prefill ->
         BackHandler(enabled = true) { flowWizardPrefill = null }
         FlowWizardScreen(
