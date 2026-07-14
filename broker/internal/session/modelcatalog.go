@@ -236,7 +236,7 @@ const catalogScanBuf = 4 << 20
 // so no turn (and no token spend) happens; the process is killed as soon as
 // the control_response arrives.
 // extraEnv is appended to os.Environ() before the process is started; nil
-// means inherit the broker's environment unchanged (flag-off / default).
+// means inherit the broker's environment unchanged (catalogExtraEnv returned nothing).
 func probeClaudeCatalog(ctx context.Context, bin string, extraEnv []string) ([]ModelInfo, error) {
 	const reqID = "conduit-model-catalog"
 	cmd := exec.CommandContext(ctx, bin,
@@ -288,7 +288,7 @@ func probeClaudeCatalog(ctx context.Context, bin string, extraEnv []string) ([]M
 // initialize handshake, and calls model/list. Decoupled from the per-session
 // app-server clients on purpose: the probe must work with zero sessions open.
 // extraEnv is appended to os.Environ() before the process is started; nil
-// means inherit the broker's environment unchanged (flag-off / default).
+// means inherit the broker's environment unchanged (catalogExtraEnv returned nothing).
 func probeCodexCatalog(ctx context.Context, bin string, extraEnv []string) ([]ModelInfo, error) {
 	cmd := exec.CommandContext(ctx, bin, "app-server")
 	cmd.Dir = os.TempDir()
@@ -537,15 +537,12 @@ func (m *Manager) ModelCatalog() map[string][]ModelInfo {
 	return snap
 }
 
-// catalogExtraEnv computes the extra env vars to inject into a catalog probe
-// when CONDUIT_SHARED_AGENT_CREDS is on. Under the flag the probe must query
-// the same account that real sessions run under (the broker-owned agent-cred
-// dir, not the host-login ~/.claude / ~/.codex). Returns nil when the flag is
-// off — behavior is byte-identical to before this fix.
+// catalogExtraEnv computes the extra env vars to inject into a catalog
+// probe: the probe must query the SAME account real sessions run under (the
+// shared canonical config dir — Option A the operator's real ~/.claude /
+// ~/.codex, or Option B the broker-owned agent-cred dir), not whatever the
+// broker process's own inherited env happens to point at.
 func (m *Manager) catalogExtraEnv() []string {
-	if !sharedAgentCredsEnabled() {
-		return nil
-	}
 	res := resolveSharedCred(m.conduitRoot, m.credStore)
 	envMap, _ := sharedCredEnvFrom(res)
 	if len(envMap) == 0 {

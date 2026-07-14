@@ -8,63 +8,26 @@ import (
 	"strings"
 )
 
-// stageExternalTranscript copies the external agent's conversation file from
-// the user's REAL home into the per-session agent-home so that the agent
-// launched with --resume <externalID> (claude) or exec resume <externalID>
-// (codex) actually finds the conversation instead of exiting 1 with "No
-// conversation found".
+// stageExternalTranscriptInto copies the external agent's conversation file
+// from the user's REAL home into the SHARED canonical config dir (credseed.go)
+// that CLAUDE_CONFIG_DIR / CODEX_HOME point at, so that the agent launched
+// with --resume <externalID> (claude) or exec resume <externalID> (codex)
+// actually finds the conversation instead of exiting 1 with "No conversation
+// found".
 //
-// Root cause: the broker isolates each session's HOME to prevent concurrent
-// OAuth token-rotation races.  An external session's transcript lives in the
-// user's real home (~/.claude/projects/<slug>/<id>.jsonl or
-// ~/.codex/sessions/YYYY/MM/DD/<rollout>.jsonl), not in the isolated
-// agent-home, so a plain --resume fails.
+// The agent reads its transcripts (projects/ for claude, sessions/ for
+// codex) from the shared canonical config dir the relocation env var points
+// at, not from the per-session agent-home. `dirs` is the provider->canonical-
+// dir map from sharedCredEnvFrom (keys "anthropic" / "openai"). When a
+// provider's canonical dir is absent it falls back to the per-session
+// agent-home layout (defensive; should not normally happen). Under Option A
+// the canonical dir IS the host config dir, so staging is an idempotent
+// no-op (the transcript is already there). See
+// docs/PLAN-AGENT-CREDENTIAL-LINEAGE.md §3.6.
 //
-// Best-effort + idempotent: if the file is already present in agent-home,
-// it is skipped.  A failure is logged but never blocks the spawn — the
-// agent will start amnesiac (same behaviour as before this fix) rather than
-// refusing to run.
-//
-// Persistent agent memory (docs/PLAN-AGENT-MEMORY-PERSISTENCE.md, Option A):
-// for claude, linkPersistentAgentState (agent_memory.go) runs BEFORE this
-// function and replaces agentHome's ".claude/projects" with a symlink into
-// the stable per-project store under <conduitRoot>/agent-state/. So writes
-// this function makes under ".claude/projects/<slug>/..." transparently land
-// in that shared store — the staged transcript (and any memory the agent
-// later writes alongside it) is visible to every future session for the same
-// project, not just this one. No code change needed here for that to work;
-// this comment just documents the interaction so it isn't a surprise.
-//
-// Parameters:
-//
-//	agentHome  — per-session ephemeral $HOME (e.g. .conduit/sessions/<id>/agent-home)
-//	realHome   — the broker's actual $HOME (from hostHomeDir())
-//	agent      — "claude" | "codex"
-//	externalID — the claude session UUID or codex thread ID
-func stageExternalTranscript(agentHome, realHome, agent, externalID string) {
-	if agentHome == "" || realHome == "" || externalID == "" {
-		return
-	}
-	switch agent {
-	case "claude":
-		stageClaudeTranscript(agentHome, realHome, externalID)
-	case "codex":
-		stageCodexTranscript(agentHome, realHome, externalID)
-	default:
-		log.Printf("found-sessions: stageExternalTranscript: unknown agent %q (skipping)", agent)
-	}
-}
-
-// stageExternalTranscriptInto is the CONDUIT_SHARED_AGENT_CREDS variant of
-// stageExternalTranscript: under the flag the agent reads its transcripts
-// (projects/ for claude, sessions/ for codex) from the SHARED canonical
-// config dir the relocation env var points at, not from the per-session
-// agent-home. `dirs` is the provider->canonical-dir map from sharedCredEnv
-// (keys "anthropic" / "openai"). When a provider's canonical dir is absent
-// it falls back to the per-session agent-home layout (defensive; should not
-// happen under the flag). Under Option A the canonical dir IS the host
-// config dir, so staging is an idempotent no-op (the transcript is already
-// there). See doc §3.6.
+// Best-effort + idempotent: if the file is already present at the
+// destination, it is skipped. A failure is logged but never blocks the
+// spawn — the agent will start amnesiac rather than refusing to run.
 func stageExternalTranscriptInto(dirs map[string]string, agentHome, realHome, agent, externalID string) {
 	if realHome == "" || externalID == "" {
 		return
@@ -87,17 +50,9 @@ func stageExternalTranscriptInto(dirs map[string]string, agentHome, realHome, ag
 	}
 }
 
-// stageClaudeTranscript copies <realHome>/.claude/projects/<slug>/<id>.jsonl
-// into <agentHome>/.claude/projects/<slug>/<id>.jsonl, preserving the slug
-// directory name so the claude CLI's project-local resolution still matches.
-func stageClaudeTranscript(agentHome, realHome, sessionID string) {
-	stageClaudeTranscriptInto(filepath.Join(agentHome, ".claude"), realHome, sessionID)
-}
-
 // stageClaudeTranscriptInto copies the claude transcript into
-// <destConfigDir>/projects/<slug>/<id>.jsonl. destConfigDir is the claude
-// config dir (per-session `<agentHome>/.claude` on the flag-off path, or the
-// shared CLAUDE_CONFIG_DIR canonical dir on the flag-on path).
+// <destConfigDir>/projects/<slug>/<id>.jsonl. destConfigDir is the shared
+// CLAUDE_CONFIG_DIR canonical dir (or, in tests, a bare per-session dir).
 func stageClaudeTranscriptInto(destConfigDir, realHome, sessionID string) {
 	srcBase := filepath.Join(realHome, ".claude", "projects")
 	slugDirs, err := os.ReadDir(srcBase)
@@ -135,17 +90,9 @@ func stageClaudeTranscriptInto(destConfigDir, realHome, sessionID string) {
 	log.Printf("found-sessions: claude transcript for %s not found under %s (agent will start fresh)", sessionID, srcBase)
 }
 
-// stageCodexTranscript copies <realHome>/.codex/sessions/YYYY/MM/DD/<rollout>.jsonl
-// (the file whose name contains externalID) into the corresponding path under
-// <agentHome>/.codex/sessions/…, preserving the date-path hierarchy.
-func stageCodexTranscript(agentHome, realHome, sessionID string) {
-	stageCodexTranscriptInto(filepath.Join(agentHome, ".codex"), realHome, sessionID)
-}
-
 // stageCodexTranscriptInto copies the codex rollout into
-// <destConfigDir>/sessions/<rel>. destConfigDir is the codex CODEX_HOME dir
-// (per-session `<agentHome>/.codex` on the flag-off path, or the shared
-// CODEX_HOME canonical dir on the flag-on path).
+// <destConfigDir>/sessions/<rel>. destConfigDir is the shared CODEX_HOME
+// canonical dir (or, in tests, a bare per-session dir).
 func stageCodexTranscriptInto(destConfigDir, realHome, sessionID string) {
 	srcBase := filepath.Join(realHome, ".codex", "sessions")
 	found := false

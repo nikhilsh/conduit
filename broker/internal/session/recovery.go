@@ -82,11 +82,16 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	// applyLegacyDefaults) chatConversationOnDisk returns false, which just
 	// means resume IDs are cleared — safe, if conservative.
 	hasAgentConversation := chatConversationOnDisk(sessionDir, adapter.ConfigDir)
-	// When CONDUIT_SHARED_AGENT_CREDS is on, conversations land in the
-	// broker-owned config dir (pointed at by CLAUDE_CONFIG_DIR / CODEX_HOME)
-	// rather than the per-session agent-home, so chatConversationOnDisk always
-	// returns false. Check the shared dir for the specific latched session id.
-	if !hasAgentConversation && meta.ClaudeChatSessionID != "" && sharedAgentCredsEnabled() {
+	// Conversations land in the shared canonical config dir (pointed at by
+	// CLAUDE_CONFIG_DIR / CODEX_HOME — credseed.go) rather than the
+	// per-session agent-home, so chatConversationOnDisk (which only looks
+	// under agent-home) always returns false for the Option-B broker-owned
+	// dir. Check that dir directly for the specific latched session id.
+	// (Option A — the operator's real ~/.claude/~/.codex — isn't checked
+	// here; those transcripts predate this session and aren't under
+	// conduitRoot, so this glob only recovers the Option-B, login-less-box
+	// case. That mirrors today's behaviour.)
+	if !hasAgentConversation && meta.ClaudeChatSessionID != "" {
 		if subdir := configSubdir(adapter.LoginProvider); subdir != "" {
 			pat := filepath.Join(m.conduitRoot, "agent-cred", subdir, "projects", "*", meta.ClaudeChatSessionID+".jsonl")
 			if ms, _ := filepath.Glob(pat); len(ms) > 0 {

@@ -15,9 +15,9 @@ pass unit tests, never exercised on a real device.
 2. Run **Part B** for anything Part A didn't reach, grouped by feature surface.
 3. Run **Part C** from a shell on the box during the same session (no UI
    needed) — broker-behavior-only checks.
-4. Run **Part D** only when the orchestrator has flipped
-   `CONDUIT_SHARED_AGENT_CREDS=1` on the box under supervision — it is a
-   separate, deliberate step, not part of the normal app walkthrough.
+4. Run **Part D** any time — the shared-agent-credential lineage design is
+   now the ONLY path (the flag was removed; env var ignored), so there is no
+   separate flip-on step left to gate this on.
 5. **Any failure:** screenshot + one-line note next to the item, keep going —
    don't block the rest of the session on one red item.
 6. **On completion:** for every checked item, move its bracketed source
@@ -404,14 +404,16 @@ flow calls out phone vs tablet, do both form factors on at least one platform.
 
 ---
 
-## Part D — shared-agent-credential lineage (supervised, flag-flip is the orchestrator's step)
+## Part D — shared-agent-credential lineage
 
-`CONDUIT_SHARED_AGENT_CREDS` ships **OFF by default** (confirmed in
-`broker/internal/session/credseed.go`). Do NOT flip it unattended — this is a
-supervised, deliberate step per
-[PLAN-AGENT-CREDENTIAL-LINEAGE.md §10](PLAN-AGENT-CREDENTIAL-LINEAGE.md#10-test-plan),
-live items 2–4 (item 1, the operator-logout regression check, and the flag
-flip itself are the orchestrator's job — not part of this app-side pass).
+The `CONDUIT_SHARED_AGENT_CREDS` flag has been REMOVED — this design
+(`broker/internal/session/credseed.go`) is now the ONLY credential path,
+unconditionally. It shipped behind the flag in PR #732, was flipped on the
+live box 2026-07-06, passed live verification (item 1, the operator-logout
+regression check, below), and the legacy per-session-copy apparatus was
+deleted once verified. Items D1–D4 below (live items 2–4 from
+[PLAN-AGENT-CREDENTIAL-LINEAGE.md §10](PLAN-AGENT-CREDENTIAL-LINEAGE.md#10-test-plan))
+remain useful regression checks for this app-side pass.
 
 - [ ] D1. **Login-less SSH box, app-push seeding.** Fresh box, no host login.
   Push the credential blob from the app → the canonical file is seeded from

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestStageExternalTranscript_Claude verifies that stageExternalTranscript
+// TestStageExternalTranscript_Claude verifies that stageExternalTranscriptInto
 // copies the claude conversation file from the real home into agent-home
 // at the expected path, preserving the slug directory name.
 func TestStageExternalTranscript_Claude(t *testing.T) {
@@ -27,7 +27,7 @@ func TestStageExternalTranscript_Claude(t *testing.T) {
 		t.Fatalf("write src: %v", err)
 	}
 
-	stageExternalTranscript(agentHome, realHome, "claude", sessionID)
+	stageExternalTranscriptInto(nil, agentHome, realHome, "claude", sessionID)
 
 	dstFile := filepath.Join(agentHome, ".claude", "projects", slug, sessionID+".jsonl")
 	got, err := os.ReadFile(dstFile)
@@ -47,7 +47,7 @@ func TestStageExternalTranscript_Claude(t *testing.T) {
 }
 
 // TestStageExternalTranscript_ClaudeIdempotent verifies that calling
-// stageExternalTranscript twice with the same session ID is harmless — the
+// stageExternalTranscriptInto twice with the same session ID is harmless — the
 // file is not overwritten when it already exists in agent-home.
 func TestStageExternalTranscript_ClaudeIdempotent(t *testing.T) {
 	t.Parallel()
@@ -75,7 +75,7 @@ func TestStageExternalTranscript_ClaudeIdempotent(t *testing.T) {
 		t.Fatalf("write pre-existing: %v", err)
 	}
 
-	stageExternalTranscript(agentHome, realHome, "claude", sessionID)
+	stageExternalTranscriptInto(nil, agentHome, realHome, "claude", sessionID)
 
 	got, err := os.ReadFile(dstFile)
 	if err != nil {
@@ -93,7 +93,7 @@ func TestStageExternalTranscript_ClaudeNotFound(t *testing.T) {
 	realHome := t.TempDir()
 	agentHome := t.TempDir()
 	// No transcript in realHome. Should not panic.
-	stageExternalTranscript(agentHome, realHome, "claude", "nonexistent-session-id")
+	stageExternalTranscriptInto(nil, agentHome, realHome, "claude", "nonexistent-session-id")
 	// No file should appear in agent-home.
 	if _, err := os.Stat(filepath.Join(agentHome, ".claude")); !os.IsNotExist(err) {
 		t.Fatalf("unexpected .claude dir in agent-home when transcript missing")
@@ -122,7 +122,7 @@ func TestStageExternalTranscript_Codex(t *testing.T) {
 		t.Fatalf("write src: %v", err)
 	}
 
-	stageExternalTranscript(agentHome, realHome, "codex", threadID)
+	stageExternalTranscriptInto(nil, agentHome, realHome, "codex", threadID)
 
 	dstFile := filepath.Join(agentHome, ".codex", "sessions", relPath, filename)
 	got, err := os.ReadFile(dstFile)
@@ -171,7 +171,7 @@ func TestStageExternalTranscript_CodexIdempotent(t *testing.T) {
 		t.Fatalf("write pre-existing: %v", err)
 	}
 
-	stageExternalTranscript(agentHome, realHome, "codex", threadID)
+	stageExternalTranscriptInto(nil, agentHome, realHome, "codex", threadID)
 
 	got, err := os.ReadFile(dstFile)
 	if err != nil {
@@ -188,7 +188,7 @@ func TestStageExternalTranscript_CodexNotFound(t *testing.T) {
 	t.Parallel()
 	realHome := t.TempDir()
 	agentHome := t.TempDir()
-	stageExternalTranscript(agentHome, realHome, "codex", "nonexistent-thread-id")
+	stageExternalTranscriptInto(nil, agentHome, realHome, "codex", "nonexistent-thread-id")
 	if _, err := os.Stat(filepath.Join(agentHome, ".codex")); !os.IsNotExist(err) {
 		t.Fatalf("unexpected .codex dir in agent-home when transcript missing")
 	}
@@ -197,7 +197,7 @@ func TestStageExternalTranscript_CodexNotFound(t *testing.T) {
 // TestStageExternalTranscript_EmptyParams verifies no panic on empty inputs.
 func TestStageExternalTranscript_EmptyParams(t *testing.T) {
 	t.Parallel()
-	stageExternalTranscript("", "", "claude", "some-id")
-	stageExternalTranscript("/tmp/fake", "/tmp/real", "claude", "")
-	stageExternalTranscript("/tmp/fake", "", "codex", "some-id")
+	stageExternalTranscriptInto(nil, "", "", "claude", "some-id")
+	stageExternalTranscriptInto(nil, "/tmp/fake", "/tmp/real", "claude", "")
+	stageExternalTranscriptInto(nil, "/tmp/fake", "", "codex", "some-id")
 }

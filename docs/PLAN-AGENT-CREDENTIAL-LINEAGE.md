@@ -1,6 +1,15 @@
 # PLAN: Agent credential lineage — never fork the refresher
 
-Status: **design only. No production code in this PR.**
+Status: **SHIPPED and now the ONLY path.** PR #732 (v0.0.191) shipped this
+design behind `CONDUIT_SHARED_AGENT_CREDS` (default off); it was flipped on
+the live box 2026-07-06 and both structural and behavioural (refresh-cycle)
+live verification passed. The flag has since been REMOVED (env var ignored;
+this design is unconditional) and the legacy per-session-copy apparatus this
+doc's §7 marks for deletion has been deleted. The rest of this document is
+kept as the historical design record — read it for the "why", not as a
+description of a still-flagged, still-optional path.
+
+~~Status: design only. No production code in this PR.~~
 
 This plan fixes a credential-lineage **race** in the broker that logs the box
 operator out of their agents (Claude, Codex, …). The broker forks one OAuth

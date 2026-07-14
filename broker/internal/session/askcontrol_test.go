@@ -421,16 +421,11 @@ func TestChatConversationOnDisk(t *testing.T) {
 	}
 }
 
-// Close must scrub only the materialized credentials — never the CLIs'
-// conversation files, which recovery's --resume depends on (a broker
-// shutdown Closes every live session; the old RemoveAll(agentHomeDir)
-// destroyed every conversation on every redeploy).
-func TestCleanupAgentHomeKeepsConversations(t *testing.T) {
-	// cleanupAgentHomeCredentials is a flag-OFF concern: under
-	// CONDUIT_SHARED_AGENT_CREDS credentials never live in the per-session
-	// HOME so there is nothing to clean. Force flag OFF so the test exercises
-	// the credential-removal path regardless of the ambient environment.
-	t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "")
+// cleanupAgentHomeCredentials is a no-op: claude/codex credentials live in
+// the shared canonical dir (credseed.go), never in the per-session agent-home,
+// so there is nothing to remove there — every file (conversation OR a
+// leftover credential-shaped file) must survive the call.
+func TestCleanupAgentHomeCredentialsIsNoop(t *testing.T) {
 	home := t.TempDir()
 	conv := filepath.Join(home, ".claude", "projects", "-root-x", "abc.jsonl")
 	cred := filepath.Join(home, ".claude", ".credentials.json")
@@ -446,13 +441,9 @@ func TestCleanupAgentHomeKeepsConversations(t *testing.T) {
 
 	cleanupAgentHomeCredentials(home, "test")
 
-	if _, err := os.Stat(cred); !os.IsNotExist(err) {
-		t.Fatal("claude credential must be removed")
-	}
-	if _, err := os.Stat(codexCred); !os.IsNotExist(err) {
-		t.Fatal("codex credential must be removed")
-	}
-	if _, err := os.Stat(conv); err != nil {
-		t.Fatalf("conversation file must SURVIVE Close: %v", err)
+	for _, f := range []string{conv, cred, codexCred} {
+		if _, err := os.Stat(f); err != nil {
+			t.Fatalf("%s must survive (cleanupAgentHomeCredentials is a no-op): %v", f, err)
+		}
 	}
 }

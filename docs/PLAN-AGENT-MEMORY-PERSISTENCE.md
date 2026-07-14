@@ -1,7 +1,29 @@
 # PLAN — Agent memory persistence (keep credential isolation, persist the memory subtree)
 
-Status: design only. No production code changes in this PR. This doc proposes
-the change; the implementation is a follow-up.
+Status: **SUPERSEDED.** This plan's Option A (a symlink from the per-session
+ephemeral HOME's `.claude/projects` into a stable `<conduitRoot>/agent-state/`
+store, implemented as `linkPersistentAgentState` in `agent_memory.go`) shipped
+but is now dead code and has been DELETED. Persistence is now inherent to the
+shared canonical config dir (`CONDUIT_SHARED_AGENT_CREDS` design, unconditional
+as of docs/PLAN-AGENT-CREDENTIAL-LINEAGE.md): every session's `CLAUDE_CONFIG_DIR`
+already points at ONE canonical directory (the operator's real `~/.claude` under
+Option A, or a broker-owned `<conduitRoot>/agent-cred/.claude` under Option B),
+so `projects/<slug>/` naturally lives outside `sessions/` and is never GC'd —
+no symlink trick required. `agent_memory.go` / `agent_memory_test.go` were
+removed; `<conduitRoot>/agent-state/` may still exist as a harmless leftover on
+boxes that ran an older broker but is no longer written.
+
+**One behavioral difference, known and accepted:** the symlink mechanism this
+doc designed explicitly keyed memory on the ORIGINAL requested cwd (pre-worktree
+-remap — see this doc's §6.4), so every worktree of the same repo shared one
+memory bucket. The canonical config dir does not apply that pre-remap keying —
+`projects/<slug>/` is keyed on whatever cwd the CLI itself sees, so a
+per-session worktree remap (`CONDUIT_SESSION_WORKTREE`) now gets its own,
+separate memory bucket per worktree rather than one shared bucket per real
+project. This is a narrower regression than it sounds (worktree mode is
+opt-in and off by default) and is accepted rather than re-solved.
+
+The rest of this document is kept as the historical design record.
 
 Owner decision points are collected in §6 (Open questions / risks).
 

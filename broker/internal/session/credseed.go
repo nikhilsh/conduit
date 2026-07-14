@@ -1,34 +1,38 @@
 package session
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nikhilsh/conduit/broker/internal/credentials"
 )
 
-// Shared-agent-credential lineage (CONDUIT_SHARED_AGENT_CREDS).
+// Shared-agent-credential lineage.
 //
-// This file implements the FLAG-ON path of the credential-lineage fix
-// designed in docs/PLAN-AGENT-CREDENTIAL-LINEAGE.md. The default (flag
-// OFF) path is unchanged: every session still gets a PRIVATE copy of the
-// credential mirrored / materialized into its ephemeral HOME
-// (mirrorHostCredentials / credStore.Materialize / the credfresh.go
-// watchdog). That apparatus is intentionally LEFT IN PLACE as the
-// else-branch; deleting it is a deliberate FOLLOW-UP after the flag's
-// behavioural live items pass on the dev box (see the doc §7/§8/§10).
+// This file implements the credential-lineage fix designed in
+// docs/PLAN-AGENT-CREDENTIAL-LINEAGE.md, now the ONLY credential path. It
+// shipped behind the CONDUIT_SHARED_AGENT_CREDS flag (default off), was
+// flipped on the live box and verified (structural + behavioural refresh-
+// cycle checks both passed), and the flag was then removed: the prior
+// per-session-copy apparatus — mirrorHostCredentials(anthropic/openai) /
+// credStore.Materialize into agent-home / the credfresh.go watchdog
+// re-mirror — is deleted.
 //
-// FLAG ON: instead of copying the credential into a per-session dir, every
-// session is pointed — via the CLI's own config-dir relocation env var
+// Every session is pointed — via the CLI's own config-dir relocation env var
 // (CLAUDE_CONFIG_DIR for claude, CODEX_HOME for codex) — at ONE canonical
 // config directory per provider. The agent CLIs' own cross-process refresh
 // coordination then governs every refresh, so the operator's host login is
 // never stranded by a forked copy (the bug). Only claude (anthropic) and
 // codex (openai) are in the single-use-refresh-token race; opencode /
-// gemini authenticate via non-rotating env keys and are NOT touched.
+// gemini authenticate via non-rotating env keys and are NOT touched (opencode
+// keeps its own per-session mirror — mirrorOpencodeCredentials — since it is
+// not relocated).
 //
 // Canonical layout. We keep ONE "credential lookup home" per session — a
 // home-shaped directory whose provider-native subpaths hold the live
@@ -61,15 +65,6 @@ import (
 //     deliberately-different account (doc §3.4 step 1 / the
 //     deliberately-different-account corollary). This is also the login-less
 //     SSH-bootstrap path.
-
-// sharedAgentCredsEnabled reports whether the CONDUIT_SHARED_AGENT_CREDS
-// feature flag is on. Read with the same presence test the broker uses for
-// its other CONDUIT_* boolean flags (CONDUIT_DISABLE_SIDECAR,
-// CONDUIT_DISABLE_TERMINAL_TMUX): any non-empty value enables it; unset or
-// empty keeps today's per-session-copy behaviour. Default OFF.
-func sharedAgentCredsEnabled() bool {
-	return strings.TrimSpace(os.Getenv("CONDUIT_SHARED_AGENT_CREDS")) != ""
-}
 
 // brokerOwnedCredHome is the Option-B credential lookup home under
 // conduitRoot: <conduitRoot>/agent-cred. Its .claude/.codex subdirs hold the
@@ -205,8 +200,9 @@ func resolveSharedCred(conduitRoot string, store *credentials.Store) credResolut
 			res.seedFromBlob[p] = true
 			res.sourceLabel[p] = "app_forwarded"
 		default:
-			// Seed from the host login if present (mirrors the flag-off
-			// "every provider" mirror). Labelled "box".
+			// Seed from the host login if present so the Terminal tab (and
+			// this provider's own agent, if applicable) is logged in.
+			// Labelled "box".
 			if hf := hostCredentialFile(p); hf != "" {
 				if _, err := os.Stat(hf); err == nil {
 					res.sourceLabel[p] = "box"
@@ -372,8 +368,7 @@ func seedClaudeCanonicalConfig(res credResolution) error {
 
 // SeedSharedCredentialsAtStartup ensures the canonical credential files for
 // all known providers exist and are populated from the credential store at
-// broker startup. This is a best-effort call: it runs only when
-// CONDUIT_SHARED_AGENT_CREDS is on, and any error is logged but never fatal.
+// broker startup. Best-effort: any error is logged but never fatal.
 //
 // Without this the canonical files are only seeded on the first session spawn.
 // Seeding at startup means broker-side fetchers (account usage, quick replies)
@@ -382,11 +377,174 @@ func seedClaudeCanonicalConfig(res credResolution) error {
 // This is an exported entry point for cmd/conduit-broker/main.go; the session
 // package must not import the main package, so the call flows outward.
 func SeedSharedCredentialsAtStartup(conduitRoot string, store *credentials.Store) {
-	if !sharedAgentCredsEnabled() {
-		return
-	}
 	if _, err := ensureSharedCred(conduitRoot, store); err != nil {
 		// Non-fatal. Each session spawn also calls ensureSharedCred.
 		fmt.Fprintf(os.Stderr, "startup: ensureSharedCred: %v (credentials will be seeded on first session spawn)\n", err)
 	}
+}
+
+// credentialExpirySlack is how close to (or past) expiry a credential must
+// be before we consider it stale enough for the host login to win over it.
+// Mirrors the 30s guard in readClaudeOAuthToken but wider, since the
+// replacement path is cheap and the failure mode (an agent stuck on 401) is
+// expensive.
+const credentialExpirySlack = 2 * time.Minute
+
+// credentialExpiryMillis extracts a comparable expiry (epoch ms) from a
+// provider-native credential blob:
+//
+//   - anthropic → `claudeAiOauth.expiresAt` (already epoch ms)
+//   - openai    → the `exp` claim of `tokens.access_token` (JWT,
+//     unverified decode — ordering metadata only, never an auth
+//     decision), falling back to `last_refresh` when the token has no
+//     parseable exp. Both orderings agree on "newer is fresher".
+//
+// ok=false means the blob carries no usable expiry (malformed JSON,
+// missing fields); callers treat that as "assume stale".
+func credentialExpiryMillis(provider string, data []byte) (int64, bool) {
+	switch provider {
+	case "anthropic":
+		var blob struct {
+			ClaudeAiOauth struct {
+				ExpiresAt int64 `json:"expiresAt"`
+			} `json:"claudeAiOauth"`
+		}
+		if json.Unmarshal(data, &blob) != nil || blob.ClaudeAiOauth.ExpiresAt <= 0 {
+			return 0, false
+		}
+		return blob.ClaudeAiOauth.ExpiresAt, true
+	case "openai":
+		var blob struct {
+			Tokens struct {
+				AccessToken string `json:"access_token"`
+			} `json:"tokens"`
+			LastRefresh string `json:"last_refresh"`
+		}
+		if json.Unmarshal(data, &blob) != nil {
+			return 0, false
+		}
+		if exp, ok := jwtExpiryMillis(blob.Tokens.AccessToken); ok {
+			return exp, true
+		}
+		if t, err := time.Parse(time.RFC3339Nano, blob.LastRefresh); err == nil {
+			return t.UnixMilli(), true
+		}
+		return 0, false
+	default:
+		return 0, false
+	}
+}
+
+// jwtExpiryMillis reads the `exp` claim (epoch seconds) out of a JWT
+// payload without verifying the signature — display/ordering metadata
+// only, same trust posture as the apps' plan-badge decode.
+func jwtExpiryMillis(token string) (int64, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return 0, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+	if err != nil {
+		return 0, false
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if json.Unmarshal(payload, &claims) != nil || claims.Exp <= 0 {
+		return 0, false
+	}
+	return claims.Exp * 1000, true
+}
+
+// hostCredentialFile is the host-login counterpart of the canonical file:
+// where claude / codex stash the operator's credential when they log in
+// interactively. "" when the provider is unknown or the host home can't be
+// resolved.
+func hostCredentialFile(provider string) string {
+	host := hostHomeDir()
+	if host == "" {
+		return ""
+	}
+	switch provider {
+	case "anthropic":
+		return filepath.Join(host, ".claude", ".credentials.json")
+	case "openai":
+		return filepath.Join(host, ".codex", "auth.json")
+	default:
+		return ""
+	}
+}
+
+// sessionCredentialFile is where a provider's credential lives inside a
+// credential lookup home (ephemeral or canonical) at its provider-native
+// subpath — same layout Materialize / mirrorHostCredentials used to write
+// and ensureSharedCred / absorbCanonicalIfFresher read today.
+func sessionCredentialFile(provider, credHome string) string {
+	switch provider {
+	case "anthropic":
+		return filepath.Join(credHome, ".claude", ".credentials.json")
+	case "openai":
+		return filepath.Join(credHome, ".codex", "auth.json")
+	default:
+		return ""
+	}
+}
+
+// useHostOverAppBlob decides at seed time whether the app-pushed OAuth blob
+// should be skipped in favour of the host login: only when the blob is
+// expired (or carries no parseable expiry) AND the host file is strictly
+// fresher. A valid blob always wins — it may be a deliberately different
+// account than the box login.
+func useHostOverAppBlob(provider string, blob []byte) (skip bool, blobExp, hostExp int64) {
+	blobExp, blobOK := credentialExpiryMillis(provider, blob)
+	if blobOK && blobExp > time.Now().Add(credentialExpirySlack).UnixMilli() {
+		return false, blobExp, 0
+	}
+	hostData, err := os.ReadFile(hostCredentialFile(provider))
+	if err != nil {
+		return false, blobExp, 0
+	}
+	hostExp, hostOK := credentialExpiryMillis(provider, hostData)
+	if !hostOK || hostExp <= blobExp {
+		return false, blobExp, hostExp
+	}
+	return true, blobExp, hostExp
+}
+
+// absorbCanonicalIfFresher checks whether the on-disk canonical credential
+// file (at sessionCredentialFile(provider, credHome)) is fresher than the
+// stored blob. If so it writes the on-disk data back into the store — so
+// future restarts see the CLI-refreshed lineage — and returns true (the
+// caller should skip materializing the stale blob). Returns false when the
+// blob is fresher or equal, or the on-disk file is absent/unreadable.
+//
+// This guards the ensureSharedCred seed path against the restart footgun:
+// the Claude CLI refreshes tokens directly into the canonical file
+// (Anthropic rotates the refresh token on every use), so re-materializing
+// the stored blob after a restart would clobber the valid refresh token with
+// a dead one.
+func absorbCanonicalIfFresher(provider string, store *credentials.Store, credHome string) bool {
+	path := sessionCredentialFile(provider, credHome)
+	if path == "" {
+		return false
+	}
+	diskData, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	blobData, err := store.Get(provider)
+	if err != nil {
+		return false
+	}
+	diskExp, diskOK := credentialExpiryMillis(provider, diskData)
+	blobExp, blobOK := credentialExpiryMillis(provider, blobData)
+	if !diskOK || !blobOK || diskExp <= blobExp {
+		return false
+	}
+	// On-disk is fresher: absorb into store (best-effort; skip is
+	// unconditional so a Set failure doesn't trigger an overwrite).
+	if err := store.Set(provider, json.RawMessage(diskData)); err != nil {
+		fmt.Fprintf(os.Stderr, "credentials: absorb fresher %s canonical into store: %v\n", provider, err)
+	}
+	return true
 }
