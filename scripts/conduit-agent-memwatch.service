@@ -1,0 +1,29 @@
+[Unit]
+Description=Conduit agent memory watchdog (kills runaway claude/codex/gemini before OOM)
+Documentation=file:/root/.conduit/agent-memwatch.sh
+After=conduit-broker.service
+Wants=conduit-broker.service
+
+[Service]
+Type=simple
+# Tunables (defaults baked into the script): a single agent process over
+# MEMWATCH_SOFT_MB for MEMWATCH_SOFT_SECS, or ever over MEMWATCH_HARD_MB, is
+# killed. On this 3.8 GB box one agent past ~1.5 GB is the OOM danger zone.
+Environment=MEMWATCH_SOFT_MB=1500
+Environment=MEMWATCH_SOFT_SECS=120
+Environment=MEMWATCH_HARD_MB=2200
+Environment=MEMWATCH_INTERVAL=15
+ExecStart=/root/.conduit/agent-memwatch.sh
+Restart=always
+RestartSec=5
+# The watchdog must survive the very memory pressure it polices: make it the
+# LAST thing the kernel OOM-kills, and cap its own footprint so it can never be
+# the problem it exists to prevent.
+OOMScoreAdjust=-900
+MemoryMax=128M
+Nice=-5
+StandardOutput=null
+StandardError=append:/root/.conduit/agent-memwatch.log
+
+[Install]
+WantedBy=multi-user.target

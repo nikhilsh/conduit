@@ -102,3 +102,20 @@ pre-v0.0.117 broker hard-killed every socket at exactly 90s). The probe in
 Before destructive maintenance (disk migration, VPS teardown) run
 `scripts/conduit-backup.sh` to snapshot the unit and all tier-1 secrets.
 See [`BACKUP-RECOVERY.md`](BACKUP-RECOVERY.md).
+
+## Agent memwatch
+
+A companion systemd unit, `conduit-agent-memwatch.service`, watches `ps` and
+kills any runaway agent CLI (`claude`/`codex`/`gemini`/`opencode`, including
+claude's versioned worker subprocesses) before it can OOM the box — a single
+agent worker hit 2.5 GB on this 3.8 GB VPS on 2026-06-24. Thresholds: SOFT
+kill at 1500MB sustained 120s, HARD kill immediately at 2200MB, SIGTERM then
+SIGKILL after 5s, polled every 15s. It never targets `conduit-broker` or
+itself, and self-protects with `OOMScoreAdjust=-900` + `MemoryMax=128M` so it
+outlives the pressure it's policing. Logs to
+`/root/.conduit/agent-memwatch.log`. Set `MEMWATCH_DRYRUN=1` (unit
+`Environment=` line) to log `WOULD KILL` instead of killing, for validating
+the matcher. Source of truth is committed at `scripts/agent-memwatch.sh` /
+`scripts/conduit-agent-memwatch.service`, and `scripts/remote-bootstrap.sh`
+installs a user-systemd copy on every newly-bootstrapped box so a re-bootstrap
+never silently drops OOM protection.
