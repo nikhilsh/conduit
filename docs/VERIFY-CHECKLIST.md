@@ -20,6 +20,10 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+---
+
+## v0.0.227
+
 **Review & Ship from phone + session hibernation (Orca-inspired round).
 Design PR #963; PRs #964–#968. Both features need a broker redeploy to go
 live (done as part of this round) — capability flags `features.review_ship` +
