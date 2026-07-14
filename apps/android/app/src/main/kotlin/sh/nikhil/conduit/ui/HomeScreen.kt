@@ -157,6 +157,10 @@ fun HomeScreen(
     val savedServers by store.savedServers.collectAsState()
     val sessions by store.sessions.collectAsState()
     val sessionBox by store.sessionBox.collectAsState()
+    // Hibernation chip (Feature A, tiny slice -- docs/PLAN-REVIEW-SHIP.md):
+    // recoverable-but-not-auto-rejoined sessions get a subtle "Paused" chip;
+    // the row stays.
+    val hibernatedIds by store.hibernatedIds.collectAsState()
     val displayNames by store.displayNames.collectAsState()
     // Collected so a row's friendly name recomposes the moment the first
     // user message lands in the conversation log.
@@ -940,6 +944,13 @@ fun HomeScreen(
                                             leadingIcon = Icons.Filled.Storage,
                                             tint = badgeTint,
                                         )
+                                    }
+                                    if (session.id in hibernatedIds) {
+                                        // Hibernation chip -- subtle "Paused"
+                                        // indicator on a recoverable-but-
+                                        // not-auto-rejoined session. The row
+                                        // itself stays; no settings UI.
+                                        ConduitChip(label = "Paused", tint = neon.textFaint)
                                     }
                                 }
                             }

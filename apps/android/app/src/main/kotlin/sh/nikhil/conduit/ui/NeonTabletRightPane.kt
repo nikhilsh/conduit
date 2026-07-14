@@ -41,6 +41,7 @@ import uniffi.conduit_core.ProjectSession
 private enum class RightPaneTab(val label: String) {
     Terminal("Terminal"),
     Browser("Browser"),
+    Changes("Changes"),
     Info("Info"),
 }
 
@@ -59,12 +60,24 @@ fun NeonTabletRightPane(store: SessionStore, session: ProjectSession) {
             previews[session.id]?.url?.let { resolvePreviewUrl(endpoint.httpBaseUrl, it) } != null
         }
     }
-    val visibleTabs = if (showBrowser) RightPaneTab.entries.toList()
-    else RightPaneTab.entries.filter { it != RightPaneTab.Browser }
+    // Feature A "Review & Ship" (docs/PLAN-REVIEW-SHIP.md) -- Changes tab
+    // gated on the box's `features.review_ship`, probed once per endpoint
+    // the same way [ProjectScreen] gates its title-menu entry point.
+    var boxFeatures by remember { mutableStateOf<SessionStore.BoxFeatures?>(null) }
+    LaunchedEffect(endpoint) {
+        boxFeatures = store.fetchBoxFeatures(endpoint)
+    }
+    val showChanges = boxFeatures?.reviewShip == true
+    val visibleTabs = RightPaneTab.entries.filter {
+        (it != RightPaneTab.Browser || showBrowser) && (it != RightPaneTab.Changes || showChanges)
+    }
     // If the preview is withdrawn while Browser is selected, fall back to
     // Terminal (the pane's default surface).
     LaunchedEffect(showBrowser) {
         if (!showBrowser && tab == RightPaneTab.Browser) tab = RightPaneTab.Terminal
+    }
+    LaunchedEffect(showChanges) {
+        if (!showChanges && tab == RightPaneTab.Changes) tab = RightPaneTab.Terminal
     }
 
     // statusBarsPadding so the Terminal/Browser/Info tab row clears the
@@ -108,6 +121,7 @@ fun NeonTabletRightPane(store: SessionStore, session: ProjectSession) {
                     if (experimentalNativeTerminal) TermuxTerminalView(store, session, modifier = Modifier.fillMaxSize())
                     else TerminalPage(store, session)
                 RightPaneTab.Browser -> BrowserPage(store, session, BrowserMode.Preview)
+                RightPaneTab.Changes -> ChangesScreen(store, session, onDismiss = {}, embedded = true)
                 RightPaneTab.Info -> SessionInfoScreen(store, session, onDismiss = {}, embedded = true)
             }
         }

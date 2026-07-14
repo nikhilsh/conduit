@@ -36,6 +36,8 @@ class BoxFeaturesParseTest {
                 shellSessions = features?.optBoolean("shell_sessions", false) ?: false,
                 push = features?.optBoolean("push", false) ?: false,
                 ntfyUrl = if (rawNtfyUrl.isNullOrBlank()) null else rawNtfyUrl,
+                reviewShip = features?.optBoolean("review_ship", false) ?: false,
+                hibernation = features?.optBoolean("hibernation", false) ?: false,
             )
         }.getOrNull()
     }
@@ -105,5 +107,49 @@ class BoxFeaturesParseTest {
         val json = """{"features":{"push":true,"ntfy_url":"$url"}}"""
         val result = parseFeatures(json)
         assertEquals(url, result?.ntfyUrl)
+    }
+
+    // ── review_ship / hibernation (docs/PLAN-REVIEW-SHIP.md §4) ────────────
+
+    @Test fun reviewShip_present_true_parsesTrue() {
+        val json = """{"features":{"review_ship":true}}"""
+        val result = parseFeatures(json)
+        assertTrue(result!!.reviewShip)
+    }
+
+    @Test fun reviewShip_absent_defaultsFalse() {
+        // Older broker that predates review_ship -- must not break, must not
+        // dark-launch the surface.
+        val json = """{"features":{"host_metrics":true}}"""
+        val result = parseFeatures(json)
+        assertFalse(result!!.reviewShip)
+    }
+
+    @Test fun hibernation_present_true_parsesTrue() {
+        val json = """{"features":{"hibernation":true}}"""
+        val result = parseFeatures(json)
+        assertTrue(result!!.hibernation)
+    }
+
+    @Test fun hibernation_absent_defaultsFalse() {
+        val json = """{"features":{"host_metrics":true}}"""
+        val result = parseFeatures(json)
+        assertFalse(result!!.hibernation)
+    }
+
+    @Test fun reviewShipAndHibernation_bothPresent_alongsideOtherFlags() {
+        val json = """{"features":{"host_metrics":true,"push":true,"review_ship":true,"hibernation":true}}"""
+        val result = parseFeatures(json)
+        assertTrue(result!!.hostMetrics)
+        assertTrue(result.push)
+        assertTrue(result.reviewShip)
+        assertTrue(result.hibernation)
+    }
+
+    @Test fun featuresObjectMissing_reviewShipAndHibernationDefaultFalse() {
+        val json = """{"version":"1.2.3"}"""
+        val result = parseFeatures(json)
+        assertFalse(result!!.reviewShip)
+        assertFalse(result.hibernation)
     }
 }
