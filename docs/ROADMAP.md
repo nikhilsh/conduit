@@ -27,12 +27,6 @@ For wire-level / lifecycle / adapter detail, read the frozen contracts:
 
 ### Next
 
-- **Agent-memory persistence** — agent MEMORY is written into the per-session
-  ephemeral `$HOME` (`sessions/<id>/agent-home`), so it is invisible to the next
-  session and GC-reaped after retention. Persist the memory/projects subtree to
-  a stable per-project store while keeping credentials per-session ephemeral
-  (OAuth refresh-race fix). Design: `docs/PLAN-AGENT-MEMORY-PERSISTENCE.md`.
-
 - **True multi-box connect (N concurrent live links)** — deferred from R3 fix 4
   (the handoff asserted `connectBox(id)`/`primaryBoxID` already existed; they
   did not). SessionStore on both platforms holds ONE live endpoint; v0.0.149
