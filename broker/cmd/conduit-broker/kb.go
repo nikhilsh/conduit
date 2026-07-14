@@ -98,11 +98,64 @@ Options:`)
 // returns the resolved workspace dir + exit code (0 = ok).
 type dirResolver func(subDir string) (string, int)
 
+// splitFlagsAndPositionals separates a subcommand's raw args into the flag
+// tokens (recognized by fs) and the remaining positional tokens, in order.
+//
+// Go's flag.FlagSet.Parse stops at the FIRST non-flag token and treats
+// everything after it as positional -- so `kb search query --dir X` silently
+// drops --dir (it lands in fs.Args(), never parsed) and falls back to cwd.
+// This walks the whole arg list instead of stopping early, pulling out
+// --name/-name (and, for non-boolean flags, the value that follows) wherever
+// they appear, so flags are recognized regardless of position relative to
+// positional arguments like a slug or search query. Unknown flags are left
+// in place for fs.Parse to reject with its normal error.
+func splitFlagsAndPositionals(fs *flag.FlagSet, args []string) (flagArgs, positional []string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		var name string
+		switch {
+		case strings.HasPrefix(a, "--"):
+			name = a[2:]
+		case strings.HasPrefix(a, "-") && a != "-":
+			name = a[1:]
+		default:
+			positional = append(positional, a)
+			continue
+		}
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			// --name=value: self-contained, no lookahead needed.
+			flagArgs = append(flagArgs, a)
+			continue
+		}
+		fl := fs.Lookup(name)
+		if fl == nil {
+			// Unknown flag (or -h/-help): forward as-is so fs.Parse reports
+			// or handles it the normal way.
+			flagArgs = append(flagArgs, a)
+			continue
+		}
+		flagArgs = append(flagArgs, a)
+		if bf, ok := fl.Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+			continue
+		}
+		if i+1 < len(args) {
+			flagArgs = append(flagArgs, args[i+1])
+			i++
+		}
+	}
+	return flagArgs, positional
+}
+
 func kbList(args []string, resolve dirResolver) int {
 	fs := flag.NewFlagSet("kb list", flag.ContinueOnError)
 	dir := fs.String("dir", "", "workspace directory (default: cwd)")
 	workspace := fs.String("workspace", "", "alias for --dir")
-	_ = fs.Parse(args)
+	flagArgs, _ := splitFlagsAndPositionals(fs, args)
+	_ = fs.Parse(flagArgs)
 
 	subDir := *dir
 	if subDir == "" {
@@ -142,7 +195,8 @@ func kbGet(args []string, resolve dirResolver) int {
 	fs := flag.NewFlagSet("kb get", flag.ContinueOnError)
 	dir := fs.String("dir", "", "workspace directory (default: cwd)")
 	workspace := fs.String("workspace", "", "alias for --dir")
-	_ = fs.Parse(args)
+	flagArgs, remaining := splitFlagsAndPositionals(fs, args)
+	_ = fs.Parse(flagArgs)
 
 	subDir := *dir
 	if subDir == "" {
@@ -153,7 +207,6 @@ func kbGet(args []string, resolve dirResolver) int {
 		return code
 	}
 
-	remaining := fs.Args()
 	if len(remaining) == 0 {
 		fmt.Fprintln(os.Stderr, "kb get: requires a slug argument")
 		return 2
@@ -182,7 +235,8 @@ func kbSearch(args []string, resolve dirResolver) int {
 	fs := flag.NewFlagSet("kb search", flag.ContinueOnError)
 	dir := fs.String("dir", "", "workspace directory (default: cwd)")
 	workspace := fs.String("workspace", "", "alias for --dir")
-	_ = fs.Parse(args)
+	flagArgs, remaining := splitFlagsAndPositionals(fs, args)
+	_ = fs.Parse(flagArgs)
 
 	subDir := *dir
 	if subDir == "" {
@@ -194,7 +248,6 @@ func kbSearch(args []string, resolve dirResolver) int {
 	}
 	store := kb.NewStore(wsDir)
 
-	remaining := fs.Args()
 	if len(remaining) == 0 {
 		fmt.Fprintln(os.Stderr, "kb search: requires a query argument")
 		return 2
@@ -270,7 +323,8 @@ Usage:
 If --body is omitted, the entry body is read from stdin.`)
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
+	flagArgs, _ := splitFlagsAndPositionals(fs, args)
+	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
 
@@ -356,7 +410,8 @@ Checks:
 Exits non-zero on hard errors. Warnings are informational only.`)
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
+	flagArgs, _ := splitFlagsAndPositionals(fs, args)
+	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
 
@@ -398,7 +453,8 @@ func kbIngest(args []string, resolve dirResolver) int {
 	fs := flag.NewFlagSet("kb ingest", flag.ContinueOnError)
 	dir := fs.String("dir", "", "workspace directory (default: cwd)")
 	workspace := fs.String("workspace", "", "alias for --dir")
-	_ = fs.Parse(args)
+	flagArgs, _ := splitFlagsAndPositionals(fs, args)
+	_ = fs.Parse(flagArgs)
 
 	if !kb.ExperimentalEnabled() {
 		fmt.Fprintln(os.Stderr, "kb ingest: experimental user-box KB is OFF (set --kb-experimental / CONDUIT_KB_EXPERIMENTAL=1)")
@@ -433,7 +489,8 @@ func kbPromote(args []string, resolve dirResolver) int {
 	fs := flag.NewFlagSet("kb promote", flag.ContinueOnError)
 	dir := fs.String("dir", "", "workspace directory (default: cwd)")
 	workspace := fs.String("workspace", "", "alias for --dir")
-	_ = fs.Parse(args)
+	flagArgs, remaining := splitFlagsAndPositionals(fs, args)
+	_ = fs.Parse(flagArgs)
 
 	if !kb.ExperimentalEnabled() {
 		fmt.Fprintln(os.Stderr, "kb promote: experimental user-box KB is OFF (set --kb-experimental / CONDUIT_KB_EXPERIMENTAL=1)")
@@ -448,7 +505,6 @@ func kbPromote(args []string, resolve dirResolver) int {
 	if code != 0 {
 		return code
 	}
-	remaining := fs.Args()
 	if len(remaining) == 0 {
 		fmt.Fprintln(os.Stderr, "kb promote: requires a slug argument")
 		return 2
