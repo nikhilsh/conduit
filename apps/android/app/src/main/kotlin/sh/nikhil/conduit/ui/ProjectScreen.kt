@@ -576,14 +576,15 @@ private fun ControlsRow(
                 // after losing their header circles (fix 1 allows only
                 // drawer · identity · ⓘ up top). Hidden in the tablet
                 // chat-only pane, where the right pane owns those surfaces.
-                if (!chatOnly && showChanges) {
+                //
+                // "Review & Ship" (Feature A -- docs/PLAN-REVIEW-SHIP.md)
+                // REPLACES the legacy chat-scrape "View changes" entry when
+                // the box advertises `features.review_ship` -- matches iOS
+                // (PR #967), which shows only one of the two, never both.
+                // Old boxes / the flag off keep the legacy entry unchanged.
+                if (!chatOnly && showChanges && !showReviewShip) {
                     DropdownMenuItem(text = { Text("View changes") }, onClick = onShowChanges)
                 }
-                // "Changes" (Feature A -- docs/PLAN-REVIEW-SHIP.md): the
-                // structured diff/annotate/ship surface, gated on the
-                // broker's `features.review_ship`. Additive alongside the
-                // legacy chat-scrape "View changes" above -- old boxes keep
-                // that path unchanged.
                 if (!chatOnly && showReviewShip) {
                     DropdownMenuItem(
                         text = { Text("Review & Ship") },
