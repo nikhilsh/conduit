@@ -250,6 +250,15 @@ type AddResult struct {
 
 // Add validates, writes, and indexes a new KB entry. It runs schema, dedup,
 // and secret-scrub checks before writing.
+//
+// If knowledge/ does not exist yet, Add creates it (and, via RegenerateIndex
+// below, a fresh INDEX.md) rather than erroring -- the first `kb add` in a
+// repo bootstraps the knowledge base instead of requiring a separate init
+// step. This is intentional beyond convenience: prompt injection
+// (conduitprompt.go) self-gates on <workspace>/knowledge/INDEX.md existing,
+// so a fresh repo's first kb add is also what flips awareness-injection ON
+// for that workspace. That's the desired Phase-3 init behavior, not a side
+// effect to guard against.
 func (s *Store) Add(req AddRequest) (*AddResult, error) {
 	// Schema checks.
 	if err := validateSchema(req); err != nil {
