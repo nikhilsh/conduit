@@ -25,6 +25,16 @@ import (
 // agent will start amnesiac (same behaviour as before this fix) rather than
 // refusing to run.
 //
+// Persistent agent memory (docs/PLAN-AGENT-MEMORY-PERSISTENCE.md, Option A):
+// for claude, linkPersistentAgentState (agent_memory.go) runs BEFORE this
+// function and replaces agentHome's ".claude/projects" with a symlink into
+// the stable per-project store under <conduitRoot>/agent-state/. So writes
+// this function makes under ".claude/projects/<slug>/..." transparently land
+// in that shared store — the staged transcript (and any memory the agent
+// later writes alongside it) is visible to every future session for the same
+// project, not just this one. No code change needed here for that to work;
+// this comment just documents the interaction so it isn't a surprise.
+//
 // Parameters:
 //
 //	agentHome  — per-session ephemeral $HOME (e.g. .conduit/sessions/<id>/agent-home)
