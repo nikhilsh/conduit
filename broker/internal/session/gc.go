@@ -15,11 +15,15 @@ import (
 // they haven't been touched in `maxAge`. Live sessions (anything in
 // `m.sessions`) are always preserved.
 //
-// IMPORTANT — scan root is `sessions/` only: the sibling directory
-// `<conduitRoot>/agent-state/` is a deliberately PERSISTENT store (see
-// docs/PLAN-AGENT-MEMORY-PERSISTENCE.md Option A) that must NOT be pruned.
-// If a future change broadens `root` beyond `sessions/`, verify that
-// `agent-state/` is explicitly excluded before touching anything under it.
+// IMPORTANT — scan root is `sessions/` only: sibling directories under
+// `<conduitRoot>` are deliberately PERSISTENT stores that must NOT be
+// pruned — `agent-cred/` (the shared canonical credential dir, see
+// docs/PLAN-AGENT-CREDENTIAL-LINEAGE.md) is the current one; `agent-state/`
+// (docs/PLAN-AGENT-MEMORY-PERSISTENCE.md, superseded — see that doc's
+// status note) may still exist as a harmless leftover on boxes that ran an
+// older broker but is no longer written. If a future change broadens
+// `root` beyond `sessions/`, verify every persistent sibling dir is
+// explicitly excluded before touching anything under it.
 //
 // Eligibility is decided by the more recent of `meta.json`'s mtime and
 // the session directory's mtime — `atomicWriteFile` renames into place
