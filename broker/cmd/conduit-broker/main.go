@@ -193,18 +193,19 @@ func runUp(args []string) int {
 	srv := ws.New(store, mgr)
 	// Wire the per-identity OAuth credential store (Stage 1 of
 	// docs/PLAN-AGENT-OAUTH.md). Empty --credentials-dir disables the
-	// per-user OAuth materialization path; agents then fall back to
-	// the legacy host-mirror $HOME exactly as before this PR.
+	// app-pushed-blob overlay; sessions still resolve the shared canonical
+	// credential dir via ensureSharedCred(nil store) — Option A (the host
+	// login) if one exists, else an empty Option-B dir (agent prompts /login).
 	if credDir := strings.TrimSpace(*credentialsDir); credDir != "" {
 		if abs, err := expandHome(credDir); err == nil {
 			credStore := credentials.NewStore(abs, []byte(token))
 			srv.WithCredentials(credStore)
 			log.Printf("credentials: per-user OAuth store at %s", abs)
-			// CONDUIT_SHARED_AGENT_CREDS: pre-seed the canonical credential
-			// files at startup so broker-side fetchers (account usage, AI
-			// niceties) can read them before the first session spawns. The
-			// call is best-effort; each session spawn also calls
-			// ensureSharedCred and is not blocked by a startup seed failure.
+			// Pre-seed the shared canonical credential files at startup so
+			// broker-side fetchers (account usage, AI niceties) can read them
+			// before the first session spawns. Best-effort; each session
+			// spawn also calls ensureSharedCred and is not blocked by a
+			// startup seed failure.
 			session.SeedSharedCredentialsAtStartup(conduitRootDir(), credStore)
 		} else {
 			log.Printf("credentials: ignoring --credentials-dir %q: %v", credDir, err)

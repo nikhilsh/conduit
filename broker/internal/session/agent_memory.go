@@ -48,10 +48,13 @@ func cwdToClaudeSlug(path string) string {
 // Best-effort: any error is logged and the caller falls back to today's
 // ephemeral-only behaviour. This function NEVER blocks a session spawn.
 //
-// Flag-ON skip: when CONDUIT_SHARED_AGENT_CREDS is on, the agent's config dir
-// is already pointed at a stable, shared location (the operator's ~/.claude or
-// <conduitRoot>/agent-cred/.claude) via CLAUDE_CONFIG_DIR, so projects/ already
-// persists there naturally. Redirecting it again would interfere; skip.
+// Not called from the spawn path today: every session's CLAUDE_CONFIG_DIR
+// already points at a stable, shared location (the operator's ~/.claude or
+// <conduitRoot>/agent-cred/.claude — docs/PLAN-AGENT-CREDENTIAL-LINEAGE.md),
+// so projects/ already persists there natively and redirecting it again
+// would interfere. Retained (and directly unit-tested below) as the
+// documented mechanism, in case a future provider needs a per-project
+// symlink into a stable store outside the shared canonical config dir.
 func linkPersistentAgentState(ephemeralHome, conduitRoot, provider, workspaceDir string) error {
 	if ephemeralHome == "" || conduitRoot == "" || workspaceDir == "" {
 		return nil

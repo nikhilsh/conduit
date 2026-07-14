@@ -321,13 +321,11 @@ func TestManagerModelCatalogStatusIncludesPendingAndError(t *testing.T) {
 }
 
 // TestCatalogExtraEnvSharedCreds verifies the core invariant of the
-// model-catalog probe fix: when CONDUIT_SHARED_AGENT_CREDS is on and an app
-// credential blob is present (forcing Option B), catalogExtraEnv returns
-// CLAUDE_CONFIG_DIR and CODEX_HOME pointing at the broker-owned agent-cred
-// dirs — NOT empty (which was the bug: the probe was inheriting the broker
-// process env, authenticating as the host-login account). When the flag is
-// off, catalogExtraEnv must return nil (no env injection; byte-identical to
-// pre-fix behaviour).
+// model-catalog probe fix: when an app credential blob is present (forcing
+// Option B), catalogExtraEnv returns CLAUDE_CONFIG_DIR and CODEX_HOME
+// pointing at the broker-owned agent-cred dirs — NOT empty (which was the
+// bug: the probe was inheriting the broker process env, authenticating as
+// the host-login account).
 func TestCatalogExtraEnvSharedCreds(t *testing.T) {
 	// Build a minimal anthropic blob with a far-future expiresAt so the
 	// blob-wins branch in resolveSharedCred fires (Option B → broker-owned
@@ -355,27 +353,10 @@ func TestCatalogExtraEnvSharedCreds(t *testing.T) {
 		t.Fatalf("store.Set: %v", err)
 	}
 
-	// Subtest 1: flag OFF — extraEnv must be nil.
-	t.Run("flag_off", func(t *testing.T) {
-		t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "")
-		root := testRoot(t)
-		reg := testRegistry(t, root, map[string]string{"claude": idleScript("env-off")})
-		m := NewManager(reg)
-		t.Cleanup(m.Close)
-		m.conduitRoot = conduitDir
-		m.credStore = store
-
-		got := m.catalogExtraEnv()
-		if len(got) != 0 {
-			t.Fatalf("flag OFF: expected nil/empty extraEnv, got %v", got)
-		}
-	})
-
-	// Subtest 2: flag ON with a valid blob (Option B) — extraEnv must contain
+	// Subtest 1: a valid blob (Option B) — extraEnv must contain
 	// CLAUDE_CONFIG_DIR and CODEX_HOME pointing at the broker-owned dirs under
 	// conduitRoot/agent-cred.
-	t.Run("flag_on_option_b", func(t *testing.T) {
-		t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "1")
+	t.Run("option_b", func(t *testing.T) {
 		root := testRoot(t)
 		reg := testRegistry(t, root, map[string]string{"claude": idleScript("env-on")})
 		m := NewManager(reg)
@@ -385,7 +366,7 @@ func TestCatalogExtraEnvSharedCreds(t *testing.T) {
 
 		got := m.catalogExtraEnv()
 		if len(got) == 0 {
-			t.Fatal("flag ON: expected non-empty extraEnv")
+			t.Fatal("expected non-empty extraEnv")
 		}
 
 		// Build a lookup map from the "K=V" pairs.
@@ -417,10 +398,9 @@ func TestCatalogExtraEnvSharedCreds(t *testing.T) {
 		t.Logf("extraEnv: %v", got)
 	})
 
-	// Subtest 3: flag ON but nil credStore — must not panic, must return
-	// non-empty env (Option A: host-home .claude/.codex) or at minimum not nil.
-	t.Run("flag_on_nil_store", func(t *testing.T) {
-		t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "1")
+	// Subtest 2: nil credStore — must not panic, must return non-empty env
+	// (Option A: host-home .claude/.codex) or at minimum not nil.
+	t.Run("nil_store", func(t *testing.T) {
 		root := testRoot(t)
 		reg := testRegistry(t, root, map[string]string{"claude": idleScript("env-nilstore")})
 		m := NewManager(reg)

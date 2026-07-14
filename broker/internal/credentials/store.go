@@ -356,7 +356,7 @@ func (s *Store) Materialize(provider, ephemeralHome string) error {
 // ~/.claude or <conduitRoot>/agent-cred/.claude), not a parent "HOME". The
 // directory is created with mode 0700 if absent; the file lands with mode 0600.
 // Atomic write (temp+rename in the same dir). Used by the shared-credential
-// lineage fix (CONDUIT_SHARED_AGENT_CREDS) to seed the one canonical file that
+// lineage fix (docs/PLAN-AGENT-CREDENTIAL-LINEAGE.md) to seed the one canonical file that
 // every session reads through CLAUDE_CONFIG_DIR / CODEX_HOME.
 //
 // Returns os.ErrNotExist when no credential is stored for `provider`.

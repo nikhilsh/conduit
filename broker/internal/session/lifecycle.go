@@ -101,12 +101,12 @@ func (s *Session) commandEnv(extra map[string]string) []string {
 				continue
 			}
 			// Strip CLI config-dir relocation vars (CLAUDE_CONFIG_DIR /
-			// CODEX_HOME) unconditionally: they are re-injected below via
-			// pairs exactly as the flag-on or flag-off path requires. A
-			// stale value from a previous broker deployment (e.g. a systemd
-			// unit that has CLAUDE_CONFIG_DIR= in its EnvironmentFile) would
-			// otherwise leak into sessions that use the per-session HOME path,
-			// routing the agent at the wrong credential directory.
+			// CODEX_HOME) unconditionally: they are re-injected below from
+			// s.sharedCredConfigEnv, which always points at the shared
+			// canonical credential dir (credseed.go). A stale value from a
+			// previous broker deployment (e.g. a systemd unit that still has
+			// CLAUDE_CONFIG_DIR= in its EnvironmentFile) would otherwise leak
+			// into the session, routing the agent at the wrong dir.
 			if k == "CLAUDE_CONFIG_DIR" || k == "CODEX_HOME" {
 				continue
 			}
@@ -138,28 +138,21 @@ func (s *Session) commandEnv(extra map[string]string) []string {
 		// refuses.
 		"IS_SANDBOX": "1",
 	}
-	// docs/PLAN-AGENT-OAUTH.md §G.2: when a per-session ephemeral
-	// agent home was materialized, point the agent process at it via
-	// HOME. Codex additionally honours $CODEX_HOME for its auth.json
-	// path, so we set both to make the lookup explicit and
-	// host-cwd-independent. When agentHomeDir is empty, we leave HOME
-	// alone — the agent inherits the broker process's HOME, exactly
-	// the legacy host-mirror behaviour.
+	// docs/PLAN-AGENT-OAUTH.md §G.2: when a per-session ephemeral agent home
+	// was materialized, point the agent process at it via HOME — it still
+	// holds incidental per-session state (theme/onboarding .claude.json, any
+	// MCP config, the opencode mirror). When agentHomeDir is empty, HOME is
+	// left alone and the agent inherits the broker process's HOME.
 	if s.agentHomeDir != "" {
 		pairs["HOME"] = s.agentHomeDir
-		if s.Assistant == "codex" {
-			pairs["CODEX_HOME"] = filepath.Join(s.agentHomeDir, ".codex")
-		}
 	}
-	// CONDUIT_SHARED_AGENT_CREDS (doc PLAN-AGENT-CREDENTIAL-LINEAGE.md):
-	// when the flag is on, retarget the CLI config-dir env vars
-	// (CLAUDE_CONFIG_DIR / CODEX_HOME) at the shared canonical dirs so every
-	// session reads ONE credential lineage head instead of a private copy.
-	// These intentionally OVERRIDE the per-session CODEX_HOME set above (and
-	// add CLAUDE_CONFIG_DIR) — both providers are set so the interactive
-	// Terminal tab is logged in for whichever CLI the user runs. The map is
-	// nil/empty on the default flag-off path, so this loop is a no-op there
-	// and commandEnv stays byte-for-byte unchanged.
+	// docs/PLAN-AGENT-CREDENTIAL-LINEAGE.md: retarget the CLI config-dir env
+	// vars (CLAUDE_CONFIG_DIR for claude, CODEX_HOME for codex) at the shared
+	// canonical credential dir (credseed.go) so every session reads ONE
+	// credential lineage head — never a private per-session copy. Both
+	// providers are always set (raceProviders()), so the interactive Terminal
+	// tab is logged in for whichever CLI the user runs, not just the
+	// session's own agent.
 	for k, v := range s.sharedCredConfigEnv {
 		pairs[k] = v
 	}
@@ -201,10 +194,10 @@ func providerForAssistant(assistant string) string {
 }
 
 // allCredentialProviders is every agent-credential provider the broker
-// knows how to materialize into a session's ephemeral HOME. Used to log
-// the interactive Terminal tab into BOTH agents regardless of which one
-// (if any) the session's own agent is. Keep in sync with
-// providerForAssistant / mirrorHostCredentials.
+// knows about (WS-1.2 manifest contract). Only "opencode" is still
+// materialized into a session's ephemeral HOME (mirrorOpencodeCredentials);
+// anthropic/openai are relocated to the shared canonical config dir
+// (credseed.go) instead. Keep in sync with providerForAssistant.
 func allCredentialProviders() []string {
 	return []string{"anthropic", "openai", "opencode"}
 }
@@ -254,57 +247,32 @@ func hostHomeDir() string {
 	return h
 }
 
-// mirrorHostCredentials copies the broker's own per-user agent
-// credential files into the per-session ephemeral HOME so each spawned
-// agent gets its own private copy. This is the fallback used when the
-// in-app credStore doesn't have a stored OAuth blob yet (i.e. before
-// OAuth Stage 2 is wired up on the iOS/Android client). Without it,
-// every concurrent claude/codex would share the broker's real
-// `.credentials.json` and race each other on refresh-token rotation —
-// only the last writer keeps a valid token, and all peers get bounced
-// to "Please run /login".
+// mirrorOpencodeCredentials copies the broker's own opencode auth/config
+// files into the per-session ephemeral HOME so each spawned `opencode serve`
+// process picks up whatever provider the operator configured on the host via
+// `opencode providers login`. opencode authenticates via non-rotating env
+// API keys / a local SQLite auth store — it is NOT in the single-use-
+// refresh-token race the shared canonical config dir (credseed.go) exists to
+// fix, so it keeps its own per-session mirror instead of being relocated.
 //
-// Per provider, the mirror copies:
+// opencode stores auth credentials at ~/.local/share/opencode/auth.json (its
+// XDG data dir, resolved relative to HOME) and its per-user config at
+// ~/.config/opencode/opencode.jsonc (XDG config dir). Without the mirror, the
+// session HOME is empty and opencode falls back to the built-in "OpenCode
+// Zen" free provider regardless of what is configured on the host.
 //
-//   - anthropic → ~/.claude/.credentials.json + ~/.claude.json
-//   - openai    → ~/.codex/auth.json + ~/.codex/config.toml
-//
-// Missing source files are silently skipped (the agent will prompt for
-// /login on first use — a clean error rather than a race). Returns the
-// first hard error (mkdir / read / atomic-write); callers should log
-// and continue so a broken mirror doesn't refuse the session.
-func mirrorHostCredentials(provider, ephemeralHome string) error {
+// Missing source files are silently skipped (opencode falls back to Zen — a
+// clean degrade rather than a race). Returns the first hard error (mkdir /
+// read / atomic-write); callers should log and continue so a broken mirror
+// doesn't refuse the session.
+func mirrorOpencodeCredentials(ephemeralHome string) error {
 	host := hostHomeDir()
 	if host == "" {
 		return errors.New("host home unresolved")
 	}
-	var sources []hostCredSource
-	switch provider {
-	case "anthropic":
-		sources = []hostCredSource{
-			{src: filepath.Join(host, ".claude", ".credentials.json"), dst: filepath.Join(ephemeralHome, ".claude", ".credentials.json"), mode: 0o600},
-			{src: filepath.Join(host, ".claude.json"), dst: filepath.Join(ephemeralHome, ".claude.json"), mode: 0o600},
-		}
-	case "openai":
-		sources = []hostCredSource{
-			{src: filepath.Join(host, ".codex", "auth.json"), dst: filepath.Join(ephemeralHome, ".codex", "auth.json"), mode: 0o600},
-			{src: filepath.Join(host, ".codex", "config.toml"), dst: filepath.Join(ephemeralHome, ".codex", "config.toml"), mode: 0o644},
-		}
-	case "opencode":
-		// opencode stores auth credentials at ~/.local/share/opencode/auth.json
-		// (its XDG data dir, resolved relative to HOME) and its per-user config
-		// at ~/.config/opencode/opencode.jsonc (XDG config dir). Both must be
-		// mirrored into the ephemeral HOME so the spawned `opencode serve`
-		// process picks up any provider credentials the operator configured via
-		// `opencode providers login`. Without the mirror, the session HOME is
-		// empty and opencode falls back to the built-in "OpenCode Zen" free
-		// provider regardless of what is configured on the host.
-		sources = []hostCredSource{
-			{src: filepath.Join(host, ".local", "share", "opencode", "auth.json"), dst: filepath.Join(ephemeralHome, ".local", "share", "opencode", "auth.json"), mode: 0o600},
-			{src: filepath.Join(host, ".config", "opencode", "opencode.jsonc"), dst: filepath.Join(ephemeralHome, ".config", "opencode", "opencode.jsonc"), mode: 0o644},
-		}
-	default:
-		return fmt.Errorf("unknown provider %q", provider)
+	sources := []hostCredSource{
+		{src: filepath.Join(host, ".local", "share", "opencode", "auth.json"), dst: filepath.Join(ephemeralHome, ".local", "share", "opencode", "auth.json"), mode: 0o600},
+		{src: filepath.Join(host, ".config", "opencode", "opencode.jsonc"), dst: filepath.Join(ephemeralHome, ".config", "opencode", "opencode.jsonc"), mode: 0o644},
 	}
 	anyCopied := false
 	for _, s := range sources {

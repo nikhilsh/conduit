@@ -208,55 +208,39 @@ func TestLinkPersistentAgentState_SharedStoreAcrossSessions(t *testing.T) {
 	}
 }
 
-// TestLinkPersistentAgentState_KeyedOnPreRemapCWD drives a full spawn with
-// CONDUIT_SESSION_WORKTREE enabled and confirms the persistent-memory
-// symlink is keyed on the ORIGINAL requested cwd (the real project), not the
-// per-session worktree path maybeRemapToWorktree rewrites s.workspaceDir to.
-// Keying on the remapped path would give every worktree of the same repo its
-// own memory bucket instead of one memory per real project (owner decision,
-// docs/PLAN-AGENT-MEMORY-PERSISTENCE.md §6.4).
+// TestLinkPersistentAgentState_KeyedOnPreRemapCWD confirms linkPersistentAgentState
+// keys its symlink on whatever workspaceDir it is GIVEN — so a caller that
+// passes the ORIGINAL requested cwd (the real project), not a per-session
+// worktree path a worktree remap rewrote workspaceDir to, gets a symlink
+// keyed on the real project. Keying on a remapped path would give every
+// worktree of the same repo its own memory bucket instead of one memory per
+// real project (owner decision, docs/PLAN-AGENT-MEMORY-PERSISTENCE.md §6.4).
+// (This is a pure function-level proof of the invariant; linkPersistentAgentState
+// is no longer wired into the spawn path — see docs/PLAN-AGENT-CREDENTIAL-LINEAGE.md
+// §7 — because the shared canonical config dir now persists projects/
+// natively, but the invariant it documents remains worth pinning.)
 func TestLinkPersistentAgentState_KeyedOnPreRemapCWD(t *testing.T) {
-	t.Setenv("CONDUIT_SESSION_WORKTREE", "1")
-	t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "") // exercise the per-session-copy path
-
-	root := testRoot(t)
-
-	// Real project repo the "user" requested — this is the pre-remap cwd.
-	repo := t.TempDir()
-	initRepoWithCommit(t, repo)
-
-	reg := testRegistry(t, root, map[string]string{
-		"claude": idleScript("wt-mem-ready"),
-	})
-	m := NewManager(reg)
-	t.Cleanup(m.Close)
-
-	s, _, err := m.GetOrCreateWithOptions("wt-mem-1", "claude", CreateOptions{CWD: repo})
-	if err != nil {
-		t.Fatalf("GetOrCreateWithOptions: %v", err)
-	}
-	waitForOutput(t, s, "wt-mem-ready")
-
-	// Sanity: the worktree remap actually happened, otherwise this test
-	// isn't exercising the bug it's guarding against.
-	if s.workspaceDir == repo {
-		t.Fatalf("setup: expected s.workspaceDir to be remapped to a worktree, still equals repo %q", repo)
-	}
-	if !isGitRepo(s.workspaceDir) {
-		t.Fatalf("setup: s.workspaceDir %q is not a git worktree", s.workspaceDir)
+	root := t.TempDir()
+	ephemeral := filepath.Join(root, "sessions", "wt-mem-1", "agent-home")
+	if err := os.MkdirAll(ephemeral, 0o700); err != nil {
+		t.Fatalf("mkdir ephemeral: %v", err)
 	}
 
-	if s.agentHomeDir == "" {
-		t.Fatalf("agentHomeDir empty")
+	repo := "/root/developer/projects/conduit"
+	worktree := "/root/developer/projects/conduit/.worktrees/wt-mem-1"
+
+	if err := linkPersistentAgentState(ephemeral, root, "anthropic", repo); err != nil {
+		t.Fatalf("linkPersistentAgentState: %v", err)
 	}
-	linkPath := filepath.Join(s.agentHomeDir, ".claude", "projects")
+
+	linkPath := filepath.Join(ephemeral, ".claude", "projects")
 	target, err := os.Readlink(linkPath)
 	if err != nil {
 		t.Fatalf("readlink %s: %v", linkPath, err)
 	}
 
 	repoSlug := cwdToClaudeSlug(repo)
-	worktreeSlug := cwdToClaudeSlug(s.workspaceDir)
+	worktreeSlug := cwdToClaudeSlug(worktree)
 
 	if !strings.HasSuffix(target, filepath.Join("anthropic", repoSlug, "projects")) {
 		t.Fatalf("symlink target %q not keyed on the pre-remap repo slug %q", target, repoSlug)

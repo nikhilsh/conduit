@@ -1,7 +1,9 @@
 package session
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,81 @@ import (
 
 	"github.com/nikhilsh/conduit/broker/internal/credentials"
 )
+
+func anthropicBlob(expiresAt int64) []byte {
+	return []byte(fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT","expiresAt":%d,"subscriptionType":"max"}}`, expiresAt))
+}
+
+func openaiBlob(exp int64) []byte {
+	enc := base64.RawURLEncoding
+	header := enc.EncodeToString([]byte(`{"alg":"none"}`))
+	payload := enc.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d}`, exp)))
+	return []byte(fmt.Sprintf(`{"tokens":{"access_token":"%s.%s.sig"}}`, header, payload))
+}
+
+func TestCredentialExpiryMillis(t *testing.T) {
+	if got, ok := credentialExpiryMillis("anthropic", anthropicBlob(1780763004455)); !ok || got != 1780763004455 {
+		t.Fatalf("anthropic: got (%d,%v), want (1780763004455,true)", got, ok)
+	}
+	if got, ok := credentialExpiryMillis("openai", openaiBlob(1780763004)); !ok || got != 1780763004000 {
+		t.Fatalf("openai jwt exp: got (%d,%v), want (1780763004000,true)", got, ok)
+	}
+	if got, ok := credentialExpiryMillis("openai", []byte(`{"tokens":{"access_token":"not-a-jwt"},"last_refresh":"2026-05-29T07:47:01.698078980Z"}`)); !ok || got != time.Date(2026, 5, 29, 7, 47, 1, 698078980, time.UTC).UnixMilli() {
+		t.Fatalf("openai last_refresh fallback: got (%d,%v)", got, ok)
+	}
+	for _, bad := range [][]byte{nil, []byte("{"), []byte(`{}`), []byte(`{"claudeAiOauth":{}}`)} {
+		if _, ok := credentialExpiryMillis("anthropic", bad); ok {
+			t.Fatalf("anthropic %q: want ok=false", bad)
+		}
+	}
+	if _, ok := credentialExpiryMillis("ollama", anthropicBlob(1)); ok {
+		t.Fatal("unknown provider: want ok=false")
+	}
+}
+
+// seedHostClaude writes a host-login credentials file with the given
+// expiry under a temp CONDUIT_HOST_HOME.
+func seedHostClaude(t *testing.T, expiresAt int64) string {
+	t.Helper()
+	hostHome := t.TempDir()
+	t.Setenv("CONDUIT_HOST_HOME", hostHome)
+	if err := os.MkdirAll(filepath.Join(hostHome, ".claude"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hostHome, ".claude", ".credentials.json"), anthropicBlob(expiresAt), 0o600); err != nil {
+		t.Fatalf("write host creds: %v", err)
+	}
+	return hostHome
+}
+
+func TestUseHostOverAppBlob_ExpiredBlobLosesToFresherHost(t *testing.T) {
+	now := time.Now().UnixMilli()
+	seedHostClaude(t, now+3*time.Hour.Milliseconds())
+	skip, _, _ := useHostOverAppBlob("anthropic", anthropicBlob(now-time.Hour.Milliseconds()))
+	if !skip {
+		t.Fatal("expired blob + fresh host: want skip=true")
+	}
+}
+
+func TestUseHostOverAppBlob_ValidBlobAlwaysWins(t *testing.T) {
+	// Host is fresher, but the blob is still valid — the app account
+	// may be a deliberately different identity, so it must be honored.
+	now := time.Now().UnixMilli()
+	seedHostClaude(t, now+5*time.Hour.Milliseconds())
+	skip, _, _ := useHostOverAppBlob("anthropic", anthropicBlob(now+time.Hour.Milliseconds()))
+	if skip {
+		t.Fatal("valid blob: want skip=false even when host is fresher")
+	}
+}
+
+func TestUseHostOverAppBlob_NoHostKeepsBlob(t *testing.T) {
+	hostHome := t.TempDir() // empty — no .claude login on the host
+	t.Setenv("CONDUIT_HOST_HOME", hostHome)
+	skip, _, _ := useHostOverAppBlob("anthropic", anthropicBlob(1))
+	if skip {
+		t.Fatal("expired blob but no host login: want skip=false (blob is all we have)")
+	}
+}
 
 // envMap collapses the commandEnv []string ("K=V") into a map for asserting.
 func envMap(t *testing.T, env []string) map[string]string {
@@ -32,47 +109,19 @@ func emptyHostHome(t *testing.T) string {
 	return h
 }
 
-// --- (a) flag OFF: env is NOT retargeted and the copy path still runs ---
+// --- credLookupHome always resolves to the shared canonical home ---
 
-func TestSharedCreds_FlagOff_CodexHomeIsPerSession(t *testing.T) {
-	// Flag unset: a codex session's CODEX_HOME must point at the per-session
-	// <agentHome>/.codex, and the session's sharedCredConfigEnv must be nil
-	// (the flag-off spawn never populates it, so no shared-dir override is
-	// applied). The commandEnv CODEX_HOME pair overrides any inherited env.
-	t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "")
-	if sharedAgentCredsEnabled() {
-		t.Fatal("flag must be OFF when CONDUIT_SHARED_AGENT_CREDS is empty")
-	}
+func TestSharedCreds_CredLookupHomeIsSharedHome(t *testing.T) {
 	home := t.TempDir()
-	s := &Session{ID: "off", Assistant: "codex", agentHomeDir: home}
-	// sharedCredConfigEnv intentionally left nil — the flag-off spawn never
-	// populates it.
-	if s.sharedCredConfigEnv != nil {
-		t.Fatal("flag-off: sharedCredConfigEnv must be nil")
-	}
-	env := envMap(t, s.commandEnv(nil))
-	wantCodex := filepath.Join(home, ".codex")
-	if env["CODEX_HOME"] != wantCodex {
-		t.Fatalf("flag-off CODEX_HOME=%q, want per-session %q", env["CODEX_HOME"], wantCodex)
-	}
-	// commandEnv pairs set CODEX_HOME explicitly; the sharedCredConfigEnv is
-	// nil so no CLAUDE_CONFIG_DIR override is added by the session (it may
-	// still be inherited from the broker process env, which is fine).
-}
-
-func TestSharedCreds_FlagOff_CredLookupHomeIsAgentHome(t *testing.T) {
-	t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "")
-	home := t.TempDir()
-	s := &Session{ID: "off2", Assistant: "claude", agentHomeDir: home, sharedCredHome: "/should/be/ignored"}
+	s := &Session{ID: "cred-lookup", Assistant: "claude", agentHomeDir: "/should/be/ignored", sharedCredHome: home}
 	if got := s.credLookupHome(); got != home {
-		t.Fatalf("flag-off credLookupHome=%q, want agentHomeDir %q", got, home)
+		t.Fatalf("credLookupHome=%q, want sharedCredHome %q", got, home)
 	}
 }
 
-// --- (b) flag ON + host login present: Option A, env == host dir, no copy ---
+// --- host login present: Option A, env == host dir, no copy ---
 
-func TestSharedCreds_FlagOn_HostLogin_OptionA(t *testing.T) {
-	t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "1")
+func TestSharedCreds_HostLogin_OptionA(t *testing.T) {
 	now := time.Now().UnixMilli()
 	hostHome := seedHostClaude(t, now+3*time.Hour.Milliseconds()) // writes ~/.claude/.credentials.json
 	// Also give the host a codex login so both providers resolve Option A.
@@ -129,10 +178,9 @@ func TestSharedCreds_FlagOn_HostLogin_OptionA(t *testing.T) {
 	}
 }
 
-// --- (c) flag ON + no host + valid app blob: Option B seeded from blob ---
+// --- no host + valid app blob: Option B seeded from blob ---
 
-func TestSharedCreds_FlagOn_AppBlob_OptionB_SeedsCanonical(t *testing.T) {
-	t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "1")
+func TestSharedCreds_AppBlob_OptionB_SeedsCanonical(t *testing.T) {
 	emptyHostHome(t) // no host login at all
 	now := time.Now().UnixMilli()
 
@@ -184,10 +232,9 @@ func TestSharedCreds_FlagOn_AppBlob_OptionB_SeedsCanonical(t *testing.T) {
 	}
 }
 
-// --- (d) flag ON + no host + no blob: clean no-creds state, no crash ---
+// --- no host + no blob: clean no-creds state, no crash ---
 
-func TestSharedCreds_FlagOn_NoHost_NoBlob_CleanNoCreds(t *testing.T) {
-	t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "1")
+func TestSharedCreds_NoHost_NoBlob_CleanNoCreds(t *testing.T) {
 	emptyHostHome(t)
 	conduitRoot := t.TempDir()
 
@@ -211,10 +258,9 @@ func TestSharedCreds_FlagOn_NoHost_NoBlob_CleanNoCreds(t *testing.T) {
 	}
 }
 
-// --- (e) precedence: valid app blob WINS over a present host login (→ B) ---
+// --- precedence: valid app blob WINS over a present host login (→ B) ---
 
-func TestSharedCreds_FlagOn_Precedence_ValidBlobBeatsHostLogin(t *testing.T) {
-	t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "1")
+func TestSharedCreds_Precedence_ValidBlobBeatsHostLogin(t *testing.T) {
 	now := time.Now().UnixMilli()
 	// Host IS logged into claude AND fresher than the blob...
 	hostHome := seedHostClaude(t, now+5*time.Hour.Milliseconds())
@@ -265,8 +311,7 @@ func TestSharedCreds_FlagOn_Precedence_ValidBlobBeatsHostLogin(t *testing.T) {
 
 // --- expired blob falls through to Option A (host wins, useHostOverAppBlob) ---
 
-func TestSharedCreds_FlagOn_ExpiredBlob_FallsToHostOptionA(t *testing.T) {
-	t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "1")
+func TestSharedCreds_ExpiredBlob_FallsToHostOptionA(t *testing.T) {
 	now := time.Now().UnixMilli()
 	hostHome := seedHostClaude(t, now+3*time.Hour.Milliseconds()) // fresh host
 
@@ -292,8 +337,7 @@ func TestSharedCreds_FlagOn_ExpiredBlob_FallsToHostOptionA(t *testing.T) {
 
 // --- multi-session structural proof: all sessions share one canonical dir ---
 
-func TestSharedCreds_FlagOn_MultiSession_SameCanonicalDir(t *testing.T) {
-	t.Setenv("CONDUIT_SHARED_AGENT_CREDS", "1")
+func TestSharedCreds_MultiSession_SameCanonicalDir(t *testing.T) {
 	emptyHostHome(t)
 	now := time.Now().UnixMilli()
 
