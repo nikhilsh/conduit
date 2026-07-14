@@ -629,7 +629,15 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			// both the seeded .claude.json and staged transcripts land in the shared
 			// store and are discoverable by future sessions. Best-effort: a failure
 			// is logged and the session continues with today's ephemeral behaviour.
-			if err := linkPersistentAgentState(ephemeral, s.conduitRoot, provider, s.workspaceDir); err != nil {
+			//
+			// Key on s.commandDir(adapter) — the ORIGINAL requested cwd/repo path —
+			// not s.workspaceDir, which may have been rewritten by
+			// maybeRemapToWorktree (manager.go:465) to a per-session worktree path
+			// under a DIFFERENT directory. Keying on the remapped path would give
+			// every worktree of the same repo its own memory bucket instead of one
+			// memory per real project. commandDir is a pure/idempotent lookup (no
+			// side effects), safe to call again here.
+			if err := linkPersistentAgentState(ephemeral, s.conduitRoot, provider, s.commandDir(adapter)); err != nil {
 				fmt.Fprintf(os.Stderr, "session %s: linkPersistentAgentState: %v (falling back to ephemeral projects)\n", s.ID, err)
 			}
 			// Seed a theme + onboarding marker so Claude Code's first-run

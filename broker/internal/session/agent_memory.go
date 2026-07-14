@@ -57,10 +57,32 @@ func linkPersistentAgentState(ephemeralHome, conduitRoot, provider, workspaceDir
 		return nil
 	}
 
-	// Only support claude (anthropic) in this release. Codex's memory
-	// subdirectory within $CODEX_HOME was not confirmed from the broker code —
-	// pulling an unverified subdir into a shared store risks including
-	// auth.json. Codex is left as a flagged follow-up (see PR description).
+	// Only support claude (anthropic) in this release.
+	//
+	// TODO(codex memory persistence): live-inspected `~/.codex` on the box
+	// (codex-cli 0.143.0). Findings:
+	//   - `.codex/memories/` DOES exist as a directory decoupled from
+	//     `auth.json` (a sibling file, not nested under memories/), so a
+	//     credential-safe redirect target is plausible file-wise.
+	//   - BUT unlike claude's `.claude/projects/<slug>/`, codex's memory is
+	//     NOT keyed per project on disk: `memories/` is one flat tree
+	//     (MEMORY.md, raw_memories.md, rollout_summaries/, its own internal
+	//     git repo) shared across every project the installation has ever
+	//     touched. `config.toml`'s `[projects."<path>"]` blocks only carry
+	//     `trust_level`, not memory scoping. There's also a top-level
+	//     `memories_1.sqlite` (tables: jobs, stage1_outputs) that isn't even
+	//     under `memories/`.
+	//   - Symlinking a per-`<provider,slug>` `agent-state/openai/<slug>/`
+	//     store onto this GLOBAL tree would either (a) silently fragment one
+	//     continuous cross-project memory into isolated per-project copies
+	//     the CLI never expected, or (b) require sharing ONE global codex
+	//     store across all projects — a different grain than the claude
+	//     design and a real product-behavior question, not a plumbing one.
+	// Given that ambiguity, codex is shipped OUT of v1. Revisit once codex's
+	// memory model is confirmed either project-scoped (redirect it like
+	// claude) or intentionally global (redirect once, un-keyed, with an
+	// explicit owner decision — do NOT invent a scoping the CLI doesn't have).
+	// Under no circumstances redirect anything that could pull in auth.json.
 	if provider != "anthropic" {
 		return nil
 	}
