@@ -27,6 +27,10 @@ import sh.nikhil.conduit.auth.OAuthRequest
 import sh.nikhil.conduit.state.NetworkReachabilityObserver
 import sh.nikhil.conduit.state.ReachabilityEvent
 import sh.nikhil.conduit.state.ReachabilityStatus
+import sh.nikhil.conduit.ui.ChangesJson
+import sh.nikhil.conduit.ui.DiffResponse
+import sh.nikhil.conduit.ui.DiffScope
+import sh.nikhil.conduit.ui.GitState
 import sh.nikhil.conduit.ui.SlashCommandClass
 import sh.nikhil.conduit.ui.SlashCommandRegistry
 import org.json.JSONArray
@@ -1140,6 +1144,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
      */
     private val _sessionBox = MutableStateFlow<Map<String, String>>(emptyMap())
     val sessionBox: StateFlow<Map<String, String>> = _sessionBox.asStateFlow()
+
+    /**
+     * Session ids the broker's `recoverable` array marked `hibernated:true`
+     * (or `phase:"hibernated"`) on the last reconcile -- Feature "Review &
+     * Ship" hibernation chip (docs/PLAN-REVIEW-SHIP.md). A hibernated
+     * session is intentionally NOT auto-rejoined; the home row stays but
+     * shows a subtle "Paused" chip instead. No settings UI in this pass.
+     */
+    private val _hibernatedIds = MutableStateFlow<Set<String>>(emptySet())
+    val hibernatedIds: StateFlow<Set<String>> = _hibernatedIds.asStateFlow()
 
     /** Mutate the pending queue and persist it in one step. */
     private fun updatePendingChats(transform: (PendingChatQueue) -> PendingChatQueue) {
@@ -2385,10 +2399,22 @@ class SessionStore : ViewModel(), ConduitDelegate {
             // absent on older brokers (null treated as empty).
             val recoverableArr = obj.optJSONArray("recoverable") ?: JSONArray()
             val recoverableIDs = mutableSetOf<String>()
+            // Hibernation chip (Feature A, tiny slice): an entry can carry
+            // "hibernated":true or "phase":"hibernated" -- collected
+            // separately so the reconcile loop below can still decide
+            // auto-rejoin fate from recoverableIDs unchanged, while the UI
+            // gets a distinct "this one's paused" signal.
+            val hibernatedIDs = mutableSetOf<String>()
             for (ri in 0 until recoverableArr.length()) {
-                val rid = recoverableArr.getJSONObject(ri).optString("id", "")
-                if (rid.isNotEmpty()) recoverableIDs += rid
+                val robj = recoverableArr.getJSONObject(ri)
+                val rid = robj.optString("id", "")
+                if (rid.isEmpty()) continue
+                recoverableIDs += rid
+                val hibernated = robj.optBoolean("hibernated", false) ||
+                    robj.optString("phase", "").equals("hibernated", ignoreCase = true)
+                if (hibernated) hibernatedIDs += rid
             }
+            _hibernatedIds.value = hibernatedIDs
 
             val aliveIDs = mutableSetOf<String>()
             val deleted = _deletedIds.value
@@ -4856,6 +4882,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val sessionFork: Boolean = false,
         /** Broker supports read-only live-tail of a running session. */
         val sessionWatch: Boolean = false,
+        /**
+         * Broker exposes the Review & Ship git surface (structured diff +
+         * stage/commit/push/PR, `features.review_ship`). Gates the Changes
+         * entry point end to end -- see docs/PLAN-REVIEW-SHIP.md §4.
+         */
+        val reviewShip: Boolean = false,
+        /** Broker supports session hibernation (`features.hibernation`). */
+        val hibernation: Boolean = false,
     )
 
     /**
@@ -5153,8 +5187,194 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 sessionDiscovery = features?.optBoolean("session_discovery", false) ?: false,
                 sessionFork = features?.optBoolean("session_fork", false) ?: false,
                 sessionWatch = features?.optBoolean("session_watch", false) ?: false,
+                reviewShip = features?.optBoolean("review_ship", false) ?: false,
+                hibernation = features?.optBoolean("hibernation", false) ?: false,
             )
         }.getOrNull()
+    }
+
+    // -----------------------------------------------------------------------
+    // Review & Ship (review_ship capability) — structured git diff/state +
+    // stage/unstage/commit/push against the session's LIVE cwd
+    // (docs/PLAN-REVIEW-SHIP.md §3). Mirror of iOS SessionStore git methods.
+    // -----------------------------------------------------------------------
+
+    /**
+     * `GET /api/session/{id}/git/diff?scope=...&context=...`. Null on any
+     * network/decode failure (404 not_a_git_repo included) -- caller shows
+     * the honest empty/error state, never fabricates a diff.
+     */
+    suspend fun fetchGitDiff(sessionId: String, scope: DiffScope, context: Int = 3): DiffResponse? =
+        withContext(Dispatchers.IO) {
+            val ep = _endpoint.value
+            Telemetry.breadcrumb(
+                "review_ship", "diff_fetch_start",
+                mapOf("session" to sessionId, "scope" to scope.wire),
+            )
+            val raw = getJsonOrNull(ep, "/api/session/$sessionId/git/diff?scope=${scope.wire}&context=$context")
+            if (raw == null) {
+                Telemetry.capture(
+                    RuntimeException("git diff fetch failed"),
+                    message = "review-ship diff fetch failed",
+                    tags = mapOf("surface" to "android", "phase" to "review_ship"),
+                    extras = mapOf("session" to sessionId, "scope" to scope.wire),
+                )
+                return@withContext null
+            }
+            runCatching { ChangesJson.parseDiff(JSONObject(raw)) }
+                .onSuccess {
+                    Telemetry.breadcrumb(
+                        "review_ship", "diff_fetch_finish",
+                        mapOf("session" to sessionId, "files" to it.files.size.toString()),
+                    )
+                }
+                .onFailure { e ->
+                    Telemetry.capture(
+                        e,
+                        message = "review-ship diff parse failed",
+                        tags = mapOf("surface" to "android", "phase" to "review_ship"),
+                        extras = mapOf("session" to sessionId),
+                    )
+                }
+                .getOrNull()
+        }
+
+    /** `GET /api/session/{id}/git/state`. Null on network/decode failure. */
+    suspend fun fetchGitState(sessionId: String): GitState? = withContext(Dispatchers.IO) {
+        val ep = _endpoint.value
+        val raw = getJsonOrNull(ep, "/api/session/$sessionId/git/state") ?: return@withContext null
+        runCatching { ChangesJson.parseGitState(JSONObject(raw)) }.getOrNull()
+    }
+
+    /**
+     * Shared POST helper for the git/stage, git/unstage, git/commit,
+     * git/push endpoints -- all reply `{"ok":bool,...}` (mirrors the
+     * existing git/commit + git/pr convention in [DiffReviewScreen]).
+     * Network failure synthesizes an `ok:false` envelope so callers never
+     * have to null-check separately from the "git failed" case.
+     */
+    private suspend fun postSessionGitAction(sessionId: String, path: String, body: JSONObject): JSONObject =
+        withContext(Dispatchers.IO) {
+            val ep = _endpoint.value
+            val base = ep.httpBaseUrl
+            if (base == null) {
+                return@withContext JSONObject().put("ok", false).put("stderr", "No active endpoint")
+            }
+            runCatching {
+                val conn = (URL("$base/api/session/$sessionId$path").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    setRequestProperty("Authorization", "Bearer ${ep.token}")
+                    setRequestProperty("Content-Type", "application/json")
+                    connectTimeout = 10_000
+                    readTimeout = 30_000
+                }
+                try {
+                    conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                    val code = conn.responseCode
+                    val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                    val text = stream?.bufferedReader()?.use { it.readText() } ?: "{}"
+                    JSONObject(text)
+                } finally {
+                    conn.disconnect()
+                }
+            }.getOrElse { e ->
+                JSONObject().put("ok", false).put("stderr", e.message ?: "Network error")
+            }
+        }
+
+    /** `POST /api/session/{id}/git/stage` `{"paths":[...]}`. */
+    suspend fun gitStage(sessionId: String, paths: List<String>): JSONObject {
+        Telemetry.breadcrumb("review_ship", "stage", mapOf("session" to sessionId, "count" to paths.size.toString()))
+        val body = JSONObject().put("paths", JSONArray().apply { paths.forEach { p -> put(p) } })
+        val result = postSessionGitAction(sessionId, "/git/stage", body)
+        if (!result.optBoolean("ok", false)) {
+            Telemetry.capture(
+                RuntimeException("git stage failed"),
+                message = "review-ship stage failed",
+                tags = mapOf("surface" to "android", "phase" to "review_ship"),
+                extras = mapOf("session" to sessionId, "stderr" to result.optString("stderr", "")),
+            )
+        }
+        return result
+    }
+
+    /** `POST /api/session/{id}/git/unstage` `{"paths":[...]}`. */
+    suspend fun gitUnstage(sessionId: String, paths: List<String>): JSONObject {
+        Telemetry.breadcrumb("review_ship", "unstage", mapOf("session" to sessionId, "count" to paths.size.toString()))
+        val body = JSONObject().put("paths", JSONArray().apply { paths.forEach { p -> put(p) } })
+        val result = postSessionGitAction(sessionId, "/git/unstage", body)
+        if (!result.optBoolean("ok", false)) {
+            Telemetry.capture(
+                RuntimeException("git unstage failed"),
+                message = "review-ship unstage failed",
+                tags = mapOf("surface" to "android", "phase" to "review_ship"),
+                extras = mapOf("session" to sessionId, "stderr" to result.optString("stderr", "")),
+            )
+        }
+        return result
+    }
+
+    /** `POST /api/session/{id}/git/commit` `{"message","all"}`. */
+    suspend fun gitCommit(sessionId: String, message: String, all: Boolean): JSONObject {
+        Telemetry.breadcrumb(
+            "review_ship", "commit_start",
+            mapOf("session" to sessionId, "all" to all.toString()),
+        )
+        val body = JSONObject().put("message", message).put("all", all)
+        val result = postSessionGitAction(sessionId, "/git/commit", body)
+        if (result.optBoolean("ok", false)) {
+            Telemetry.breadcrumb(
+                "review_ship", "commit_finish",
+                mapOf("session" to sessionId, "sha" to result.optString("commit_sha", "")),
+            )
+        } else {
+            Telemetry.capture(
+                RuntimeException("git commit failed"),
+                message = "review-ship commit failed",
+                tags = mapOf("surface" to "android", "phase" to "review_ship"),
+                extras = mapOf("session" to sessionId, "stderr" to result.optString("stderr", "")),
+            )
+        }
+        return result
+    }
+
+    /** `POST /api/session/{id}/git/push` `{}`. */
+    suspend fun gitPush(sessionId: String): JSONObject {
+        Telemetry.breadcrumb("review_ship", "push_start", mapOf("session" to sessionId))
+        val result = postSessionGitAction(sessionId, "/git/push", JSONObject())
+        if (result.optBoolean("ok", false)) {
+            Telemetry.breadcrumb("review_ship", "push_finish", mapOf("session" to sessionId))
+        } else {
+            Telemetry.capture(
+                RuntimeException("git push failed"),
+                message = "review-ship push failed",
+                tags = mapOf("surface" to "android", "phase" to "review_ship"),
+                extras = mapOf("session" to sessionId, "stderr" to result.optString("stderr", "")),
+            )
+        }
+        return result
+    }
+
+    /** `POST /api/session/{id}/git/pr` `{"title","body"}` (existing endpoint). */
+    suspend fun gitCreatePR(sessionId: String, title: String, body: String): JSONObject {
+        Telemetry.breadcrumb("review_ship", "pr_start", mapOf("session" to sessionId))
+        val reqBody = JSONObject().put("title", title).put("body", body)
+        val result = postSessionGitAction(sessionId, "/git/pr", reqBody)
+        if (result.optBoolean("ok", false)) {
+            Telemetry.breadcrumb(
+                "review_ship", "pr_finish",
+                mapOf("session" to sessionId, "url" to result.optString("pr_url", "")),
+            )
+        } else {
+            Telemetry.capture(
+                RuntimeException("git pr create failed"),
+                message = "review-ship pr create failed",
+                tags = mapOf("surface" to "android", "phase" to "review_ship"),
+                extras = mapOf("session" to sessionId, "stderr" to result.optString("stderr", "")),
+            )
+        }
+        return result
     }
 
     /**

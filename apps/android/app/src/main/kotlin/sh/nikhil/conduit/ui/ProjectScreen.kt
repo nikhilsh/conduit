@@ -16,6 +16,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.*
+import sh.nikhil.conduit.ui.components.ConduitChip
 import sh.nikhil.conduit.ui.components.NeonPillSegment
 import sh.nikhil.conduit.ui.components.NeonSegmentedPill
 import androidx.compose.runtime.*
@@ -122,6 +123,24 @@ fun ProjectScreen(
     var menuExpanded by remember { mutableStateOf(false) }
     var showInfo by remember { mutableStateOf(false) }
     var showDiff by remember { mutableStateOf(false) }
+    // Feature A "Review & Ship" (docs/PLAN-REVIEW-SHIP.md) -- gated on the
+    // box's `features.review_ship`, probed once per endpoint the same way
+    // BoxHealthScreen probes `sessionFork`/`sessionWatch`.
+    var boxFeatures by remember { mutableStateOf<SessionStore.BoxFeatures?>(null) }
+    var showChangesV2 by remember { mutableStateOf(false) }
+    // Diffstat badge for the entry point (dirty-file count from git/state --
+    // cheap enough to probe once the capability is confirmed; ChangesScreen
+    // itself re-fetches the full diff/state on open).
+    var reviewShipDirtyCount by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(endpoint) {
+        val features = store.fetchBoxFeatures(endpoint)
+        boxFeatures = features
+        reviewShipDirtyCount = if (features?.reviewShip == true) {
+            store.fetchGitState(session.id)?.dirty
+        } else {
+            null
+        }
+    }
     var showThreadSwitcher by remember { mutableStateOf(false) }
     var showAgentPicker by remember { mutableStateOf(false) }
     var showVoice by remember { mutableStateOf(false) }
@@ -249,6 +268,9 @@ fun ProjectScreen(
                 },
                 showChanges = hasChanges,
                 onShowChanges = { menuExpanded = false; showDiff = true },
+                showReviewShip = boxFeatures?.reviewShip == true,
+                reviewShipDirtyCount = reviewShipDirtyCount,
+                onShowReviewShip = { menuExpanded = false; showChangesV2 = true },
                 browserMode = browserMode,
                 onToggleMemory = {
                     menuExpanded = false
@@ -394,6 +416,12 @@ fun ProjectScreen(
         DiffReviewScreen(store = store, session = session, onDismiss = { showDiff = false })
     }
 
+    if (showChangesV2) {
+        // Feature A "Review & Ship" -- structured diff + line-anchored
+        // annotations + stage/commit/push/PR (docs/PLAN-REVIEW-SHIP.md).
+        ChangesScreen(store = store, session = session, onDismiss = { showChangesV2 = false })
+    }
+
     if (showThreadSwitcher) {
         ThreadSwitcherSheet(
             store = store,
@@ -448,6 +476,9 @@ private fun ControlsRow(
     onExportTranscript: () -> Unit,
     showChanges: Boolean = false,
     onShowChanges: () -> Unit = {},
+    showReviewShip: Boolean = false,
+    reviewShipDirtyCount: Int? = null,
+    onShowReviewShip: () -> Unit = {},
     browserMode: BrowserMode,
     onToggleMemory: () -> Unit,
     onEndSession: () -> Unit,
@@ -547,6 +578,22 @@ private fun ControlsRow(
                 // chat-only pane, where the right pane owns those surfaces.
                 if (!chatOnly && showChanges) {
                     DropdownMenuItem(text = { Text("View changes") }, onClick = onShowChanges)
+                }
+                // "Changes" (Feature A -- docs/PLAN-REVIEW-SHIP.md): the
+                // structured diff/annotate/ship surface, gated on the
+                // broker's `features.review_ship`. Additive alongside the
+                // legacy chat-scrape "View changes" above -- old boxes keep
+                // that path unchanged.
+                if (!chatOnly && showReviewShip) {
+                    DropdownMenuItem(
+                        text = { Text("Review & Ship") },
+                        onClick = onShowReviewShip,
+                        trailingIcon = if (reviewShipDirtyCount != null && reviewShipDirtyCount > 0) {
+                            { ConduitChip(label = "$reviewShipDirtyCount", tint = neon.accent) }
+                        } else {
+                            null
+                        },
+                    )
                 }
                 if (!chatOnly) {
                     DropdownMenuItem(
