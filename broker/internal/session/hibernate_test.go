@@ -477,18 +477,19 @@ func TestHibernateLoopEndToEndHonorsEnvOverrides(t *testing.T) {
 	sess.lastOutput = time.Now().Add(-2 * time.Minute) // past the 1-minute window
 	sess.mu.Unlock()
 
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if _, ok := m.Get("session-loop"); !ok {
-			break
-		}
+	// Poll the on-disk flag, not the live map: hibernateSession deletes the
+	// map entry BEFORE Close() + markHibernatedOnDisk finish, so a map-based
+	// break races the meta.json write on loaded runners. The disk flag is the
+	// last step, so once it flips the map removal is already done.
+	deadline := time.Now().Add(10 * time.Second)
+	for !m.IsHibernated("session-loop") {
 		if time.Now().After(deadline) {
-			t.Fatal("session was not hibernated by the real loop within 5s — env overrides not honored")
+			t.Fatal("session was not hibernated by the real loop within 10s — env overrides not honored")
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if !m.IsHibernated("session-loop") {
-		t.Fatal("expected the session to be flagged hibernated on disk")
+	if _, ok := m.Get("session-loop"); ok {
+		t.Fatal("hibernated session still present in the live map")
 	}
 }
 
