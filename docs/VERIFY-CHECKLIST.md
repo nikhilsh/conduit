@@ -20,6 +20,10 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+---
+
+## v0.0.226
+
 **Hygiene round — broker credential/memory simplification + watchdog durability.
 PRs #957/#958/#959/#960.**
 
