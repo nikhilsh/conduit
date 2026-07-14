@@ -46,7 +46,12 @@ func (p *pipelineSessionManager) CreateSession(agentType, cwd, initialPrompt, br
 		PermissionMode:  ov.PermissionMode,
 		// ov.Instructions is prompt content, never argv — it is not part of
 		// SpawnOverride. See StepOverride's doc comment.
-	}}
+	},
+		// PipelineManaged excludes this step session from idle hibernation:
+		// the orchestrator drives it programmatically end-to-end, and nothing
+		// would ever reattach a WS to wake it back up.
+		PipelineManaged: true,
+	}
 	sess, _, err := p.m.GetOrCreateWithOptions(id, agentType, opts)
 	if err != nil {
 		return "", err

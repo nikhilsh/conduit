@@ -111,6 +111,13 @@ type Session struct {
 	// closing marks an intentional Close() in progress so drain's EOF
 	// wakeup doesn't count the teardown as an agent crash.
 	closing bool
+	// pipelineManaged is true when this session was created by the pipeline
+	// subsystem (ws/pipeline.go CreateSession) to run one step of a running
+	// pipeline. Pipeline step sessions are driven programmatically end-to-end
+	// (the orchestrator sends the next step's prompt itself) — hibernating
+	// one mid-run would stall the pipeline waiting on a session nobody will
+	// ever reattach to wake it. See hibernationEligible (hibernate.go).
+	pipelineManaged bool
 	// Per-session token/cost usage, folded from each turn's usage event
 	// (claude `result` / codex `turn.completed`). Guarded by mu; surfaced
 	// via Usage() into the status frame. See usage.go.
@@ -409,6 +416,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		requestedBranch:     strings.TrimSpace(opts.requestedBranch),
 		pendingHandoff:      opts.pendingHandoff,
 		pendingHandoffAgent: opts.pendingHandoffAgent,
+		pipelineManaged:     opts.pipelineManaged,
 		checkpointEvery: durationFromEnv(
 			"CONDUIT_SESSION_CHECKPOINT_INTERVAL_MS",
 			60*time.Second,
@@ -1971,6 +1979,12 @@ type CreateOptions struct {
 	// repo, the worktree is created on this branch instead of the default
 	// "conduit/session-<id>". Ignored when worktree mode is off.
 	Branch string
+	// PipelineManaged marks a session created by the pipeline subsystem to
+	// run one step of a running pipeline. Excludes it from idle hibernation
+	// (docs/PLAN-SESSION-HIBERNATION.md §3.1) — a pipeline drives its step
+	// sessions programmatically, and nothing would ever reattach to wake a
+	// hibernated one. Default false for every other caller.
+	PipelineManaged bool
 }
 
 func NewManager(registry *agents.Registry) *Manager {
@@ -1996,7 +2010,131 @@ func NewManager(registry *agents.Registry) *Manager {
 	}
 	m.loadRecentProjects()
 	m.startGCLoop(m.stopGC)
+	m.startHibernateLoop(m.stopGC)
 	return m
+}
+
+// startHibernateLoop runs a periodic sweep that gracefully pauses idle
+// resumable sessions to reclaim RAM (docs/PLAN-SESSION-HIBERNATION.md). Reads
+// tuning from the environment once at startup:
+//
+//   - CONDUIT_HIBERNATE_DISABLED     kill-switch — any non-empty value turns
+//     hibernation off entirely (default: on).
+//   - CONDUIT_HIBERNATE_MINUTES      idle window before a session is eligible
+//     (default 30; <= 0 also disables).
+//   - CONDUIT_HIBERNATE_SWEEP_SECONDS  sweep cadence (default 60).
+//
+// Mirrors startGCLoop's shape and shares its stop channel — Manager.Close
+// tears both down together.
+func (m *Manager) startHibernateLoop(stop <-chan struct{}) {
+	if strings.TrimSpace(lookupEnvCompat("CONDUIT_HIBERNATE_DISABLED")) != "" {
+		return
+	}
+	minutes := envIntDefault("CONDUIT_HIBERNATE_MINUTES", 30)
+	if minutes <= 0 {
+		return
+	}
+	window := time.Duration(minutes) * time.Minute
+	everySeconds := envIntDefault("CONDUIT_HIBERNATE_SWEEP_SECONDS", 60)
+	if everySeconds <= 0 {
+		everySeconds = 60
+	}
+	every := time.Duration(everySeconds) * time.Second
+	go func() {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				m.sweepHibernation(window, time.Now().UTC())
+			case <-stop:
+				return
+			}
+		}
+	}()
+}
+
+// sweepHibernation snapshots the live session set and hibernates every
+// session that passes hibernationEligible. The snapshot is taken under RLock
+// and released before any Close() call — Close does its own I/O (checkpoint,
+// process kill, persistMetadata) and must never run while m.mu is held.
+func (m *Manager) sweepHibernation(window time.Duration, now time.Time) {
+	m.mu.RLock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.mu.RUnlock()
+	for _, s := range sessions {
+		if s.hibernationEligible(window, now) {
+			m.hibernateSession(s)
+		}
+	}
+}
+
+// hibernateSession gracefully pauses s: Close() checkpoints scrollback +
+// memory, preserves the agent-home conversation files --resume depends on,
+// kills the agent process, and cancels the pending genuine-stop push timer
+// (so no "session ended" push/Live-Activity teardown fires) — see Close's own
+// doc comment. Close's own persistMetadata write lands phase:"exited"; we
+// immediately patch meta.json on top with the hibernated marker so the
+// session surfaces as "Paused" instead of "ended" in the recoverable list.
+//
+// Drops s from the active map under lock BEFORE calling Close(), mirroring
+// DeleteSession: the Done()-watcher goroutine would eventually do the same
+// deletion, but doing it here makes "no longer live" true the instant this
+// call returns instead of relying on that async reaper — closing the window
+// where a racing GetOrCreateWithOptions could see the about-to-close session
+// still in m.sessions and hand it back instead of waking the hibernated copy.
+func (m *Manager) hibernateSession(s *Session) {
+	s.mu.Lock()
+	idle := time.Since(s.lastOutput)
+	id := s.ID
+	s.mu.Unlock()
+	log.Printf("session %s: hibernating (idle %s, no viewers)", id, idle.Round(time.Second))
+	m.mu.Lock()
+	delete(m.sessions, id)
+	m.mu.Unlock()
+	s.Close()
+	if err := m.markHibernatedOnDisk(id, time.Now().UTC()); err != nil {
+		fmt.Fprintf(os.Stderr, "session %s: markHibernatedOnDisk: %v\n", id, err)
+	}
+}
+
+// markHibernatedOnDisk patches sessions/<id>/meta.json in place to flag it
+// hibernated: true, phase:"hibernated", reason_code:"hibernated". Deliberately
+// bypasses persistMetadata (which would rebuild meta from the just-closed live
+// session's in-memory phase:"exited") by reading the file Close() just wrote
+// and re-marshaling it with the hibernation fields set.
+func (m *Manager) markHibernatedOnDisk(id string, at time.Time) error {
+	metaPath := filepath.Join(m.conduitRoot, "sessions", id, "meta.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return err
+	}
+	var meta sessionMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return err
+	}
+	meta.Phase = "hibernated"
+	meta.ReasonCode = "hibernated"
+	meta.Hibernated = true
+	meta.HibernatedAt = at.Format(time.RFC3339Nano)
+	return atomicWriteJSON(metaPath, meta)
+}
+
+// IsHibernated reports whether the on-disk session id is currently flagged
+// hibernated (meta.json's hibernated field). Used by the peer-message wake
+// path (ws/api.go serveSessionMessage) to distinguish "intentionally paused,
+// safe to auto-wake" from any other not-live session, which peer messaging
+// must not spawn as a side effect. false for a live session, an unknown id,
+// or any I/O/decode error (fails closed — no wake).
+func (m *Manager) IsHibernated(id string) bool {
+	meta, err := m.readSessionMeta(id)
+	if err != nil {
+		return false
+	}
+	return meta.Hibernated
 }
 
 // Health reports whether the broker is fully operational.
@@ -2071,6 +2209,14 @@ type LiveSessionInfo struct {
 	CWD            string `json:"cwd,omitempty"`
 	StartedAt      string `json:"started_at,omitempty"`
 	LastActivityAt string `json:"last_activity_at,omitempty"`
+	// Hibernated is true for a recoverable session that was gracefully
+	// auto-paused for being idle (docs/PLAN-SESSION-HIBERNATION.md), as
+	// opposed to one that's merely recoverable because the broker restarted
+	// or the agent crashed. Lets the app render a distinct "Paused" chip
+	// instead of the generic recoverable/"ended" look. Set only on the
+	// `recoverable` entries built by RecoverableSessions (recoverable_list.go)
+	// — a hibernated session is never in LiveSessions().
+	Hibernated bool `json:"hibernated,omitempty"`
 }
 
 // LiveSessions returns a snapshot of the sessions CURRENTLY HELD IN MEMORY —
@@ -2353,6 +2499,7 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		externalResume:      opts.ExternalResume,
 		externalFork:        opts.ExternalFork,
 		requestedBranch:     strings.TrimSpace(opts.Branch),
+		pipelineManaged:     opts.PipelineManaged,
 	})
 	if err != nil {
 		return nil, false, err
@@ -2548,6 +2695,11 @@ type sessionOptions struct {
 	requestedBranch     string
 	pendingHandoff      string
 	pendingHandoffAgent string
+	// pipelineManaged marks a session spawned by the pipeline subsystem to
+	// run one step. Manager fills this in from CreateOptions.PipelineManaged;
+	// tests/direct GetOrCreate callers leave it false (the default — a
+	// normal, hibernation-eligible session).
+	pipelineManaged bool
 }
 
 type sessionMetadata struct {
@@ -2609,6 +2761,14 @@ type sessionMetadata struct {
 	// switch and send does not lose the handoff.
 	PendingHandoff      string `json:"pending_handoff,omitempty"`
 	PendingHandoffAgent string `json:"pending_handoff_agent,omitempty"`
+	// Hibernated / HibernatedAt are written ONLY by markHibernatedOnDisk,
+	// after Close()'s own persistMetadata has already written phase:"exited"
+	// (see hibernateSession). Cleared implicitly the next time a LIVE
+	// session's persistMetadata runs — recovery normalizes the in-memory
+	// phase back to "running" (recovery.go), and persistMetadata never sets
+	// these fields, so omitempty drops them from the next write.
+	Hibernated   bool   `json:"hibernated,omitempty"`
+	HibernatedAt string `json:"hibernated_at,omitempty"`
 }
 
 // UploadBaseDir is the durable root under which chat file-uploads are

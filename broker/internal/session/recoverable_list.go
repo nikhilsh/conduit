@@ -64,6 +64,7 @@ func (m *Manager) RecoverableSessions() []LiveSessionInfo {
 			CWD:            meta.WorkspaceDir,
 			StartedAt:      meta.StartedAt,
 			LastActivityAt: meta.LastActivityAt,
+			Hibernated:     meta.Hibernated,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
