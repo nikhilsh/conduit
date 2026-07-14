@@ -188,6 +188,14 @@ type capabilitiesResponse struct {
 		// pipeline is complete/failed/cancelled. Apps gate the archive
 		// action + archived-flow filter on this flag.
 		PipelineArchive bool `json:"pipeline_archive"`
+		// Hibernation: idle resumable sessions are auto-paused (graceful
+		// Close(), not a crash) after CONDUIT_HIBERNATE_MINUTES of inactivity
+		// and transparently resume on WS attach or inbound message
+		// (docs/PLAN-SESSION-HIBERNATION.md). Recoverable session-list
+		// entries may carry `hibernated:true`. Absent/false on an older
+		// broker just means the app falls back to its generic
+		// recoverable/resume rendering — still correct, less specific.
+		Hibernation bool `json:"hibernation"`
 		// ReviewShip: the Feature-A "Review & Ship from phone" git endpoints
 		// are available — GET .../git/diff (structured diff), GET
 		// .../git/state, POST .../git/stage + /git/unstage + /git/push, and
@@ -282,6 +290,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.PipelineLoop = true        // step.kind=="loop" (bounded Loop-until)
 	resp.Features.PipelineResult = true      // GET /api/pipeline/{id} result field on COMPLETE
 	resp.Features.PipelineArchive = true     // /archive + /unarchive; GET /api/pipelines excludes archived by default
+	resp.Features.Hibernation = true         // idle resumable sessions auto-pause + transparently resume
 	resp.Features.ReviewShip = true          // git/diff + git/state + git/stage + git/unstage + git/push
 	// Root-level mirrors for fielded apps that decode pipeline_* from the JSON
 	// root (see the struct comment).
@@ -1193,6 +1202,22 @@ func (s *Server) serveSessionMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, ok := s.Sessions.Get(req.SessionID)
+	if !ok {
+		// The recipient isn't live — wake it ONLY if it was intentionally
+		// hibernated (docs/PLAN-SESSION-HIBERNATION.md §3.2). A merely
+		// recoverable-but-not-live session (broker restart, agent crash) must
+		// NOT be woken as a side effect of a peer enumerating sessions and
+		// messaging one; that would spawn agent processes from an untrusted
+		// scan. GetOrCreateWithOptions reuses the standard lazy-recovery
+		// path — no new spawn code — so the woken session resumes with its
+		// normal --resume flags before the message is delivered below.
+		if s.Sessions.IsHibernated(req.SessionID) {
+			woken, _, werr := s.Sessions.GetOrCreateWithOptions(req.SessionID, "", session.CreateOptions{})
+			if werr == nil {
+				sess, ok = woken, true
+			}
+		}
+	}
 	if !ok {
 		writeAPIError(w, http.StatusNotFound, "session_not_found", "session not found or not running")
 		return
