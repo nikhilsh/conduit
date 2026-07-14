@@ -20,6 +20,38 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Review & Ship from phone + session hibernation (Orca-inspired round).
+Design PR #963; PRs #964–#968. Both features need a broker redeploy to go
+live (done as part of this round) — capability flags `features.review_ship` +
+`features.hibernation` gate the app UI.**
+
+- Session hibernation: idle resumable sessions (claude/codex; no attached
+  client, not mid-turn/awaiting approval, not pipeline-managed, ≥30 min idle)
+  are auto-paused and transparently resume on WS attach or inbound/peer
+  message. Env: `CONDUIT_HIBERNATE_DISABLED=1` kill-switch,
+  `CONDUIT_HIBERNATE_MINUTES` / `CONDUIT_HIBERNATE_SWEEP_SECONDS` overrides.
+  PR #968. [broker, **needs broker-behavior confirmation post-redeploy**:
+  leave a session idle >30 min with the app closed, confirm it shows "Paused"
+  in the session list, then reopen/send — chat history + context intact, no
+  spurious "session ended" push. Sessions in a live flow must NOT hibernate.]
+- Broker git endpoints for Review & Ship: `GET .../git/diff`
+  (uncommitted|branch scopes, structured hunks, untracked-as-added, caps),
+  `GET .../git/state`, `POST .../git/stage|unstage|push`, extended
+  `.../git/commit` (staged-only mode + commit_sha). PR #965. [broker; spot
+  check via curl after redeploy.]
+- iOS Changes surface: "Review & Ship" entry (replaces legacy "View changes"
+  when the flag is on) + diffstat badge, phone + tablet (right-pane tab),
+  scope toggle, per-file stage toggles, line-tap annotation sheets,
+  send-to-agent batched prompt, ship card (commit/push/PR), hibernation
+  "Paused" chip. PR #967 (+ compile fix). [**needs on-device verification**:
+  diff render, annotate → send lands in chat as one prompt, re-anchoring
+  after agent edits, stage/commit/push/PR round-trip, tablet tab, Paused
+  chip.]
+- Android Changes surface: value-for-value mirror of the iOS build (same
+  entry-point behavior, tablet right-pane tab, SharedPreferences annotation
+  persistence). PRs #966. [**needs on-device verification**: same punch list
+  as iOS on phone + tablet.]
+
 ---
 
 ## v0.0.226
