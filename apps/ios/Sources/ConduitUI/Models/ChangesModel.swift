@@ -268,16 +268,24 @@ extension ConduitUI {
         // `nonisolated` so `ChangesView.init` (not itself @MainActor) can
         // construct this via `State(initialValue:)` without the compiler
         // requiring the whole View init to be MainActor-isolated. Only
-        // touches `sessionID` + the nonisolated `ChangesAnnotationStore`.
+        // touches the non-`@Observable`-tracked `sessionID`; `annotations`
+        // (an @Observable-tracked, MainActor-isolated property) is populated
+        // from the persisted store on the first `load(store:)` below instead.
         nonisolated init(sessionID: String) {
             self.sessionID = sessionID
-            self.annotations = ChangesAnnotationStore.load(sessionID: sessionID)
         }
+
+        /// Guards the one-time persisted-annotation load in `load(store:)`.
+        private var didLoadPersistedAnnotations = false
 
         // MARK: Load
 
         @MainActor
         func load(store: SessionStore) async {
+            if !didLoadPersistedAnnotations {
+                didLoadPersistedAnnotations = true
+                annotations = ChangesAnnotationStore.load(sessionID: sessionID)
+            }
             isLoading = true
             loadError = nil
             Telemetry.breadcrumb("changes", "diff_fetch start", data: [
