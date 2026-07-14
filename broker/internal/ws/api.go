@@ -188,6 +188,15 @@ type capabilitiesResponse struct {
 		// pipeline is complete/failed/cancelled. Apps gate the archive
 		// action + archived-flow filter on this flag.
 		PipelineArchive bool `json:"pipeline_archive"`
+		// ReviewShip: the Feature-A "Review & Ship from phone" git endpoints
+		// are available — GET .../git/diff (structured diff), GET
+		// .../git/state, POST .../git/stage + /git/unstage + /git/push, and
+		// the extended .../git/commit (All field). Apps gate the Changes
+		// surface entry point on this flag. Nested under features (NOT a
+		// root mirror — the app support ships in the same release that
+		// reads features.review_ship, so the pipeline_* root-mirror
+		// workaround does not apply here).
+		ReviewShip bool `json:"review_ship"`
 	} `json:"features"`
 	// Pipeline flags mirrored at the JSON ROOT. Fielded app builds (through
 	// v0.0.214) decode all pipeline_* capability flags from the root — not
@@ -273,6 +282,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.PipelineLoop = true        // step.kind=="loop" (bounded Loop-until)
 	resp.Features.PipelineResult = true      // GET /api/pipeline/{id} result field on COMPLETE
 	resp.Features.PipelineArchive = true     // /archive + /unarchive; GET /api/pipelines excludes archived by default
+	resp.Features.ReviewShip = true          // git/diff + git/state + git/stage + git/unstage + git/push
 	// Root-level mirrors for fielded apps that decode pipeline_* from the JSON
 	// root (see the struct comment).
 	resp.TopPipeline = true
@@ -598,6 +608,11 @@ func (s *Server) serveSessionDelete(w http.ResponseWriter, r *http.Request) {
 	// Route git sub-paths before the DELETE-only check.
 	// Paths: /api/session/{id}/git/commit
 	//        /api/session/{id}/git/pr
+	//        /api/session/{id}/git/diff     (Feature A: review & ship)
+	//        /api/session/{id}/git/state    (Feature A)
+	//        /api/session/{id}/git/stage    (Feature A)
+	//        /api/session/{id}/git/unstage  (Feature A)
+	//        /api/session/{id}/git/push     (Feature A)
 	tail := strings.TrimPrefix(r.URL.Path, "/api/session/")
 	if strings.HasSuffix(tail, "/git/commit") {
 		sessionID := strings.TrimSuffix(tail, "/git/commit")
@@ -607,6 +622,31 @@ func (s *Server) serveSessionDelete(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(tail, "/git/pr") {
 		sessionID := strings.TrimSuffix(tail, "/git/pr")
 		s.serveSessionGitPR(w, r, sessionID)
+		return
+	}
+	if strings.HasSuffix(tail, "/git/diff") {
+		sessionID := strings.TrimSuffix(tail, "/git/diff")
+		s.serveSessionGitDiff(w, r, sessionID)
+		return
+	}
+	if strings.HasSuffix(tail, "/git/state") {
+		sessionID := strings.TrimSuffix(tail, "/git/state")
+		s.serveSessionGitState(w, r, sessionID)
+		return
+	}
+	if strings.HasSuffix(tail, "/git/stage") {
+		sessionID := strings.TrimSuffix(tail, "/git/stage")
+		s.serveSessionGitStage(w, r, sessionID)
+		return
+	}
+	if strings.HasSuffix(tail, "/git/unstage") {
+		sessionID := strings.TrimSuffix(tail, "/git/unstage")
+		s.serveSessionGitUnstage(w, r, sessionID)
+		return
+	}
+	if strings.HasSuffix(tail, "/git/push") {
+		sessionID := strings.TrimSuffix(tail, "/git/push")
+		s.serveSessionGitPush(w, r, sessionID)
 		return
 	}
 
