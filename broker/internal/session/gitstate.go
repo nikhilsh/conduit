@@ -29,6 +29,23 @@ func agentCWD(pid int) string {
 	return resolved
 }
 
+// LiveGitDir resolves the directory Feature-A git endpoints (diff/state/
+// stage/unstage/push in ws/gitdiff.go + ws/git.go) operate on: the agent's
+// actual current working directory when resolvable (mirrors liveGitState's
+// dir pick above, exported here so ws handlers can reuse it), else the
+// session's static WorkspaceDir. This is the invariant that makes
+// worktree-remapped sessions (worktree.go) review/stage/commit the tree the
+// agent is actually standing in, not the original checkout.
+func (s *Session) LiveGitDir() string {
+	dir := s.WorkspaceDir()
+	if pid := s.agentPID(); pid > 0 {
+		if cwd := agentCWD(pid); cwd != "" {
+			dir = cwd
+		}
+	}
+	return dir
+}
+
 // GitState holds the live git state for a session's worktree directory.
 // All fields are zero/empty when the directory is not a git repo or any
 // command fails — callers treat absence as "unknown", never as an error.
