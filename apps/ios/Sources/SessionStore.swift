@@ -360,9 +360,14 @@ struct LiveSessionInfo: Codable, Equatable {
     var cwd: String?
     var startedAt: String?
     var lastActivityAt: String?
+    // Hibernation (PLAN-REVIEW-SHIP, broker `hibernation` capability):
+    // recoverable items may carry `hibernated:true` alongside
+    // `phase:"hibernated"`. Optional, no default -- absent on brokers that
+    // don't advertise the `hibernation` capability, decodes nil there.
+    var hibernated: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case id, assistant, phase, health, running, recoverable, rows, cols, viewers, title, cwd
+        case id, assistant, phase, health, running, recoverable, rows, cols, viewers, title, cwd, hibernated
         case startedAt = "started_at"
         case lastActivityAt = "last_activity_at"
     }
@@ -2244,6 +2249,17 @@ final class SessionStore {
         /// for a live running session. Default false so Watch ships dark on
         /// older brokers that do not yet expose this capability.
         var sessionWatch: Bool
+        /// Broker advertises `review_ship` -- the structured git diff +
+        /// stage/commit/push/PR endpoints (PLAN-REVIEW-SHIP §4). Gates the
+        /// "Changes" surface entry point. Default false so old brokers that
+        /// only expose the legacy chat-scraped diff keep that path.
+        var reviewShip: Bool = false
+        /// Broker advertises `hibernation` -- session-list entries may carry
+        /// `hibernated`/`phase:"hibernated"` on recoverable rows. Default
+        /// false; the app only reads the per-session flag when this is set,
+        /// so an old broker that never sends `hibernated` never surfaces the
+        /// chip (the field would decode nil anyway, this is belt-and-braces).
+        var hibernation: Bool = false
     }
 
     /// Per-assistant model catalogs discovered by the broker live from the
@@ -2605,27 +2621,47 @@ final class SessionStore {
     /// Returns nil on any failure (old broker, unreachable, 401): the
     /// caller hides the dependent affordances rather than erroring.
     func fetchBoxFeatures(endpoint: StoredEndpoint) async -> BoxFeatures? {
-        struct CapsEnvelope: Decodable {
-            struct Features: Decodable {
-                let hostMetrics: Bool?
-                let shellSessions: Bool?
-                let sessionDiscovery: Bool?
-                let sessionFork: Bool?
-                let sessionWatch: Bool?
-                enum CodingKeys: String, CodingKey {
-                    case hostMetrics = "host_metrics"
-                    case shellSessions = "shell_sessions"
-                    case sessionDiscovery = "session_discovery"
-                    case sessionFork = "session_fork"
-                    case sessionWatch = "session_watch"
-                }
-            }
-            let features: Features?
-        }
         guard let data = await getJSON(endpoint: endpoint, path: "/api/capabilities"),
-              let caps = try? JSONDecoder().decode(CapsEnvelope.self, from: data)
+              let features = Self.decodeBoxFeatures(data)
         else {
             Telemetry.breadcrumb("box_health", "capabilities probe failed", data: ["host": endpoint.displayHost])
+            return nil
+        }
+        return features
+    }
+
+    /// Wire shape of `GET /api/capabilities`'s `features` block. Hoisted out
+    /// of `fetchBoxFeatures` (was a local struct) so `decodeBoxFeatures` is
+    /// unit-testable without a network round trip.
+    struct CapabilitiesFeatures: Decodable {
+        let hostMetrics: Bool?
+        let shellSessions: Bool?
+        let sessionDiscovery: Bool?
+        let sessionFork: Bool?
+        let sessionWatch: Bool?
+        let reviewShip: Bool?
+        let hibernation: Bool?
+        enum CodingKeys: String, CodingKey {
+            case hostMetrics = "host_metrics"
+            case shellSessions = "shell_sessions"
+            case sessionDiscovery = "session_discovery"
+            case sessionFork = "session_fork"
+            case sessionWatch = "session_watch"
+            case reviewShip = "review_ship"
+            case hibernation = "hibernation"
+        }
+    }
+
+    struct CapabilitiesEnvelope: Decodable {
+        let features: CapabilitiesFeatures?
+    }
+
+    /// Decode `GET /api/capabilities` JSON into `BoxFeatures`, defaulting
+    /// every flag to `false` when absent (old broker) or on a decode
+    /// failure. Split out of `fetchBoxFeatures` so it's testable with a raw
+    /// JSON fixture -- no endpoint / URLSession needed.
+    nonisolated static func decodeBoxFeatures(_ data: Data) -> BoxFeatures? {
+        guard let caps = try? JSONDecoder().decode(CapabilitiesEnvelope.self, from: data) else {
             return nil
         }
         return BoxFeatures(
@@ -2633,7 +2669,9 @@ final class SessionStore {
             shellSessions: caps.features?.shellSessions ?? false,
             sessionDiscovery: caps.features?.sessionDiscovery ?? false,
             sessionFork: caps.features?.sessionFork ?? false,
-            sessionWatch: caps.features?.sessionWatch ?? false
+            sessionWatch: caps.features?.sessionWatch ?? false,
+            reviewShip: caps.features?.reviewShip ?? false,
+            hibernation: caps.features?.hibernation ?? false
         )
     }
 
@@ -2653,6 +2691,118 @@ final class SessionStore {
             "disk": String(format: "%.0f", metrics.diskPct),
         ])
         return metrics
+    }
+
+    // MARK: - Review & Ship (git diff / state / stage / commit / push / PR)
+    //
+    // Client methods for the broker's review_ship endpoints
+    // (docs/PLAN-REVIEW-SHIP.md §3). Routed through `endpointForSession` so
+    // multi-box setups hit the box that actually owns the session, mirroring
+    // `clientForSession`'s routing invariant. All best-effort: nil / a
+    // `{"ok":false,...}` result on failure, never thrown -- callers (mainly
+    // `ChangesModel`) surface the verbatim `stderr` and never swallow it.
+
+    /// `GET /api/session/{id}/git/diff?scope=uncommitted|branch&context=N`.
+    func fetchGitDiff(sessionID: String, scope: String, context: Int = 3) async -> ConduitUI.GitDiffResponse? {
+        let ep = endpointForSession(sessionID)
+        let path = "/api/session/\(sessionID)/git/diff?scope=\(scope)&context=\(context)"
+        guard let data = await getJSON(endpoint: ep, path: path),
+              let decoded = try? JSONDecoder().decode(ConduitUI.GitDiffResponse.self, from: data)
+        else {
+            Telemetry.breadcrumb("changes", "diff_fetch fail", data: ["session": sessionID, "scope": scope])
+            return nil
+        }
+        return decoded
+    }
+
+    /// `GET /api/session/{id}/git/state`.
+    func fetchGitState(sessionID: String) async -> ConduitUI.GitState? {
+        let ep = endpointForSession(sessionID)
+        guard let data = await getJSON(endpoint: ep, path: "/api/session/\(sessionID)/git/state"),
+              let decoded = try? JSONDecoder().decode(ConduitUI.GitState.self, from: data)
+        else {
+            Telemetry.breadcrumb("changes", "git_state fetch fail", data: ["session": sessionID])
+            return nil
+        }
+        return decoded
+    }
+
+    /// `POST /api/session/{id}/git/stage` body `{"paths":[...]}`.
+    func gitStage(sessionID: String, paths: [String]) async -> ConduitUI.GitOpResult? {
+        struct Body: Encodable { let paths: [String] }
+        return await postGitJSON(
+            sessionID: sessionID, suffix: "stage", body: Body(paths: paths), as: ConduitUI.GitOpResult.self
+        )
+    }
+
+    /// `POST /api/session/{id}/git/unstage` body `{"paths":[...]}`.
+    func gitUnstage(sessionID: String, paths: [String]) async -> ConduitUI.GitOpResult? {
+        struct Body: Encodable { let paths: [String] }
+        return await postGitJSON(
+            sessionID: sessionID, suffix: "unstage", body: Body(paths: paths), as: ConduitUI.GitOpResult.self
+        )
+    }
+
+    /// `POST /api/session/{id}/git/commit` body `{"message","all"}`.
+    /// `all:false` commits staged only; `all:true` is `git add -A` + commit.
+    func gitCommit(sessionID: String, message: String, all: Bool) async -> ConduitUI.GitCommitResult? {
+        struct Body: Encodable { let message: String; let all: Bool }
+        return await postGitJSON(
+            sessionID: sessionID, suffix: "commit", body: Body(message: message, all: all),
+            as: ConduitUI.GitCommitResult.self
+        )
+    }
+
+    /// `POST /api/session/{id}/git/push` body `{}`.
+    func gitPush(sessionID: String) async -> ConduitUI.GitPushResult? {
+        struct Body: Encodable {}
+        return await postGitJSON(
+            sessionID: sessionID, suffix: "push", body: Body(), as: ConduitUI.GitPushResult.self
+        )
+    }
+
+    /// `POST /api/session/{id}/git/pr` body `{"title","body"}` (existing
+    /// endpoint, PR #764 -- ChangesModel's own client so it doesn't reach
+    /// into `ConduitUI.DiffReviewView`'s private implementation).
+    func gitCreatePR(sessionID: String, title: String, body: String) async -> ConduitUI.GitPRResult? {
+        struct Body: Encodable { let title: String; let body: String }
+        return await postGitJSON(
+            sessionID: sessionID, suffix: "pr", body: Body(title: title, body: body),
+            as: ConduitUI.GitPRResult.self
+        )
+    }
+
+    /// Shared authed-POST against `/api/session/{id}/git/{suffix}`, decoding
+    /// the response body into `T` regardless of HTTP status -- every
+    /// review_ship endpoint reports git failures in-band as `{"ok":false,
+    /// "stderr":...}` on 200, per the wire contract, so only network/timeout/
+    /// decode failures return nil here.
+    private func postGitJSON<Body: Encodable, T: Decodable>(
+        sessionID: String, suffix: String, body: Body, as type: T.Type
+    ) async -> T? {
+        let ep = endpointForSession(sessionID)
+        guard let base = ep.httpBaseURL else { return nil }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/session/\(sessionID)/git/\(suffix)"
+        guard let url = components?.url else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 30
+        req.setValue("Bearer \(ep.token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        guard let bodyData = try? JSONEncoder().encode(body) else { return nil }
+        req.httpBody = bodyData
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode)
+        else {
+            Telemetry.breadcrumb("changes", "git_\(suffix) network/http fail", data: ["session": sessionID])
+            return nil
+        }
+        guard let decoded = try? JSONDecoder().decode(T.self, from: data) else {
+            Telemetry.breadcrumb("changes", "git_\(suffix) decode fail", data: ["session": sessionID])
+            return nil
+        }
+        return decoded
     }
 
     // MARK: - Found Sessions (session_discovery capability)
@@ -3341,6 +3491,15 @@ final class SessionStore {
         recoverableSessionIDs.contains(sessionID)
     }
 
+    /// Session ids the broker reported `hibernated:true` for in the last
+    /// `/api/sessions` fetch (PLAN-REVIEW-SHIP hibernation chip). Recoverable
+    /// but paused -- the row stays visible/tappable, just shown "Paused".
+    var hibernatedSessionIDs: Set<String> = []
+
+    func isHibernated(sessionID: String) -> Bool {
+        hibernatedSessionIDs.contains(sessionID)
+    }
+
     func fetchLiveSessions() async throws -> [LiveSessionInfo] {
         guard let base = endpoint.httpBaseURL else {
             throw NSError(domain: "SessionStore", code: 100, userInfo: [NSLocalizedDescriptionKey: "Invalid endpoint URL"])
@@ -3362,6 +3521,7 @@ final class SessionStore {
         // are inherently recoverable too, so the set covers both — but the live
         // ones are already reattached, so only the cold ones matter for Resume.
         recoverableSessionIDs = Set((decoded.recoverable ?? []).map { $0.id })
+        hibernatedSessionIDs = Set((decoded.recoverable ?? []).filter { $0.hibernated == true }.map { $0.id })
         return decoded.sessions
     }
 
