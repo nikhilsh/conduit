@@ -20,6 +20,28 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**Hygiene round — broker credential/memory simplification + watchdog durability.
+PRs #957/#958/#959/#960.**
+
+- Shared agent credentials unconditional; legacy per-session mirror deleted
+  (net −1.2k LOC). `CONDUIT_SHARED_AGENT_CREDS` is now ignored (always on —
+  matches what the live box has run since 2026-07-06); the flag-OFF per-session
+  credential copy, watchdog re-mirror (`credfresh.go`), and the superseded
+  agent-memory symlink machinery (`agent_memory.go`, from #752/#959) are all
+  removed. Agent memory persists inherently via the canonical shared config dir.
+  Rollback is git-revert + redeploy (the env-flag lever is gone). PR #960.
+  [broker, **needs broker redeploy + a post-redeploy sanity check**: new session
+  signs in, host login survives a refresh cycle, terminal tab logged in.]
+- Agent-memwatch OOM watchdog committed to `scripts/` + installed by
+  `remote-bootstrap.sh` (user-systemd unit) so a re-bootstrap keeps it. Live
+  box service untouched. PR #957. [ops, verify on next fresh bootstrap.]
+- `kb` CLI: flags after positionals (e.g. `kb get <slug> --dir /x`) now honored
+  across all 7 subcommands; fresh-repo `kb add` init behavior covered by
+  CLI-level regression tests. PR #958. [broker, verify with `conduit-broker kb`
+  after redeploy.]
+- Agent-memory keying fix (#959) — merged then superseded by #960 the same
+  release; no runtime surface remains. Listed for the record.
+
 **Tablet Flow parity — the new Flow start/wizard UX replaces the legacy
 pipeline builder on tablets; legacy builder deleted. PRs #954 (iOS) / #955
 (Android).**
