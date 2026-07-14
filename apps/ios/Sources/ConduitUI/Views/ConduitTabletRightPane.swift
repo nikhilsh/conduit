@@ -16,6 +16,7 @@ extension ConduitUI {
     enum RightPaneTab: String, CaseIterable, Identifiable {
         case terminal
         case browser
+        case changes
         case info
 
         var id: String { rawValue }
@@ -23,6 +24,7 @@ extension ConduitUI {
             switch self {
             case .terminal: return "Terminal"
             case .browser:  return "Browser"
+            case .changes:  return "Changes"
             case .info:     return "Info"
             }
         }
@@ -30,6 +32,7 @@ extension ConduitUI {
             switch self {
             case .terminal: return "terminal"
             case .browser:  return "globe"
+            case .changes:  return "plus.forwardslash.minus"
             case .info:     return "info.circle"
             }
         }
@@ -48,18 +51,25 @@ extension ConduitUI {
         // first; it then stays mounted (opacity) per #294.
         @State private var terminalActivated = false
 
+        /// PLAN-REVIEW-SHIP capability probe -- gates the Changes tab exactly
+        /// like `ConduitProjectView`'s title-menu row. Probes the ACTIVE
+        /// box's capabilities (see that view's identical note on multi-box).
+        @State private var boxFeatures: SessionStore.BoxFeatures?
+
         /// Whether the agent has reported a resolvable live-preview URL —
         /// the Browser tab is offered only then (no valid website → no tab).
         private var hasBrowserPreview: Bool {
             BrowserTab.previewURL(for: session, store: store) != nil
         }
 
+        private var showChangesTab: Bool { boxFeatures?.reviewShip == true }
+
         var body: some View {
             VStack(spacing: 0) {
                 HStack {
-                    let tabs: [RightPaneTab] = hasBrowserPreview
-                        ? RightPaneTab.allCases
-                        : RightPaneTab.allCases.filter { $0 != .browser }
+                    let tabs: [RightPaneTab] = RightPaneTab.allCases.filter {
+                        ($0 != .browser || hasBrowserPreview) && ($0 != .changes || showChangesTab)
+                    }
                     NeonSegmentedPill(
                         segments: tabs.map {
                             NeonSegmentedPill<RightPaneTab>.Segment(
@@ -83,10 +93,18 @@ extension ConduitUI {
             // Defer the native-terminal mount to the next runloop, off the
             // session-create CA commit (see terminalActivated).
             .task { terminalActivated = true }
+            .task(id: session.id) {
+                boxFeatures = await store.fetchBoxFeatures(endpoint: store.endpoint)
+            }
             // If a withdrawn preview removes the Browser tab while it's active,
             // fall back to Terminal (the pane's default surface).
             .onChange(of: hasBrowserPreview) { _, has in
                 if !has && tab == .browser { tab = .terminal }
+            }
+            // Same fallback if the Changes tab disappears (box capability
+            // probe resolves false/nil after the pane already opened on it).
+            .onChange(of: showChangesTab) { _, shows in
+                if !shows && tab == .changes { tab = .terminal }
             }
         }
 
@@ -115,6 +133,11 @@ extension ConduitUI {
 
                 if tab == .info {
                     ConduitUI.SessionInfoView(session: session, embedded: true)
+                        .zIndex(2)
+                }
+
+                if tab == .changes {
+                    ConduitUI.ChangesView(session: session, embedded: true)
                         .zIndex(2)
                 }
             }

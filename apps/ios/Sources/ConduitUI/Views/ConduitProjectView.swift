@@ -88,6 +88,19 @@ extension ConduitUI {
         /// Diff review sheet, opened from the header "Changes" button (shown
         /// only when the session has changes to review).
         @State private var showDiff = false
+        /// PLAN-REVIEW-SHIP structured Changes surface -- shown instead of
+        /// the legacy chat-scraped `showDiff` sheet when the connected box
+        /// advertises `features.review_ship`.
+        @State private var showChanges = false
+        /// Per-box capability probe (`GET /api/capabilities`), fetched once
+        /// per session appearance -- mirrors `ConduitBoxHealthView`'s
+        /// `features` state. Gates the "Review & Ship" entry point + its
+        /// diffstat badge; nil/false on old brokers keeps the legacy
+        /// "View changes" row unchanged.
+        @State private var boxFeatures: SessionStore.BoxFeatures?
+        /// `git/state` diffstat for the entry-point badge -- best-effort,
+        /// only fetched once reviewShip is confirmed on.
+        @State private var reviewShipDiffstat: ConduitUI.GitDiffStat?
         /// Rename sheet, reached from the title menu (fix 2). Fork is no
         /// longer reachable from the header — it is a full-screen flow that
         /// lives in Session Info.
@@ -200,6 +213,31 @@ extension ConduitUI {
                 ConduitUI.DiffReviewView(session: session)
                     .environment(store)
                     .presentationDetents([.medium, .large])
+            }
+            .sheet(isPresented: $showChanges) {
+                // PLAN-REVIEW-SHIP structured Changes surface -- only reachable
+                // when boxFeatures.reviewShip is true (menu row is hidden
+                // otherwise). Wrapped in its own NavigationStack so
+                // ChangesView's `.navigationTitle` actually renders.
+                NavigationStack {
+                    ConduitUI.ChangesView(session: session)
+                        .environment(store)
+                }
+                .presentationDetents([.large])
+            }
+            .task(id: session.id) {
+                // NOTE: probes the ACTIVE box's capabilities (`store.endpoint`),
+                // not necessarily the session's owning box in a multi-box
+                // setup -- mirrors the existing capability-probe call sites
+                // (`ConduitBoxHealthView` probes a specific saved server
+                // directly; there is no per-session capability lookup today).
+                // `fetchGitDiff`/`fetchGitState` below DO route per-session
+                // internally, so this only affects the entry-point gate itself.
+                boxFeatures = await store.fetchBoxFeatures(endpoint: store.endpoint)
+                guard boxFeatures?.reviewShip == true else { return }
+                if let diff = await store.fetchGitDiff(sessionID: session.id, scope: "uncommitted") {
+                    reviewShipDiffstat = diff.diffstat
+                }
             }
             .sheet(isPresented: $showRename) {
                 ConduitUI.RenameSessionSheet(
@@ -469,8 +507,13 @@ extension ConduitUI {
                 .buttonStyle(.plain)
                 // Diff review keeps an entry point after losing its header
                 // circle (fix 1 allows only back · identity · ⓘ up top).
-                // Shown only when there's something to review.
-                if !chatOnly && hasChanges {
+                // PLAN-REVIEW-SHIP: boxes advertising `review_ship` get the
+                // structured Changes surface (with a live diffstat badge)
+                // INSTEAD of the legacy chat-scraped diff row -- both call
+                // the broker, no reason to offer two diff viewers at once.
+                if !chatOnly && boxFeatures?.reviewShip == true {
+                    reviewShipMenuRow
+                } else if !chatOnly && hasChanges {
                     menuRow("plus.forwardslash.minus", "View changes") {
                         showTitleMenu = false
                         showDiff = true
@@ -496,6 +539,39 @@ extension ConduitUI {
         ) -> some View {
             Button(action: action) {
                 menuRowBody(systemName, label, tint: tint ?? neon.text)
+            }
+            .buttonStyle(.plain)
+        }
+
+        /// "Review & Ship" row -- the PLAN-REVIEW-SHIP entry point. Trailing
+        /// diffstat badge (`+N −M`) mirrors `menuRowBody`'s layout but adds
+        /// the live counts before the chevron-less trailing edge; nil/zero
+        /// diffstat renders no badge (honest-state: never show "+0 −0").
+        private var reviewShipMenuRow: some View {
+            Button {
+                showTitleMenu = false
+                showChanges = true
+            } label: {
+                HStack(spacing: 11) {
+                    Image(systemName: "plus.forwardslash.minus")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(neon.textDim)
+                        .frame(width: 20)
+                    Text("Review & Ship")
+                        .font(neon.sans(14.5).weight(.medium))
+                        .foregroundStyle(neon.text)
+                    Spacer(minLength: 0)
+                    if let stat = reviewShipDiffstat, stat.additions + stat.deletions > 0 {
+                        HStack(spacing: 4) {
+                            Text("+\(stat.additions)").foregroundStyle(neon.green)
+                            Text("−\(stat.deletions)").foregroundStyle(neon.red)
+                        }
+                        .font(neon.mono(11).weight(.semibold))
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }

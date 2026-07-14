@@ -521,6 +521,13 @@ struct SessionsScreen: View {
                     }
                 }
                 Spacer(minLength: 8)
+                // PLAN-REVIEW-SHIP hibernation chip: recoverable rows the
+                // broker reported `hibernated:true` for on the last
+                // `/api/sessions` poll -- the row stays resumable, just
+                // labeled "Paused" instead of a plain outcome chip.
+                if store.isHibernated(sessionID: row.id) {
+                    ConduitUI.Chip(label: "Paused", systemImage: "moon.zzz.fill", tint: neon.textFaint)
+                }
                 outcomeChip(SessionsScreenModel.Outcome.from(row))
             }
             .padding(.horizontal, 12)
