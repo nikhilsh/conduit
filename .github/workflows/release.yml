@@ -146,7 +146,22 @@ jobs:
           node-version: '20'
 
       - name: Install Fyra CLI
-        run: curl -fsSL https://fyra.sh/install.sh | sh
+        # Runner DNS has intermittently failed to resolve fyra.sh (single
+        # upstream NS); fall back to DNS-over-HTTPS + /etc/hosts pin. The old
+        # `curl | sh` also masked download failures — download, run, verify.
+        run: |
+          set -euo pipefail
+          if ! getent hosts fyra.sh >/dev/null; then
+            ip=$(curl -fsS --max-time 10 -H 'accept: application/dns-json' \
+              'https://1.1.1.1/dns-query?name=fyra.sh&type=A' \
+              | jq -r '.Answer[]? | select(.type==1) | .data' | head -1 || true)
+            [ -n "$ip" ] && printf '%s fyra.sh\n' "$ip" | sudo tee -a /etc/hosts >/dev/null || true
+          fi
+          curl -fsSL --retry 5 --retry-all-errors --max-time 120 \
+            https://fyra.sh/install.sh -o "$RUNNER_TEMP/fyra-install.sh"
+          sh "$RUNNER_TEMP/fyra-install.sh"
+          PATH="$HOME/.local/bin:$PATH" command -v fyra >/dev/null \
+            || { echo "fyra CLI missing after install"; exit 1; }
 
       - name: Configure Fyra auth
         env:
@@ -158,6 +173,13 @@ jobs:
           server_address: ${FYRA_SERVER:-server.fyra.sh:50052}
           token: ${FYRA_TOKEN}
           EOF
+          host="${FYRA_SERVER%%:*}"; host="${host:-server.fyra.sh}"
+          if ! getent hosts "$host" >/dev/null; then
+            ip=$(curl -fsS --max-time 10 -H 'accept: application/dns-json' \
+              "https://1.1.1.1/dns-query?name=${host}&type=A" \
+              | jq -r '.Answer[]? | select(.type==1) | .data' | head -1 || true)
+            [ -n "$ip" ] && printf '%s %s\n' "$ip" "$host" | sudo tee -a /etc/hosts >/dev/null || true
+          fi
 
       - name: Build website against latest release
         working-directory: website
