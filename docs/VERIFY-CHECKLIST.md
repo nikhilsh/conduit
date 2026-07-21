@@ -20,6 +20,16 @@ _Merged but NOT yet released — these all ship together in the next tag.
 `/cut-release` stamps this section with the real version and opens a fresh empty
 pending section above it. Newest merge first._
 
+**SSH onboarding icon contrast fix. PR #974.**
+
+- The Add-via-SSH option in the add-server sheet + onboarding switches to a
+  `terminal.fill` glyph tinted `neon.text` (was `neon.accent`) so it stays
+  legible. [iOS only, **needs on-device verification**: open Add Server — the
+  SSH row's icon reads clearly in both appearances]
+
+_(Website Flows-first landing refresh, PR #973, merged in the same round — not
+release-tagged; goes live via the `website-deploy.yml` workflow dispatch.)_
+
 ---
 
 ## v0.0.227
