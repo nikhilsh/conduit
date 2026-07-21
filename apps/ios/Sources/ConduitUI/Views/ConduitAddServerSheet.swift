@@ -62,7 +62,7 @@ extension ConduitUI {
                                 action: { showDiscover = true }
                             )
                             entryCard(
-                                icon: "terminal",
+                                icon: "terminal.fill",
                                 title: "Add via SSH",
                                 subtitle: "Set it up over SSH — conduit installs and runs everything on the box for you (nothing to set up there first).",
                                 action: { showSshLogin = true }
@@ -137,7 +137,7 @@ extension ConduitUI {
                 HStack(spacing: 14) {
                     Image(systemName: icon)
                         .font(.system(size: 22, weight: .semibold))
-                        .neonAccentForeground()
+                        .foregroundStyle(icon == "terminal.fill" ? neon.text : neon.accent)
                         .frame(width: ConduitAddServerSheetMetrics.iconSize)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(title)
