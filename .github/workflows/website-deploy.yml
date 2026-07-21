@@ -52,6 +52,7 @@ jobs:
             printf '%s %s\n' "$ip" "$host" | sudo tee -a /etc/hosts >/dev/null
           }
           pin_host fyra.sh 103.107.51.64  # last verified 2026-07-21
+          pin_host downloads-cdn.fyra.sh 103.107.51.64  # installer fetches the tarball from here
           curl -fsSL --retry 5 --retry-all-errors --max-time 120 \
             https://fyra.sh/install.sh -o "$RUNNER_TEMP/fyra-install.sh"
           sh "$RUNNER_TEMP/fyra-install.sh"
