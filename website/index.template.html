@@ -38,6 +38,7 @@
     --cyan:#22d3ee;
     --blue:#4f8cff;
     --amber:#ffb627;
+    --red:#ff5c7a;
     --claude:#ff9d4d;
     --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
     --sans:'Space Grotesk',system-ui,-apple-system,Segoe UI,sans-serif;
@@ -116,6 +117,12 @@
   .hero-note{margin-top:18px;font-family:var(--mono);font-size:12px;color:var(--faint);display:flex;gap:8px;align-items:center;}
   .hero-note b{color:var(--green);font-weight:600;}
 
+  .hero-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:28px;max-width:560px;}
+  .hero-kpi{border:1px solid var(--line-soft);background:rgba(8,14,26,0.58);border-radius:14px;padding:13px 14px;}
+  .hero-kpi b{display:block;font-family:var(--mono);font-size:18px;line-height:1.1;color:var(--text);}
+  .hero-kpi span{display:block;margin-top:5px;font-family:var(--mono);font-size:10.5px;line-height:1.35;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);}
+  @media(max-width:560px){.hero-kpis{grid-template-columns:1fr;}.hero-kpi{padding:12px 14px;}}
+
   /* Cap the phone mockup so it stays a phone-sized device in the 2-column
      hero too — without this it stretched to the full grid column on tablet
      / wide viewports (only the <=880px stacked layout had a cap). */
@@ -164,6 +171,38 @@
     .feat.rev .feat-copy{order:0;}
     .feat-phone{max-width:360px;margin:0 auto;}
   }
+
+  /* ===== flows showcase ===== */
+  .flow-show{padding:72px 0 44px;border-top:1px solid var(--line-soft);}
+  .flow-grid{display:grid;grid-template-columns:.88fr 1.12fr;gap:40px;align-items:center;}
+  .flow-copy h2{font-size:clamp(30px,4vw,48px);margin:18px 0 0;}
+  .flow-copy .lead{margin-top:18px;}
+  .flow-board{position:relative;border:1px solid rgba(34,211,238,.18);border-radius:18px;background:linear-gradient(180deg,rgba(14,22,38,.82),rgba(6,10,18,.86));padding:18px;box-shadow:0 28px 80px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.04);}
+  .flow-board::before{content:"";position:absolute;inset:-22px;border-radius:30px;background:radial-gradient(closest-side,rgba(34,211,238,.14),transparent 72%);filter:blur(10px);z-index:-1;}
+  .flow-toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:16px;}
+  .flow-title{font-family:var(--mono);font-size:12px;color:var(--dim);letter-spacing:.12em;text-transform:uppercase;}
+  .flow-status{font-family:var(--mono);font-size:11px;color:#04140d;background:var(--green);border-radius:999px;padding:5px 9px;font-weight:700;}
+  .flow-card{border:1px solid var(--line-soft);background:rgba(6,10,18,.72);border-radius:14px;padding:14px;margin-top:10px;}
+  .flow-card:first-of-type{margin-top:0;border-color:rgba(255,182,39,.42);box-shadow:0 0 24px rgba(255,182,39,.08);}
+  .flow-card-top{display:flex;align-items:center;gap:10px;}
+  .agent-glyph{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;font-family:var(--mono);font-size:13px;font-weight:800;border:1px solid currentColor;background:rgba(255,255,255,.04);}
+  .agent-glyph.codex{color:var(--cyan);}
+  .agent-glyph.claude{color:var(--claude);}
+  .flow-card h3{margin:0;font-size:15px;line-height:1.2;letter-spacing:-.01em;}
+  .flow-card p{margin:4px 0 0;font-family:var(--mono);font-size:11.5px;color:var(--dim);line-height:1.4;}
+  .flow-chip{margin-left:auto;font-family:var(--mono);font-size:10.5px;border-radius:999px;padding:4px 8px;color:var(--text);border:1px solid var(--line);}
+  .flow-chip.wait{color:var(--amber);border-color:rgba(255,182,39,.35);background:rgba(255,182,39,.08);}
+  .flow-chip.run{color:var(--green);border-color:rgba(62,240,160,.32);background:rgba(62,240,160,.07);}
+  .flow-rail{display:grid;grid-template-columns:repeat(5,1fr);align-items:center;gap:6px;margin-top:14px;}
+  .flow-dot{height:24px;border-radius:999px;border:1px solid var(--line-soft);display:grid;place-items:center;font-family:var(--mono);font-size:10px;color:var(--faint);position:relative;background:rgba(4,8,15,.72);}
+  .flow-dot.on{color:#04140d;background:var(--green);border-color:var(--green);font-weight:800;}
+  .flow-dot.gate{color:#161004;background:var(--amber);border-color:var(--amber);font-weight:800;}
+  .flow-dot::after{content:"";position:absolute;right:-7px;top:50%;width:8px;height:1px;background:var(--line-soft);}
+  .flow-dot:last-child::after{display:none;}
+  .flow-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:14px;}
+  .flow-action{font-family:var(--mono);font-size:12px;font-weight:700;text-align:center;border-radius:11px;padding:10px 12px;border:1px solid var(--line-soft);color:var(--dim);}
+  .flow-action.primary{background:var(--amber);border-color:var(--amber);color:#171003;}
+  @media(max-width:880px){.flow-show{padding:56px 0 28px;}.flow-grid{grid-template-columns:1fr;gap:22px;}.flow-board{padding:14px;}.flow-actions{grid-template-columns:1fr;}}
 
   /* ===== tablet showcase ===== */
   .tablet{padding:40px 0 80px;}
@@ -251,7 +290,7 @@
   <div class="wrap nav-in">
     <a class="brand" href="#top"><img src="assets/conduit-512.png" alt="" width="34" height="34" />Conduit</a>
     <nav class="nav-links">
-      <a href="#remote">Remote</a>
+      <a href="#flows">Flows</a>
       <a href="#terminal">Terminal</a>
       <a href="#browser">Browser</a>
       <a href="#tablet">Tablet</a>
@@ -268,8 +307,8 @@
     <div class="wrap hero-grid">
       <div class="hero-copy">
         <span class="eyebrow"><span class="pip"></span>Alpha · <span data-version>v0.9</span></span>
-        <h1 class="display">Your agents,<br />in your pocket.<span class="cursor" aria-hidden="true">_</span></h1>
-        <p class="lead">Conduit drives <b style="color:var(--text)">Claude</b> and <b style="color:var(--text)">Codex</b> on your dev box — from your phone or tablet. Start a session, watch it plan, run commands, edit files, and approve actions. Anywhere.</p>
+        <h1 class="display">Agent work,<br />shipped in Flows.<span class="cursor" aria-hidden="true">_</span></h1>
+        <p class="lead">Conduit drives <b style="color:var(--text)">Claude</b> and <b style="color:var(--text)">Codex</b> on your dev box from your phone or tablet. Launch a Flow, watch every step run, branch, loop, ask for approval, and land the work while you stay in control.</p>
         <div class="stores">
           <a class="store" data-dl="ios-testflight" href="https://testflight.apple.com/join/KkcgMdcm" target="_blank" rel="noopener" aria-label="Join the TestFlight beta on iPhone">
             <svg viewBox="0 0 24 24" fill="#eaf3ff" aria-hidden="true"><path d="M16.36 12.78c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.48.83-.72 0-1.82-.81-2.99-.79-1.54.02-2.96.9-3.75 2.27-1.6 2.78-.41 6.89 1.15 9.14.76 1.1 1.67 2.34 2.86 2.29 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.78.74 2.99.72 1.23-.02 2.02-1.12 2.78-2.23.87-1.28 1.23-2.52 1.25-2.59-.03-.01-2.4-.92-2.42-3.64zM14.13 6.02c.64-.78 1.07-1.85.95-2.92-.92.04-2.03.61-2.69 1.38-.59.68-1.11 1.78-.97 2.82 1.02.08 2.07-.52 2.71-1.28z"/></svg>
@@ -285,9 +324,14 @@
           </a>
         </div>
         <div class="hero-note" data-dl-meta aria-live="polite">Loading the latest build…</div>
+        <div class="hero-kpis" aria-label="Conduit product highlights">
+          <div class="hero-kpi"><b>Flows</b><span>multi-agent runbooks</span></div>
+          <div class="hero-kpi"><b>Live</b><span>chat, terminal, browser</span></div>
+          <div class="hero-kpi"><b>Yours</b><span>box, keys, repos</span></div>
+        </div>
       </div>
       <div class="phone-stage">
-        <img class="phone-img" src="assets/shot-home.png" width="390" height="730" decoding="async" alt="Conduit home screen: live agent usage, the connected primary box, and active Claude and Codex sessions" />
+        <img class="phone-img" src="assets/shot-home.png" width="1179" height="2556" decoding="async" alt="Conduit demo home screen showing active sessions and the demo server banner" />
       </div>
     </div>
   </section>
@@ -302,21 +346,81 @@
     </div>
   </div>
 
+  <!-- FLOWS SHOWCASE -->
+  <section class="flow-show reveal" id="flows">
+    <div class="wrap flow-grid">
+      <div class="flow-copy">
+        <span class="eyebrow"><span class="pip"></span>Flows</span>
+        <h2 class="display">Turn repeat work<br />into agent runbooks.</h2>
+        <p class="lead">Flows are Conduit's new control surface for bigger jobs: compose steps, hand them to the right agent, gate risky moments, and resume from your phone when a step needs judgment.</p>
+        <ul class="feat-list">
+          <li><span class="tick" aria-hidden="true">›|</span>Build sequential, branched, looped, and fan-out workflows instead of babysitting one long prompt.</li>
+          <li><span class="tick" aria-hidden="true">›|</span>Each Flow card shows progress, active agent, result diffstats, and the exact gate that needs you.</li>
+          <li><span class="tick" aria-hidden="true">›|</span>Continue, review output, or inspect the live session without losing the topology of the job.</li>
+        </ul>
+      </div>
+      <div class="flow-board" aria-label="Illustration of a Conduit Flow card and topology">
+        <div class="flow-toolbar">
+          <span class="flow-title">Active Flow</span>
+          <span class="flow-status">needs you</span>
+        </div>
+        <article class="flow-card">
+          <div class="flow-card-top">
+            <span class="agent-glyph claude">✶</span>
+            <div>
+              <h3>Ship usage dashboard</h3>
+              <p>architect done · review branch plan</p>
+            </div>
+            <span class="flow-chip wait">gate</span>
+          </div>
+          <div class="flow-rail" aria-hidden="true">
+            <span class="flow-dot on">1</span>
+            <span class="flow-dot gate">2</span>
+            <span class="flow-dot">if</span>
+            <span class="flow-dot">3x</span>
+            <span class="flow-dot">✓</span>
+          </div>
+          <div class="flow-actions">
+            <span class="flow-action">Review output</span>
+            <span class="flow-action primary">Continue</span>
+          </div>
+        </article>
+        <article class="flow-card">
+          <div class="flow-card-top">
+            <span class="agent-glyph codex">/&gt;</span>
+            <div>
+              <h3>Refresh website screenshots</h3>
+              <p>codex · running loop 2/4</p>
+            </div>
+            <span class="flow-chip run">running</span>
+          </div>
+          <div class="flow-rail" aria-hidden="true">
+            <span class="flow-dot on">1</span>
+            <span class="flow-dot on">2</span>
+            <span class="flow-dot">loop</span>
+            <span class="flow-dot">test</span>
+            <span class="flow-dot">ship</span>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
   <!-- FEATURE: REMOTE -->
   <section class="feat reveal" id="remote" style="--accent:var(--green);--glow:rgba(62,240,160,0.18)">
     <div class="wrap feat-grid">
       <div class="feat-copy">
-        <span class="eyebrow"><span class="pip"></span>Remote servers</span>
-        <h2 class="display">Your dev machine.<br />Anywhere.</h2>
-        <p class="lead">Pair to a box on your network or across the world. Sessions run on the real thing — your repos, your branches, your toolchain — streamed straight to your hand.</p>
+        <span class="eyebrow"><span class="pip"></span>Remote sessions</span>
+        <h2 class="display">Your dev machine,<br />still the source of truth.</h2>
+        <p class="lead">Pair to a box on your network or across the world. Sessions and Flows run on the real thing — your repos, your branches, your toolchain — streamed straight to your hand.</p>
         <ul class="feat-list">
           <li><span class="tick" aria-hidden="true">›|</span>Live command output with exit codes &amp; timing, exactly as it runs on the box.</li>
           <li><span class="tick" aria-hidden="true">›|</span>Per-file diffs you can read and approve before anything lands.</li>
-          <li><span class="tick" aria-hidden="true">›|</span>Reconnect mid-session — the broker keeps the agent working while you're away.</li>
+          <li><span class="tick" aria-hidden="true">›|</span>Reconnect mid-session or mid-Flow — the broker keeps the work alive while you're away.</li>
         </ul>
       </div>
       <div class="feat-phone">
-        <img src="assets/shot-chat.png" width="390" height="780" loading="lazy" decoding="async" alt="A live Conduit session: Claude groups its commands, shows a per-file diff, and pauses for your approval" />
+        <img src="assets/shot-chat.png" width="1179" height="2556" loading="lazy" decoding="async" alt="A Conduit demo chat session showing agent output, code, completed steps, and a user input gate" />
       </div>
     </div>
   </section>
@@ -335,7 +439,7 @@
         </ul>
       </div>
       <div class="feat-phone">
-        <img src="assets/shot-terminal.png" width="390" height="780" loading="lazy" decoding="async" alt="Conduit terminal tab streaming command output on the remote box, with a key accessory bar" />
+        <img src="assets/shot-terminal.png" width="1080" height="2400" loading="lazy" decoding="async" alt="Conduit terminal tab showing real command output from the demo session" />
       </div>
     </div>
   </section>
@@ -354,7 +458,7 @@
         </ul>
       </div>
       <div class="feat-phone">
-        <img src="assets/shot-browser.png" width="390" height="780" loading="lazy" decoding="async" alt="Conduit browser tab previewing the running dev server, with a hot-reload pill" />
+        <img src="assets/shot-browser.png" width="1080" height="2400" loading="lazy" decoding="async" alt="Conduit browser tab previewing the demo app running on the remote box" />
       </div>
     </div>
   </section>
@@ -365,13 +469,13 @@
       <div class="tablet-head reveal">
         <span class="eyebrow"><span class="pip"></span>On tablet</span>
         <h2 class="display">The whole IDE,<br />on the iPad.</h2>
-        <p class="lead">On a bigger screen Conduit fans out into a three-pane workspace — your sessions, the live chat thread, and a terminal or browser pane side by side. The same session, more room to work.</p>
+        <p class="lead">On a bigger screen Conduit fans out into a three-pane workspace — your sessions and Flows, the live chat thread, and a terminal or browser pane side by side. The same work, more room to inspect it.</p>
       </div>
       <div class="tablet-stage reveal">
         <img class="tablet-frame" src="assets/shot-tablet.png" width="1194" height="800" loading="lazy" decoding="async" alt="Conduit on iPad: a three-pane IDE with the session rail, chat thread with diffs and approvals, and a terminal + usage pane" />
       </div>
       <div class="tablet-points">
-        <div class="tablet-point reveal"><h4>Sessions rail</h4><p>Every active and recent session one tap away, with ⌘K search across all of them.</p></div>
+        <div class="tablet-point reveal"><h4>Sessions &amp; Flows rail</h4><p>Every active session and multi-step Flow one tap away, with ⌘K search across all of them.</p></div>
         <div class="tablet-point reveal"><h4>Chat &amp; diffs</h4><p>The full thread — plans, diffs, and approvals — in the center, where your attention lives.</p></div>
         <div class="tablet-point reveal"><h4>Terminal &amp; usage</h4><p>A live terminal, browser preview, and usage limits docked in the side pane.</p></div>
       </div>
@@ -384,7 +488,7 @@
       <div class="caps-head reveal">
         <span class="eyebrow"><span class="pip"></span>Everything in the box</span>
         <h2 class="display">A whole dev surface,<br />pocket-sized.</h2>
-        <p class="lead">The phone and tablet share one feature set. Chat, terminal, browser, and approvals — wherever you pick it up.</p>
+        <p class="lead">The phone and tablet share one feature set. Flows, chat, terminal, browser, and approvals — wherever you pick it up.</p>
       </div>
       <div class="cap-grid">
         <div class="cap reveal">
@@ -399,13 +503,13 @@
         </div>
         <div class="cap reveal">
           <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--claude)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17l-2 2H4v-3l9-9 3 3-5 5z"/><circle cx="17" cy="7" r="3"/></svg></div>
-          <h3>Subagent handoffs</h3>
-          <p>Watch the lead agent delegate to subagents — nested progress and a collapsible result summary, in one card.</p>
+          <h3>Flow handoffs</h3>
+          <p>Route work between Claude, Codex, and specialist steps — with nested progress and a collapsible result summary in one card.</p>
         </div>
         <div class="cap reveal">
           <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M5 8l-2 4 2 4"/><path d="M19 8l2 4-2 4"/></svg></div>
-          <h3>Approve before it lands</h3>
-          <p>Destructive or irreversible? It pauses and asks. The safe option is the primary button — you stay in control.</p>
+          <h3>Gates before risk</h3>
+          <p>Destructive or irreversible? A Flow pauses at the gate, shows what happened, and asks before continuing.</p>
         </div>
         <div class="cap reveal">
           <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg></div>
@@ -471,7 +575,7 @@
       <div class="cta-card reveal">
         <img class="cta-icon" src="assets/conduit-256.png" width="88" height="88" loading="lazy" decoding="async" alt="Conduit app icon" />
         <h2>Your agents, in your pocket.</h2>
-        <p class="lead">Conduit is free — no subscriptions, no in-app purchases, nothing to unlock. Install below, pair a box, and let it cook while you do something else.</p>
+        <p class="lead">Conduit is free — no subscriptions, no in-app purchases, nothing to unlock. Install below, pair a box, and run your first Flow while you do something else.</p>
         <div class="stores">
           <a class="store" data-dl="ios-testflight" href="https://testflight.apple.com/join/KkcgMdcm" target="_blank" rel="noopener" aria-label="Join the TestFlight beta on iPhone">
             <svg viewBox="0 0 24 24" fill="#eaf3ff" aria-hidden="true"><path d="M16.36 12.78c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.48.83-.72 0-1.82-.81-2.99-.79-1.54.02-2.96.9-3.75 2.27-1.6 2.78-.41 6.89 1.15 9.14.76 1.1 1.67 2.34 2.86 2.29 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.78.74 2.99.72 1.23-.02 2.02-1.12 2.78-2.23.87-1.28 1.23-2.52 1.25-2.59-.03-.01-2.4-.92-2.42-3.64zM14.13 6.02c.64-.78 1.07-1.85.95-2.92-.92.04-2.03.61-2.69 1.38-.59.68-1.11 1.78-.97 2.82 1.02.08 2.07-.52 2.71-1.28z"/></svg>
@@ -499,6 +603,7 @@
     <div class="foot-in">
       <a class="foot-brand" href="#top"><img src="assets/conduit-512.png" alt="" width="30" height="30" />Conduit</a>
       <nav class="foot-links">
+        <a href="#flows">Flows</a>
         <a href="#remote">Remote</a>
         <a href="#terminal">Terminal</a>
         <a href="#browser">Browser</a>
@@ -508,7 +613,7 @@
       </nav>
     </div>
     <div class="foot-copy">
-      <span>© 2026 Conduit · made for people who ship from the couch.</span>
+      <span>© 2026 Conduit · made for people who ship from anywhere.</span>
       <span>›_ conduit</span>
     </div>
   </div>
