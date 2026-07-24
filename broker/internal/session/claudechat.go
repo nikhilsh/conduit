@@ -219,6 +219,15 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 	// fires on transitions (not on every token). This avoids flooding the
 	// subscriber with redundant view:"turn_phase" events on every text chunk.
 	var lastPhase string
+	// syntheticErrorEnded is set when a synthetic-error assistant line
+	// (parseClaudeSyntheticError) has already ended the turn early — the
+	// CLI's API call itself failed (e.g. 401 OAuth expired), so no real
+	// assistant reply is coming. A `result` envelope may still follow
+	// (captured live it does not always), in which case it's just the
+	// tail of this already-ended turn: fold its usage but skip the
+	// second onTurnEnd/gen-kickoff/final-publish so the turn doesn't end
+	// twice.
+	var syntheticErrorEnded bool
 	// emitPhase announces a phase change via both the onPhaseChange callback
 	// (updates the in-process status frame) and a view:"turn_phase" event
 	// (routes through Rust on_view_event so the apps receive it). No-op when
@@ -262,7 +271,59 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 			}
 			continue
 		}
+		// The CLI's own API call failed (401 OAuth expired, invalid API
+		// key, …): a synthetic assistant event carrying a top-level
+		// "error" field, with no guaranteed `result` envelope to follow
+		// (captured live 2026-07-24 — the turn never ended without this
+		// handler, leaving the client stuck on "thinking" forever).
+		// Surface it as a system chat line and end the turn NOW so a
+		// missing result doesn't hang the UI.
+		if errText, ok := parseClaudeSyntheticError(line); ok {
+			publishChatSystem(publish, "⚠️ "+errText)
+			if onTurnEnd != nil {
+				onTurnEnd()
+			}
+			emitPhase("")
+			turnTS = ""
+			lastAssistantText, lastAssistantTS = "", ""
+			thinkingAccum = ""
+			lastContextTokens = 0
+			syntheticErrorEnded = true
+			continue
+		}
 		if claudeStreamLineIsTurnEnd(line) {
+			if syntheticErrorEnded {
+				// This `result` is the tail of a turn already ended by
+				// the synthetic-error handler above (line A). Fold its
+				// usage as usual, but skip the second onTurnEnd /
+				// gen.kickoff / titleGen / final publish -- the turn
+				// already ended once; doing it again would double the
+				// turn-idle push notification and kick the generators
+				// for nothing.
+				syntheticErrorEnded = false
+				if onUsage != nil {
+					if u, ok := parseClaudeUsage(line); ok {
+						if lastContextTokens > 0 {
+							u.contextUsed = lastContextTokens
+						}
+						onUsage(u)
+					}
+				}
+				emitPhase("")
+				turnTS = ""
+				lastAssistantText, lastAssistantTS = "", ""
+				thinkingAccum = ""
+				lastContextTokens = 0
+				continue
+			}
+			// Belt-and-suspenders: an error result (is_error==true) can
+			// arrive without a preceding synthetic-error assistant line
+			// (line A is not guaranteed -- captured live 2026-07-24).
+			// Surface it the same way, but only when nothing was shown
+			// this turn yet, so a genuine reply is never stomped.
+			if resultErrText, ok := parseClaudeErrorResult(line); ok && lastAssistantText == "" {
+				publishChatSystem(publish, "⚠️ "+resultErrText)
+			}
 			// Turn complete: clear the turn-in-flight latch FIRST (before the
 			// usage fold) so the status broadcast that rides accumulateUsage
 			// carries turn_active=false and a watching/reconnecting client's
