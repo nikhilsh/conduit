@@ -198,6 +198,97 @@ func parseClaudeStreamLine(line []byte) ([]ClaudeChatEvent, bool) {
 	return out, true
 }
 
+// parseClaudeSyntheticError decodes a synthetic assistant event
+// (message.model=="<synthetic>") that carries a top-level "error" field —
+// the shape claude-code emits when the API call itself fails (e.g. 401 OAuth
+// expired, invalid API key), captured live 2026-07-24 against claude-code
+// 2.1.218:
+//
+//	{"type":"assistant","message":{"model":"<synthetic>", …,
+//	 "content":[{"type":"text","text":"Invalid API key · Fix external API key"}]},
+//	 "error":"authentication_failed", …}
+//
+// This is deliberately distinct from the benign /clear synthetic (model
+// "<synthetic>", content "(no content)"), which carries NO top-level "error"
+// field — that is the discriminator, not the text content. Returns the
+// concatenated text blocks as the error message; falls back to the raw
+// error code (e.g. "authentication_failed") when the content is empty.
+// ok=false for every other line, including a malformed one.
+func parseClaudeSyntheticError(line []byte) (string, bool) {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
+		return "", false
+	}
+	// Fast reject before unmarshaling, matching the style of
+	// parseClaudeStreamModel / parseSubagentTaskEvent.
+	if !bytes.Contains(line, []byte(`"<synthetic>"`)) {
+		return "", false
+	}
+	var ev struct {
+		Type    string `json:"type"`
+		Error   string `json:"error"`
+		Message struct {
+			Model   string               `json:"model"`
+			Role    string               `json:"role"`
+			Content []claudeContentBlock `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return "", false
+	}
+	if ev.Type != "assistant" || ev.Message.Role != "assistant" || ev.Message.Model != "<synthetic>" {
+		return "", false
+	}
+	if strings.TrimSpace(ev.Error) == "" {
+		// The benign /clear synthetic — no top-level error field.
+		return "", false
+	}
+	var parts []string
+	for _, c := range ev.Message.Content {
+		if c.Type == "text" && strings.TrimSpace(c.Text) != "" {
+			parts = append(parts, c.Text)
+		}
+	}
+	text := strings.Join(parts, "")
+	if strings.TrimSpace(text) == "" {
+		text = ev.Error
+	}
+	return text, true
+}
+
+// parseClaudeErrorResult decodes a claude stream-json `result` envelope that
+// reports the turn as an error (is_error==true). Note the CLI's own
+// `subtype` field is "success" even when is_error is true — key ONLY on
+// is_error, captured live 2026-07-24:
+//
+//	{"is_error":true, …, "subtype":"success","api_error_status":401,
+//	 "result":"Invalid API key · Fix external API key","type":"result", …}
+//
+// Returns the "result" string, falling back to a generic message when it is
+// empty. ok=false for a non-result line or one with is_error absent/false.
+func parseClaudeErrorResult(line []byte) (string, bool) {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
+		return "", false
+	}
+	var ev struct {
+		Type    string `json:"type"`
+		IsError bool   `json:"is_error"`
+		Result  string `json:"result"`
+	}
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return "", false
+	}
+	if ev.Type != "result" || !ev.IsError {
+		return "", false
+	}
+	text := strings.TrimSpace(ev.Result)
+	if text == "" {
+		text = "The agent reported an error."
+	}
+	return text, true
+}
+
 // parseClaudeStreamModel extracts the model identifier from an "assistant"
 // stream-json line. Returns "" when the line is not an assistant event, the
 // model is absent, or the model is the synthetic sentinel "<synthetic>".
